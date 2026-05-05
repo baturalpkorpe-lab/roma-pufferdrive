@@ -1,2 +1,7 @@
 checkpoints/
 resources/
+__pycache__/
+*.pyc
+checkpoints/
+eval_results/
+diversity_plots/
