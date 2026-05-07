@@ -9,25 +9,58 @@ MI Loss (Mutual Information):
     8 observations. If the role contains no behavioural information, this
     loss is high.
 
-Diversity Loss (Simplified):
+    This is a simplified approximation of the full ROMA MI loss
+    (Wang et al., ICML 2020), which uses a GRU trajectory encoder q_ξ
+    to estimate I(ρ; τ | o). Our BehaviourExtractor + MIDecoder serves
+    the same purpose with less complexity.
+
+    Future improvement (Phase 5):
+    R3DM (Goel et al., ICML 2025) shows that linking roles to FUTURE
+    expected behaviour via a learned dynamics model significantly improves
+    role differentiation. This would replace the current past-observation
+    based approach.
+
+Diversity Loss:
     Pushes agents to have different role vectors from each other.
-    We use pairwise cosine similarity between role means — agents with
-    identical roles have similarity=1, maximally different agents have
-    similarity=-1. We minimise average pairwise similarity.
+
+    Current implementation uses two approaches depending on role_dim:
+
+    role_dim=1 — Normalised negative variance:
+        Cosine similarity between scalars is always ±1 with no useful
+        gradient. Instead we maximise variance of scalar roles across
+        agents, normalised by mean absolute role value for scale invariance.
+        Range: (-∞, 0], lower is more diverse.
+
+    role_dim≥2 — Pairwise cosine similarity:
+        Average pairwise cosine similarity between role mean vectors.
+        Naturally bounded in [-1, +1]:
+            +1 = all agents identical (collapse)
+             0 = roles uncorrelated
+            -1 = agents maximally diverse
+        No clipping needed.
 
     This is a simplified approximation of the original ROMA diversity loss
     (Wang et al., ICML 2020), which uses a trainable dissimilarity model
-    d_φ and a trajectory encoder q_ξ to measure pairwise trajectory
-    dissimilarity. The full implementation is planned for Phase 5.
+    d_φ and trajectory encoder q_ξ. Full implementation planned for Phase 5.
 
-    Advantages of this approach over KL-based diversity:
-      - Naturally bounded in [-1, 1] — no clipping needed
-      - Always interpretable:
-            div_loss = +1.0  → all agents have identical roles (collapse)
-            div_loss =  0.0  → agent roles are uncorrelated
-            div_loss = -1.0  → agents are maximally diverse
-      - No arbitrary hyperparameter for clip threshold
-      - No population mean dependency that causes gradient instability
+    Literature context (searched May 2026):
+    - DiCo (Bettini et al., ICML 2024): Controls diversity to a desired
+      target value by dynamically scaling heterogeneous policy components.
+      More principled than our loss — eliminates need for div_weight tuning.
+      Reference: https://arxiv.org/html/2405.15054v1
+    - R3DM (Goel et al., ICML 2025): Diversity via contrastive learning on
+      past trajectories + dynamics model for future behaviour prediction.
+      Outperforms ROMA on SMAC by up to 20% win rate improvement.
+      Reference: https://arxiv.org/pdf/2505.24265
+    - Trajectory prediction diversity (2024): Diversity loss and off-road
+      loss are complementary in driving — optimising one helps the other.
+      Reference: https://arxiv.org/html/2411.19747v1
+
+    Planned improvements for Phase 5:
+    1. Implement DiCo-style diversity control to a target value
+    2. Add dynamics model for future-behaviour-based role differentiation
+    3. Add semantic alignment losses correlating role dims with speed,
+       steering, and proximity to other vehicles
 """
 
 import torch
@@ -88,6 +121,7 @@ class RomaAuxLoss(nn.Module):
     def __init__(self, role_dim, obs_dim, behaviour_dim=32, hidden_dim=64,
                  window=8, mi_weight=1.0, div_weight=0.1):
         super().__init__()
+        self.role_dim   = role_dim
         self.mi_weight  = mi_weight
         self.div_weight = div_weight
         self.behaviour_extractor = BehaviourExtractor(obs_dim, behaviour_dim, window)
@@ -105,37 +139,43 @@ class RomaAuxLoss(nn.Module):
 
     def diversity_loss(self, role_mean):
         """
-        Average pairwise cosine similarity between agent role means.
+        Diversity loss — pushes agents to have different role vectors.
 
-        We normalise each role mean to unit length, then compute the
-        full pairwise cosine similarity matrix. We average the
-        off-diagonal entries (excluding self-similarity).
+        For role_dim=1:
+            Cosine similarity between scalars is always +1 or -1 with no
+            gradient in between. Instead we use negative variance across
+            agents — maximising variance = agents spread across scalar space.
+            Range: (-∞, 0] — 0 means all agents identical (bad),
+            more negative means more diverse (better).
+            We normalise by the mean absolute value to keep it scaled.
 
-        Range: [-1, +1]
-            +1 = all agents have identical roles (collapse — bad)
-             0 = roles are uncorrelated
-            -1 = agents are maximally diverse (ideal)
+        For role_dim≥2:
+            Average pairwise cosine similarity between role means.
+            Range: [-1, +1]
+                +1 = all agents identical (collapse — bad)
+                 0 = roles uncorrelated
+                -1 = agents maximally diverse (ideal)
 
-        Minimising this loss pushes agents apart in role space.
-        No clipping needed — the range is naturally bounded.
+        Both approaches need no clipping — naturally bounded.
         """
         B = role_mean.size(0)
         if B < 2:
             return torch.tensor(0.0, device=role_mean.device)
 
-        # Normalise to unit sphere
-        normed = F.normalize(role_mean, dim=-1)   # (B, role_dim)
+        if self.role_dim == 1:
+            # For scalar roles: maximise variance across agents
+            # Normalise by mean abs value so scale doesn't depend on role magnitude
+            role_vals = role_mean.squeeze(-1)           # (B,)
+            var       = role_vals.var()
+            scale     = role_vals.abs().mean().detach() + 1e-8
+            return -(var / scale)                       # negative = we minimise this
 
-        # Full pairwise cosine similarity matrix
-        sim_matrix = normed @ normed.T             # (B, B)  values in [-1, 1]
-
-        # Mask out diagonal (self-similarity = 1, not informative)
-        mask = 1.0 - torch.eye(B, device=role_mean.device)
-
-        # Average off-diagonal similarity
-        avg_sim = (sim_matrix * mask).sum() / mask.sum()
-
-        return avg_sim
+        else:
+            # For multidim roles: minimise average pairwise cosine similarity
+            normed     = F.normalize(role_mean, dim=-1) # (B, role_dim)
+            sim_matrix = normed @ normed.T               # (B, B)
+            mask       = 1.0 - torch.eye(B, device=role_mean.device)
+            return (sim_matrix * mask).sum() / mask.sum()
 
     def forward(self, role_z, role_mean, role_log_var, obs_window):
         """

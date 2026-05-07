@@ -78,7 +78,7 @@ Total = PPO loss + 1.0 × MI loss + 0.1 × Diversity loss
 - ` 0.0` = roles uncorrelated
 - `-1.0` = agents maximally diverse
 
-This replaces the original KL-based diversity which diverged to -infinity without clipping.
+This replaces the original KL-based diversity which diverged to -18,563 without clipping.
 
 ---
 
@@ -200,13 +200,13 @@ Simply omit `--wandb_project`. Training log is always saved to `checkpoints/trai
 
 | Argument | Default | Description |
 |---|---|---|
-| `--role_dim` | 1 | Role vector dimension. 1=original ROMA, 8=proposed | (We want to see the results in dimension 1 initially)
+| `--role_dim` | 1 | Role vector dimension. 1=original ROMA, 8=proposed |
 | `--num_maps` | 10000 | Scenarios loaded. 10000=full, 100=CPU test |
 | `--num_agents` | 64 | Agents per scene. 64 on GPU, 16 on CPU |
 | `--total_steps` | 1B | Training steps. Use 6B for full run |
 | `--device` | cuda | cuda or cpu. Auto-falls back to cpu |
-| `--mi_weight` | 1.0 | Weight on MI loss | (Can be changed later according to the results)
-| `--div_weight` | 0.1 | Weight on cosine diversity loss | (Can be changed later according to the results)
+| `--mi_weight` | 1.0 | Weight on MI loss |
+| `--div_weight` | 0.1 | Weight on cosine diversity loss |
 | `--run_eval` | False | Run WOSAC + env evaluation after training |
 | `--wandb_project` | None | Wandb project name. Omit to disable wandb |
 | `--wandb_entity` | None | Wandb username |
@@ -307,6 +307,58 @@ If `--run_eval` is set, after training also saves:
 
 ---
 
+## Loss Functions
+
+### MI Loss (Mutual Information)
+
+Forces the role vector to encode meaningful behavioural information. The BehaviourExtractor encodes the last 8 observations into a behaviour summary, and the MIDecoder predicts that summary from the role vector. Low MSE = role encodes real behaviour.
+
+Range: [0, inf) — lower is better. Stable around 0.007-0.010 during healthy training.
+
+### Diversity Loss
+
+Pushes agents to have different role vectors. Two implementations depending on role dimension:
+
+**role_dim=1 — Normalised negative variance:**
+Cosine similarity between scalars has no useful gradient. We maximise variance of scalar roles across agents, normalised by mean absolute role value. Range: (-inf, 0], lower is more diverse.
+
+**role_dim>=2 — Pairwise cosine similarity:**
+Average pairwise cosine similarity between role mean vectors. Naturally bounded in [-1, +1]:
+- +1 = all agents identical (role collapse — bad)
+-  0 = roles uncorrelated
+- -1 = agents maximally diverse (ideal)
+
+No clipping needed. During healthy training with role_dim=8: starts near +1.0, decreases toward 0.7-0.8.
+
+**Why not KL divergence (original attempt):**
+The original implementation used -KL(agent || population_mean) which diverged to -18,563 at 1M steps and required arbitrary clipping at -10. The current cosine approach is naturally bounded and interpretable.
+
+---
+
+## Research Context
+
+**ROMA (Wang et al., ICML 2020)** — original role-based MARL. Uses trainable dissimilarity model d_phi and trajectory encoder q_xi for diversity. Our diversity loss is a simplified approximation.
+
+**DiCo (Bettini et al., ICML 2024)** — controls behavioral diversity to a desired target value by dynamically scaling heterogeneous policy components. More principled than our loss — eliminates div_weight tuning. Planned for Phase 5.
+Reference: https://arxiv.org/html/2405.15054v1
+
+**R3DM (Goel et al., ICML 2025)** — maximises MI between roles, observed trajectories, and expected future behaviors via a dynamics model and contrastive learning. Outperforms ROMA by up to 20% on SMAC. Planned for Phase 5.
+Reference: https://arxiv.org/pdf/2505.24265
+
+**Trajectory diversity in driving (2024)** — diversity loss and off-road loss are complementary in autonomous driving — optimising one helps the other.
+Reference: https://arxiv.org/html/2411.19747v1
+
+---
+
+## Planned Improvements (Phase 5)
+
+1. **DiCo-style diversity control** — target a specific diversity value instead of minimising an unbounded loss
+2. **Dynamics model for future behaviour** — replace past-observation MI loss with R3DM-style future behaviour prediction
+3. **Semantic alignment losses** — correlate role dimensions with speed, steering, proximity to other vehicles
+4. **Beta-VAE regularization** — force role dimensions to be statistically independent
+5. **Full ROMA diversity loss** — implement original d_phi dissimilarity model and q_xi trajectory encoder
+
+---
 ## Notes
 
 - PufferDrive requires Linux — native Windows not supported. Use WSL2.
