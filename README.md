@@ -1,161 +1,91 @@
 # ROMA on PufferDrive
 
-Implementation of ROMA (Multi-Agent Reinforcement Learning with Emergent Roles) adapted for the PufferDrive autonomous driving simulator.
+This repository adapts **ROMA (Multi-Agent Reinforcement Learning with Emergent Roles)** (Wang et al., ICML 2020) to the **PufferDrive** autonomous driving simulator, built on 10,000 real-world driving scenarios from the Waymo Open Motion Dataset.
 
-## Overview
-
-This project bridges two paradigms:
-- **ROMA** (Wang et al., ICML 2020) — role-based multi-agent RL with emergent roles
-- **PufferDrive** — high-performance driving simulator built on 10,000 real Waymo scenarios
-
-Each agent learns a latent role vector that conditions its driving policy, shaped by:
-- **Mutual Information loss** — forces role to encode meaningful behaviour
-- **Diversity loss** — prevents all agents from collapsing to the same role
-
-## Repository Structure
-## Installation
-
-### 1. Clone PufferDrive
-```bash
-git clone https://github.com/Emerge-Lab/PufferDrive.git
-cd PufferDrive
-uv venv .venv && source .venv/bin/activate
-uv pip install -e .
-python setup.py build_ext --inplace --force
-```
-
-### 2. Download Waymo dataset
-```bash
-huggingface-cli download daphne-cornelisse/pufferdrive_womd_train \
-  --repo-type dataset \
-  --local-dir data/processed/training
-```
-
-### 3. Convert maps to binary
-```bash
-python pufferlib/ocean/drive/drive.py
-```
-
-### 4. Clone this repo into PufferDrive
-```bash
-git clone https://github.com/YourUsername/roma-pufferdrive.git roma_pufferdrive
-```
-
-### 5. Install extra dependencies
-```bash
-pip install matplotlib scikit-learn scipy wandb
-```
-
-## Usage
-
-### Run unit tests first
-```bash
-cd roma_pufferdrive
-python3 test_modules.py
-```
-
-### Train vanilla PPO baseline
-```bash
-cd ~/PufferDrive
-python3 roma_pufferdrive/train_baseline.py
-```
-
-### Train ROMA (original scalar role)
-```bash
-python3 roma_pufferdrive/train_roma.py --role_dim 1
-```
-
-### Train ROMA (proposed multidimensional role)
-```bash
-python3 roma_pufferdrive/train_roma.py --role_dim 8
-```
-
-## Results (50M steps, CPU)
-
-| Metric | Baseline | ROMA dim=1 | ROMA dim=8 |
-|---|---|---|---|
-| Score | 0.0229 | 0.0021 | 0.0063 |
-| Completion rate | 0.0521 | 0.1708 | - |
-| Mean return | -2.3553 | -2.1681 | - |
-
-Note: These are preliminary results at 50M steps on CPU.
-Full GPU training (500M+ steps) is expected to show stronger improvements.
-
-## Architecture
-Training loss:
-Total = PPO loss + 1.0 × MI loss + 0.05 × Diversity loss
-rm ~/PufferDrive/roma_pufferdrive/README.md
-ls ~/PufferDrive/roma_pufferdrive/
-bashcat > ~/PufferDrive/roma_pufferdrive/README.md << 'EOF'
-# ROMA on PufferDrive
-
-This repository adapts **ROMA (Multi-Agent Reinforcement Learning with Emergent Roles)** (Wang et al., ICML 2020) to the **PufferDrive** autonomous driving simulator, built on 10,000 real-world driving scenarios from the Waymo Open Motion Dataset. The goal is to prove that role-based multi-agent reinforcement learning can be successfully applied to heterogeneous autonomous driving environments, serving as a foundation for extending ROMA with multidimensional disentangled role representations.
+The core research question is: **can multidimensional role representations improve realism and diversity in multi-agent autonomous driving?**
 
 ---
 
 ## Motivation
 
-In real traffic, drivers have distinct behavioural styles — some are aggressive, some are cautious, some are cooperative. Standard multi-agent RL treats all agents identically, producing a population of clones that fails to capture this natural heterogeneity. ROMA addresses this by giving each agent a latent role vector that emerges from training without any manual supervision, conditioning every decision the agent makes on its learned identity.
+In real traffic, drivers have distinct behavioural styles — some are aggressive, some are cautious, some are cooperative. Standard multi-agent RL treats all agents identically, producing a population of clones that fails to capture this natural heterogeneity.
+
+We confirmed this empirically: the Waymo dataset has a speed coefficient of variation of **1.06** and a steering CV of **1.19**, meaning variation between drivers exceeds the average behaviour itself. This directly justifies the ROMA diversity loss.
+
+ROMA gives each agent a latent role vector that emerges from training without supervision, conditioning every decision on its learned identity. We extend this from a scalar role (dim=1, original ROMA) to a multidimensional role vector where each dimension captures a separate behavioural factor.
 
 ---
 
 ## Repository Structure
+
+```
 roma_pufferdrive/
 ├── roma/
-│   ├── init.py        # Package init
-│   ├── role_encoder.py    # GRU-based role encoder (ROMA core)
-│   ├── aux_losses.py      # MI loss + diversity loss
-│   └── policy.py          # Full ROMA policy network
-├── train_roma.py          # Train ROMA (--role_dim 1 or --role_dim 8)
-├── train_baseline.py      # Train vanilla PPO baseline (no roles)
-├── eval_roma.py           # Evaluate trained checkpoints
-├── test_modules.py        # Unit tests (run before training)
+│   ├── __init__.py          — Package init
+│   ├── role_encoder.py      — GRU-based role encoder
+│   ├── aux_losses.py        — MI loss + cosine diversity loss
+│   └── policy.py            — Structured encoder policy (ego/partner/road)
+├── train_roma.py            — Full ROMA training (GPU/CPU, wandb, CSV logging)
+├── train_baseline.py        — Vanilla PPO baseline (no roles)
+├── eval_roma.py             — Evaluation: env metrics + WOSAC realism
+├── show_diversity.py        — Waymo dataset diversity analysis
+├── visualize_policy.py      — Role vector vs behaviour visualization
+├── check_env.py             — Environment diagnostic (run first)
+├── test_modules.py          — Unit tests (13 tests, run before training)
 └── README.md
+```
 
 ---
 
 ## Architecture
 
-Each agent receives a 1121-dimensional observation vector from PufferDrive at every timestep, encoding its own state, up to 31 surrounding vehicles, and nearby road geometry. This observation is processed through two parallel branches. The first is the ROMA role encoder — a GRU-based recurrent network that produces a latent role distribution parameterized by a mean and variance vector. The role vector is sampled from this distribution during training using the reparameterization trick, and set deterministically to the mean during evaluation. The second branch is a feedforward observation encoder that produces a 128-dimensional environment embedding. The role vector and environment embedding are concatenated and passed into the policy GRU, which outputs action logits over 91 discrete actions and a scalar value estimate.
-observation (1121)
-↓                      ↓
-Role Encoder             Obs Encoder
-Linear(1121→64)          Linear(1121→256) ReLU
-ReLU                     Linear(256→128)  ReLU
-GRUCell(64→64)
-mu_head → role_mean          env_embedding (128)
-logvar_head → role_var
-reparameterize → role_z
-↓                      ↓
-└──────── concat ───────┘
-↓
-[env_embedding || role_z]
-128 + role_dim numbers
-↓
-Policy GRUCell
-↓
-Actor  → 91 action logits
-Critic → 1 value estimate
+The observation (1121-dimensional flat vector) is split into three structured slices and processed by separate encoders:
 
-Training objective:
-Total Loss = PPO Loss
-+ 1.0  × MI Loss
-+ 0.05 × Diversity Loss
+```
+obs (1121)
+├── ego      [0:7]      → EgoEncoder     → 32 dims
+├── partners [7:224]    → PartnerEncoder → 32 dims  (max-pool over 31 vehicles)
+└── roads    [224:1120] → RoadEncoder    → 64 dims  (max-pool over 128 points)
+                               ↓
+                       env_embedding (128)
+                               ↓
+              ┌────────────────┤
+              ↓                ↓
+        Role Encoder      env_embedding
+        GRU(64→64)
+        mu_head → role_mean
+        logvar_head → role_var
+        reparameterize → role_z
+              ↓                ↓
+              └──── concat ────┘
+                       ↓
+              [env_embedding || role_z]
+                (128 + role_dim dims)
+                       ↓
+               Policy GRUCell (128)
+                       ↓
+              Actor → 91 action logits
+              Critic → 1 value estimate
+```
 
-Role dimensions:
-role_dim=1 → [0.73]                                          (original ROMA)
-role_dim=8 → [0.73, 0.12, 0.45, 0.89, 0.23, 0.67, 0.34, 0.91]  (proposed)
+**Training loss:**
+```
+Total = PPO loss + 1.0 × MI loss + 0.1 × Diversity loss
+```
+
+**Diversity loss** uses pairwise cosine similarity between role means — naturally bounded in [-1, +1]:
+- `+1.0` = all agents have identical roles (collapse)
+- ` 0.0` = roles uncorrelated
+- `-1.0` = agents maximally diverse
+
+This replaces the original KL-based diversity which diverged to -infinity without clipping.
 
 ---
 
 ## Installation
 
-### 1. Install WSL2 (Windows only)
-```powershell
-wsl --install
-```
+### 1. Clone and install PufferDrive
 
-### 2. Clone and install PufferDrive
 ```bash
 git clone https://github.com/Emerge-Lab/PufferDrive.git
 cd PufferDrive
@@ -164,7 +94,8 @@ uv pip install -e .
 python setup.py build_ext --inplace --force
 ```
 
-### 3. Download the Waymo dataset (~4.8 GB)
+### 2. Download the Waymo dataset (~4.8 GB)
+
 ```bash
 huggingface-cli download daphne-cornelisse/pufferdrive_womd_train \
   --repo-type dataset \
@@ -172,93 +103,222 @@ huggingface-cli download daphne-cornelisse/pufferdrive_womd_train \
 unzip data/processed/training/training.zip -d data/processed/training/
 ```
 
-### 4. Convert JSON maps to binary format
+### 3. Convert maps to binary format
+
 ```bash
 python pufferlib/ocean/drive/drive.py
 mkdir -p resources/drive/binaries/training
 mv resources/drive/binaries/*.bin resources/drive/binaries/training/
 ```
 
-### 5. Clone this repo into PufferDrive
+### 4. Clone this repo into PufferDrive
+
 ```bash
-git clone https://github.com/YourUsername/roma-pufferdrive.git roma_pufferdrive
-cd roma_pufferdrive
+git clone https://github.com/baturalpkorpe-lab/roma-pufferdrive.git roma_pufferdrive
 ```
 
-### 6. Install extra dependencies
+### 5. Install dependencies
+
 ```bash
-pip install matplotlib scikit-learn scipy wandb
+uv pip install matplotlib scikit-learn scipy wandb pandas
 ```
 
----
+### 6. Verify environment
 
-## Usage
-
-### Run unit tests first (always do this before training)
-```bash
-cd ~/PufferDrive/roma_pufferdrive
-python3 test_modules.py
-```
-
-### Train vanilla PPO baseline
 ```bash
 cd ~/PufferDrive
-python3 roma_pufferdrive/train_baseline.py
+PYTHONPATH=/root/PufferDrive/roma_pufferdrive python3 roma_pufferdrive/check_env.py
 ```
 
-### Train ROMA with scalar role (original paper setting)
+Expected output: `obs_dim = 1121`
+
+### 7. Run unit tests
+
 ```bash
-python3 roma_pufferdrive/train_roma.py --role_dim 1
+PYTHONPATH=/root/PufferDrive/roma_pufferdrive python3 roma_pufferdrive/test_modules.py
 ```
 
-### Train ROMA with multidimensional role (proposed extension)
+All 13 tests must pass before training.
+
+---
+
+## Training
+
+### CPU (quick test — ~2M steps in ~15 minutes)
+
 ```bash
-python3 roma_pufferdrive/train_roma.py --role_dim 8
+cd ~/PufferDrive
+PYTHONPATH=/root/PufferDrive/roma_pufferdrive python3 roma_pufferdrive/train_roma.py \
+    --role_dim 1 \
+    --num_maps 100 \
+    --total_steps 2000000 \
+    --num_agents 16 \
+    --device cpu \
+    --save_interval 1000000 \
+    --save_dir roma_pufferdrive/checkpoints/roma_dim1_test
 ```
+
+### GPU / Supercomputer (full training — 6B steps)
+
+```bash
+PYTHONPATH=/path/to/roma_pufferdrive python3 roma_pufferdrive/train_roma.py \
+    --role_dim 1 \
+    --num_maps 10000 \
+    --total_steps 6000000000 \
+    --save_interval 500000000 \
+    --num_agents 64 \
+    --device cuda \
+    --run_eval \
+    --wandb_project roma-pufferdrive \
+    --wandb_entity YOUR_WANDB_USERNAME \
+    --save_dir roma_pufferdrive/checkpoints/roma_dim1
+```
+
+### With wandb offline (no internet on supercomputer)
+
+```bash
+PYTHONPATH=/path/to/roma_pufferdrive python3 roma_pufferdrive/train_roma.py \
+    --role_dim 1 \
+    --num_maps 10000 \
+    --total_steps 6000000000 \
+    --num_agents 64 \
+    --device cuda \
+    --run_eval \
+    --wandb_offline \
+    --wandb_project roma-pufferdrive \
+    --wandb_entity YOUR_WANDB_USERNAME \
+    --save_dir roma_pufferdrive/checkpoints/roma_dim1
+```
+
+Sync later with `wandb sync`.
+
+### Without wandb (CSV only)
+
+Simply omit `--wandb_project`. Training log is always saved to `checkpoints/training_log.csv` regardless.
 
 ### Key training arguments
---role_dim       int    Role vector dimension (default 8)
---mi_weight      float  Weight on MI loss (default 1.0)
---div_weight     float  Weight on diversity loss (default 0.05)
---num_agents     int    Agents per scene (default 16)
---total_steps    int    Total training steps (default 50000000)
---num_maps       int    Number of maps to use (default 100)
---seed           int    Random seed (default 0)
+
+| Argument | Default | Description |
+|---|---|---|
+| `--role_dim` | 1 | Role vector dimension. 1=original ROMA, 8=proposed | (We want to see the results in dimension 1 initially)
+| `--num_maps` | 10000 | Scenarios loaded. 10000=full, 100=CPU test |
+| `--num_agents` | 64 | Agents per scene. 64 on GPU, 16 on CPU |
+| `--total_steps` | 1B | Training steps. Use 6B for full run |
+| `--device` | cuda | cuda or cpu. Auto-falls back to cpu |
+| `--mi_weight` | 1.0 | Weight on MI loss | (Can be changed later according to the results)
+| `--div_weight` | 0.1 | Weight on cosine diversity loss | (Can be changed later according to the results)
+| `--run_eval` | False | Run WOSAC + env evaluation after training |
+| `--wandb_project` | None | Wandb project name. Omit to disable wandb |
+| `--wandb_entity` | None | Wandb username |
+| `--wandb_offline` | False | Log locally, sync later |
+| `--save_interval` | 100M | Save checkpoint every N steps |
 
 ---
 
-## Results
+## Evaluation
 
-Preliminary results after 50M steps on CPU (no GPU):
+### Quick evaluation (CPU)
 
-| Metric | Baseline | ROMA dim=1 | ROMA dim=8 |
-|---|---|---|---|
-| Score | 0.0229 | 0.0021 | 0.0063 |
-| Collision rate | 0.3875 | 0.4292 | - |
-| Off-road rate | 0.8583 | 1.0000 | - |
-| Completion rate | 0.0521 | 0.1708 | - |
-| Mean return | -2.3553 | -2.1681 | - |
+```bash
+PYTHONPATH=/root/PufferDrive/roma_pufferdrive python3 roma_pufferdrive/eval_roma.py \
+    --checkpoint roma_pufferdrive/checkpoints/roma_dim1/roma_dim1_final.pt \
+    --role_dim 1 --obs_dim 1121 --n_episodes 10 \
+    --wosac --wosac_rollouts 4 --wosac_num_maps 100 --wosac_max_batches 30
+```
 
-Note: These are proof-of-concept results at 50M steps on CPU. ROMA requires more training steps than the baseline because it simultaneously learns to drive, what its role means, and how to differ from other agents. Full GPU training at 500M+ steps is expected to show the complete benefit of role representations. The completion rate improvement from 5.2% to 17.1% with ROMA dim=1 is a promising early signal.
+### Full evaluation (GPU / supercomputer — all 10,000 scenarios)
+
+```bash
+PYTHONPATH=/path/to/roma_pufferdrive python3 roma_pufferdrive/eval_roma.py \
+    --checkpoint roma_pufferdrive/checkpoints/roma_dim1/roma_dim1_final.pt \
+    --role_dim 1 --obs_dim 1121 --n_episodes 30 \
+    --wosac --wosac_rollouts 32 --wosac_num_maps 10000 --wosac_max_batches 500
+```
+
+### WOSAC metrics explained
+
+| Metric | Description |
+|---|---|
+| Realism meta-score | Weighted combination of all metrics. Higher = more realistic |
+| Kinematic metrics | Speed, acceleration, steering match real human distributions |
+| Interactive metrics | Distance to other vehicles, time-to-collision match real drivers |
+| Map-based metrics | Road adherence matches real drivers |
+| minADE | Minimum average displacement error vs ground truth (metres) |
 
 ---
 
-## What This Code Is and Is Not
+## Baseline
 
-This repository is a **proof of concept** demonstrating that the ROMA architecture is compatible with and trainable on PufferDrive. It is not the final research implementation. The following extensions are planned for the full research phase:
+```bash
+PYTHONPATH=/root/PufferDrive/roma_pufferdrive python3 roma_pufferdrive/train_baseline.py \
+    --num_maps 10000 --num_agents 64 --total_steps 6000000000 --device cuda \
+    --save_dir roma_pufferdrive/checkpoints/baseline
+```
 
-- **Disentangled role dimensions** with beta-VAE regularization so each dimension captures a separate interpretable behavioural factor
-- **Semantic alignment losses** that explicitly correlate role dimensions with observable behaviours such as speed, lane-change frequency, and time headway
-- **PufferDrive official encoders** replacing the simple MLP with proper ego, partner, and road sub-encoders for permutation-invariant observation processing
-- **Full GPU training** at 500M-1B steps for complete learning curves
-- **Interpretability analysis** including t-SNE visualizations of the role space and Pearson correlation analysis between role dimensions and driving behaviours
-- **Full ablation study** systematically removing components to quantify each contribution
+---
+
+## Dataset Diversity Analysis
+
+To verify that the Waymo dataset contains genuine behavioural diversity justifying the diversity loss:
+
+```bash
+PYTHONPATH=/root/PufferDrive/roma_pufferdrive python3 roma_pufferdrive/show_diversity.py \
+    --num_maps 1000 --num_resets 100
+```
+
+Results: speed CV=1.06, steering CV=1.19 — variation between drivers exceeds the mean. Full analysis saved to `diversity_plots/diversity_overview.png`.
+
+---
+
+## Visualize Policy
+
+After training, visualize agent behaviour and role vectors:
+
+```bash
+PYTHONPATH=/root/PufferDrive/roma_pufferdrive python3 roma_pufferdrive/visualize_policy.py \
+    --checkpoint roma_pufferdrive/checkpoints/roma_dim1/roma_dim1_final.pt \
+    --role_dim 1 --obs_dim 1121
+```
+
+Produces:
+- `behaviour_over_time.png` — speed and steering for all agents over 91 timesteps
+- `role_vs_behaviour.png` — each agent's role vector alongside their behavioural statistics
+
+---
+
+## Logged Metrics
+
+Training automatically saves to `checkpoints/training_log.csv`:
+
+| Column | Description |
+|---|---|
+| step | Global training step |
+| sps | Steps per second |
+| policy_loss | PPO loss (~0, fluctuates around 0 normally) |
+| value_loss | Critic loss (should decrease over time) |
+| mi_loss | Mutual information loss (~0.007, stable) |
+| div_loss | Diversity loss (starts ~1.0, decreases toward 0 as roles diverge) |
+| score | Rolling average episode score (0-1, higher is better) |
+| mean_return | Rolling average episode return |
+
+If `--run_eval` is set, after training also saves:
+- `eval_env_metrics.csv` — per-episode environment metrics
+- `eval_wosac_metrics.csv` — per-scenario WOSAC realism metrics
+
+---
+
+## Notes
+
+- PufferDrive requires Linux — native Windows not supported. Use WSL2.
+- obs_dim is auto-detected at startup — no need to hardcode
+- Run `check_env.py` first when setting up on a new machine
+- Run `test_modules.py` before every training run
+- div_loss naturally bounded in [-1, +1] — no clipping needed
+- wandb is fully optional — CSV logging always runs
 
 ---
 
 ## Citation
-
-If you use this code please cite the original ROMA paper:
 
 ```bibtex
 @inproceedings{wang2020roma,
@@ -269,15 +329,6 @@ If you use this code please cite the original ROMA paper:
 }
 ```
 
-This code is built on top of:
-- [ROMA](https://github.com/TonghanWang/ROMA) — original ROMA implementation
+Built on:
 - [PufferDrive](https://github.com/Emerge-Lab/PufferDrive) — driving simulator
-
----
-
-## Notes
-
-- All experiments were run on WSL2 Ubuntu with CPU only due to hardware constraints
-- PufferDrive requires Linux or WSL2 — native Windows is not supported
-- The observation dimension (1121) may differ from PufferDrive documentation (1848) depending on simulator configuration
-- Run test_modules.py before any training to verify all components are working correctly
+- [Waymo Open Motion Dataset](https://waymo.com/open/data/motion/)
