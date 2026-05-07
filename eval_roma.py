@@ -12,15 +12,19 @@ Automatically detects whether the checkpoint used the old flat-MLP
 architecture or the new structured encoder architecture.
 
 Usage (from ~/PufferDrive):
-    # ROMA dim=8
-    python3 roma_pufferdrive/eval_roma.py \
-        --checkpoint roma_pufferdrive/checkpoints/roma/roma_dim8_final.pt \
-        --role_dim 8 --obs_dim 1121 --n_episodes 30 --wosac
+─────────────────────────────────────────────────────────
+CPU TESTING (quick):
+    PYTHONPATH=/root/PufferDrive/roma_pufferdrive python3 roma_pufferdrive/eval_roma.py \
+        --checkpoint roma_pufferdrive/checkpoints/roma_structured/roma_dim8_final.pt \
+        --role_dim 8 --obs_dim 1121 --n_episodes 10 \
+        --wosac --wosac_rollouts 4 --wosac_num_maps 100 --wosac_max_batches 30
 
-    # Baseline
-    python3 roma_pufferdrive/eval_roma.py \
-        --checkpoint roma_pufferdrive/checkpoints/baseline/baseline_final.pt \
-        --role_dim 0 --obs_dim 1121 --n_episodes 30 --wosac
+DELFT / SUPERCOMPUTER (full evaluation on all 10,000 scenarios):
+    PYTHONPATH=/path/to/roma_pufferdrive python3 roma_pufferdrive/eval_roma.py \
+        --checkpoint roma_pufferdrive/checkpoints/roma/roma_dim8_final.pt \
+        --role_dim 8 --obs_dim 1121 --n_episodes 30 \
+        --wosac --wosac_rollouts 32 --wosac_num_maps 10000 --wosac_max_batches 500
+─────────────────────────────────────────────────────────
 """
 
 import argparse
@@ -44,7 +48,6 @@ class LegacyRomaPolicy(nn.Module):
         self.policy_hidden  = policy_hidden
         self.obs_window_len = obs_window_len
         self.role_dim       = role_dim
-
         self.obs_encoder = nn.Sequential(
             nn.Linear(obs_dim, 256), nn.ReLU(),
             nn.Linear(256, 128),    nn.ReLU(),
@@ -105,20 +108,11 @@ class LegacyBaselinePolicy(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# WOSAC adapter — wraps our policy to match WOSACEvaluator's expected interface
+# WOSAC adapter
 # ---------------------------------------------------------------------------
 
 class WOSACPolicyAdapter:
-    """
-    Thin wrapper so our recurrent policy works with WOSACEvaluator.collect_simulated_trajectories().
-
-    WOSACEvaluator calls:
-        logits, value = policy.forward_eval(obs_tensor, state)
-        action, logprob, _ = pufferlib.pytorch.sample_logits(logits)
-
-    We reset the recurrent state at the start of each rollout ourselves inside
-    collect_wosac_trajectories() below — the adapter just handles the per-step call.
-    """
+    """Wraps our recurrent policy to match WOSACEvaluator's per-step interface."""
     def __init__(self, policy, num_agents, device):
         self.policy     = policy
         self.num_agents = num_agents
@@ -129,7 +123,6 @@ class WOSACPolicyAdapter:
         self._state = self.policy.initial_state(self.num_agents, self.device)
 
     def forward_eval(self, obs, lstm_state=None):
-        """Called by WOSACEvaluator per step. Returns (logits, value)."""
         with torch.no_grad():
             logits, value, new_state, _ = self.policy(obs, self._state)
         self._state = new_state
@@ -163,22 +156,15 @@ def load_policy(checkpoint_path, role_dim, obs_dim, device):
 
 
 # ---------------------------------------------------------------------------
-# WOSAC trajectory collection (replaces WOSACEvaluator.collect_simulated_trajectories)
+# WOSAC trajectory collection
 # ---------------------------------------------------------------------------
 
-def collect_wosac_trajectories(env, policy_adapter, num_rollouts, num_steps=91):
+def collect_wosac_trajectories(env, policy_adapter, num_rollouts, num_steps=91, silent=False):
     """
     Roll out policy for num_rollouts independent rollouts and collect
-    (x, y, heading, id) trajectories in the format expected by WOSACEvaluator.compute_metrics().
+    (x, y, z, heading, id) trajectories for WOSACEvaluator.compute_metrics().
 
-    Args:
-        env            : Drive environment instance
-        policy_adapter : WOSACPolicyAdapter wrapping our policy
-        num_rollouts   : number of stochastic rollouts (32 for official WOSAC)
-        num_steps      : episode length (91 for WOSAC)
-
-    Returns:
-        dict with keys x, y, z, heading, id — each (num_agents, num_rollouts, num_steps)
+    Returns dict with each key shaped (num_agents, num_rollouts, num_steps).
     """
     num_agents = env.num_agents
     trajectories = {
@@ -190,7 +176,8 @@ def collect_wosac_trajectories(env, policy_adapter, num_rollouts, num_steps=91):
     }
 
     for r in range(num_rollouts):
-        print(f"\r  WOSAC rollout {r+1}/{num_rollouts} ...", end="", flush=True)
+        if not silent:
+            print(f"\r  WOSAC rollout {r+1}/{num_rollouts} ...", end="", flush=True)
         obs_np, _ = env.reset()
         policy_adapter.reset_state()
         obs = torch.tensor(obs_np, dtype=torch.float32, device=policy_adapter.device)
@@ -205,11 +192,11 @@ def collect_wosac_trajectories(env, policy_adapter, num_rollouts, num_steps=91):
 
             logits, _ = policy_adapter.forward_eval(obs)
             action     = Categorical(logits=logits).sample()
-            actions_np = action.cpu().numpy().reshape(num_agents, 1)
-            obs_np, _, _, _, _ = env.step(actions_np)
+            obs_np, _, _, _, _ = env.step(action.cpu().numpy().reshape(num_agents, 1))
             obs = torch.tensor(obs_np, dtype=torch.float32, device=policy_adapter.device)
 
-    print()  # newline after \r
+    if not silent:
+        print()
     return trajectories
 
 
@@ -219,20 +206,24 @@ def collect_wosac_trajectories(env, policy_adapter, num_rollouts, num_steps=91):
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--checkpoint",     type=str,  required=True)
-    p.add_argument("--role_dim",       type=int,  default=8,
+    p.add_argument("--checkpoint",        type=str,  required=True)
+    p.add_argument("--role_dim",          type=int,  default=8,
                    help="Role dimension used during training. Use 0 for baseline.")
-    p.add_argument("--obs_dim",        type=int,  default=1121)
-    p.add_argument("--num_agents",     type=int,  default=16)
-    p.add_argument("--n_episodes",     type=int,  default=30,
+    p.add_argument("--obs_dim",           type=int,  default=1121)
+    p.add_argument("--num_agents",        type=int,  default=16)
+    p.add_argument("--n_episodes",        type=int,  default=30,
                    help="Episodes for environment metric evaluation.")
-    p.add_argument("--map_dir",        type=str,  default="resources/drive/binaries/training")
-    p.add_argument("--wosac",          action="store_true",
+    p.add_argument("--map_dir",           type=str,  default="resources/drive/binaries/training")
+    p.add_argument("--wosac",             action="store_true",
                    help="Also compute WOSAC realism metrics.")
-    p.add_argument("--wosac_rollouts", type=int,  default=32,
-                   help="Number of stochastic rollouts for WOSAC (official=32, use 4-8 for quick test).")
-    p.add_argument("--save_plots",     action="store_true")
-    p.add_argument("--output_dir",     type=str,  default="roma_pufferdrive/eval_results")
+    p.add_argument("--wosac_rollouts",    type=int,  default=32,
+                   help="Rollouts per scenario. Official WOSAC = 32. Use 4 for quick CPU test.")
+    p.add_argument("--wosac_num_maps",    type=int,  default=10000,
+                   help="Maps loaded into memory. Use 10000 for full evaluation, 100 for CPU test.")
+    p.add_argument("--wosac_max_batches", type=int,  default=500,
+                   help="Max resample batches. 500 batches with num_maps=10000 covers most scenarios.")
+    p.add_argument("--save_plots",        action="store_true")
+    p.add_argument("--output_dir",        type=str,  default="roma_pufferdrive/eval_results")
     return p.parse_args()
 
 
@@ -249,14 +240,14 @@ def evaluate(args):
 
     from pufferlib.ocean.drive.drive import Drive
     env = Drive(
-        num_maps       = 50,
+        num_maps       = args.wosac_num_maps,
         num_agents     = args.num_agents,
         map_dir        = args.map_dir,
         episode_length = 91,
     )
 
     # -----------------------------------------------------------------------
-    # Part 1 — Environment metrics (score, collision, offroad, completion)
+    # Part 1 — Environment metrics
     # -----------------------------------------------------------------------
     all_scores, all_collisions    = [], []
     all_offroads, all_completions = [], []
@@ -333,35 +324,19 @@ def evaluate(args):
             print("  (install scipy for role-speed correlations)")
 
     # -----------------------------------------------------------------------
-    # Part 2 — WOSAC realism metrics
+    # Part 2 — WOSAC realism metrics (multi-batch)
     # -----------------------------------------------------------------------
     if args.wosac:
-        print(f"\nPart 2: WOSAC realism metrics ({args.wosac_rollouts} rollouts) ...")
-        print("  This compares simulated trajectories against real Waymo human driver data.\n")
+        print(f"\nPart 2: WOSAC realism metrics")
+        print(f"  rollouts={args.wosac_rollouts} | "
+              f"num_maps={args.wosac_num_maps} | "
+              f"max_batches={args.wosac_max_batches}")
+        print("  Comparing simulated trajectories against real Waymo human drivers.\n")
 
         try:
+            import pandas as pd
             from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
-            from pufferlib.ocean.benchmark import metrics as wosac_metrics
 
-            # Collect ground truth trajectories from the dataset
-            gt_trajectories = env.get_ground_truth_trajectories()
-            agent_state     = env.get_global_agent_state()
-            road_edges      = env.get_road_edge_polylines()
-
-            # Wrap our policy in the WOSAC adapter
-            adapter = WOSACPolicyAdapter(policy, args.num_agents, device)
-
-            # Collect simulated trajectories
-            sim_trajectories = collect_wosac_trajectories(
-                env, adapter,
-                num_rollouts = args.wosac_rollouts,
-                num_steps    = 91,
-            )
-
-            # The id field needs shape (num_agents, num_rollouts, num_steps) for sim
-            # and (num_agents, 1, num_steps) for gt — already correct from our collector
-
-            # Minimal config for WOSACEvaluator
             wosac_config = {
                 "eval": {
                     "wosac_init_steps": 0,
@@ -369,55 +344,84 @@ def evaluate(args):
                 },
                 "train": {"device": "cpu"},
             }
-            evaluator = WOSACEvaluator(wosac_config)
+            evaluator        = WOSACEvaluator(wosac_config)
+            adapter          = WOSACPolicyAdapter(policy, args.num_agents, device)
+            all_results      = []
+            unique_scenarios = set()
 
-            results_df = evaluator.compute_metrics(
-                gt_trajectories,
-                sim_trajectories,
-                agent_state,
-                road_edges,
-                aggregate_results=False,
-            )
+            for batch in range(args.wosac_max_batches):
+                env.resample_maps()
+                env.reset()
+                gt          = env.get_ground_truth_trajectories()
+                agent_state = env.get_global_agent_state()
+                road_edges  = env.get_road_edge_polylines()
 
-            # Aggregate across scenarios
-            agg = results_df.mean()
+                sim = collect_wosac_trajectories(
+                    env, adapter,
+                    num_rollouts = args.wosac_rollouts,
+                    num_steps    = 91,
+                    silent       = True,
+                )
 
-            print("\n" + "=" * 57)
-            print("  WOSAC REALISM METRICS")
-            print("=" * 57)
-            print(f"  Realism meta-score        : {agg['realism_meta_score']:.4f}")
-            print(f"  Kinematic metrics         : {agg['kinematic_metrics']:.4f}")
-            print(f"  Interactive metrics       : {agg['interactive_metrics']:.4f}")
-            print(f"  Map-based metrics         : {agg['map_based_metrics']:.4f}")
-            print()
-            print(f"  ADE                       : {agg['ade']:.4f} m")
-            print(f"  minADE                    : {agg['min_ade']:.4f} m")
-            print()
-            print(f"  likelihood_linear_speed   : {agg['likelihood_linear_speed']:.4f}")
-            print(f"  likelihood_linear_accel   : {agg['likelihood_linear_acceleration']:.4f}")
-            print(f"  likelihood_angular_speed  : {agg['likelihood_angular_speed']:.4f}")
-            print(f"  likelihood_angular_accel  : {agg['likelihood_angular_acceleration']:.4f}")
-            print(f"  likelihood_collision      : {agg['likelihood_collision_indication']:.4f}")
-            print(f"  likelihood_dist_obj       : {agg['likelihood_distance_to_nearest_object']:.4f}")
-            print(f"  likelihood_ttc            : {agg['likelihood_time_to_collision']:.4f}")
-            print(f"  likelihood_dist_road_edge : {agg['likelihood_distance_to_road_edge']:.4f}")
-            print(f"  likelihood_offroad        : {agg['likelihood_offroad_indication']:.4f}")
-            print(f"  Scenarios evaluated       : {len(results_df)}")
-            print("=" * 57)
+                try:
+                    df  = evaluator.compute_metrics(
+                        gt, sim, agent_state, road_edges,
+                        aggregate_results=False,
+                    )
+                    new = set(df.index.tolist()) - unique_scenarios
+                    if new:
+                        all_results.append(df[df.index.isin(new)])
+                        unique_scenarios.update(new)
+                except Exception:
+                    pass
 
-            # Save full results CSV
-            if args.save_plots or True:  # always save CSV
+                if (batch + 1) % 10 == 0:
+                    score = pd.concat(all_results)["realism_meta_score"].mean() \
+                            if all_results else 0.0
+                    print(f"  Batch {batch+1}/{args.wosac_max_batches} | "
+                          f"unique scenarios: {len(unique_scenarios)} | "
+                          f"realism: {score:.4f}")
+
+            if not all_results:
+                print("  No WOSAC results collected.")
+            else:
+                combined = pd.concat(all_results)
+                agg      = combined.mean()
+
+                print("\n" + "=" * 57)
+                print("  WOSAC REALISM METRICS")
+                print("=" * 57)
+                print(f"  Scenarios evaluated       : {len(combined)}")
+                print(f"  Rollouts per scenario     : {args.wosac_rollouts}")
+                print(f"  Realism meta-score        : {agg['realism_meta_score']:.4f}")
+                print(f"  Kinematic metrics         : {agg['kinematic_metrics']:.4f}")
+                print(f"  Interactive metrics       : {agg['interactive_metrics']:.4f}")
+                print(f"  Map-based metrics         : {agg['map_based_metrics']:.4f}")
+                print()
+                print(f"  ADE                       : {agg['ade']:.4f} m")
+                print(f"  minADE                    : {agg['min_ade']:.4f} m")
+                print()
+                print(f"  likelihood_linear_speed   : {agg['likelihood_linear_speed']:.4f}")
+                print(f"  likelihood_linear_accel   : {agg['likelihood_linear_acceleration']:.4f}")
+                print(f"  likelihood_angular_speed  : {agg['likelihood_angular_speed']:.4f}")
+                print(f"  likelihood_angular_accel  : {agg['likelihood_angular_acceleration']:.4f}")
+                print(f"  likelihood_collision      : {agg['likelihood_collision_indication']:.4f}")
+                print(f"  likelihood_dist_obj       : {agg['likelihood_distance_to_nearest_object']:.4f}")
+                print(f"  likelihood_ttc            : {agg['likelihood_time_to_collision']:.4f}")
+                print(f"  likelihood_dist_road_edge : {agg['likelihood_distance_to_road_edge']:.4f}")
+                print(f"  likelihood_offroad        : {agg['likelihood_offroad_indication']:.4f}")
+                print("=" * 57)
+
                 Path(args.output_dir).mkdir(parents=True, exist_ok=True)
                 ckpt_name = Path(args.checkpoint).stem
                 csv_path  = Path(args.output_dir) / f"wosac_{ckpt_name}.csv"
-                results_df.to_csv(csv_path)
+                combined.to_csv(csv_path)
                 print(f"\n  Full results saved -> {csv_path}")
 
         except Exception as e:
             print(f"\n  WOSAC evaluation failed: {e}")
             import traceback
             traceback.print_exc()
-            print("\n  Tip: Make sure get_ground_truth_trajectories() is available in your Drive version.")
 
     # -----------------------------------------------------------------------
     # Optional t-SNE plots
