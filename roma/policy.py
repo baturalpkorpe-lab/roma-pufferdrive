@@ -94,19 +94,6 @@ class RoadEncoder(nn.Module):
 class RomaPolicy(nn.Module):
     """
     ROMA policy with structured observation encoders and a recurrent role encoder.
-
-    Args:
-        obs_dim        : total flat observation dimension (set from check_env.py output)
-        action_dim     : number of discrete actions (91 for PufferDrive)
-        role_dim       : dimension of the latent role vector
-        role_hidden    : hidden size of the role encoder GRU
-        policy_hidden  : hidden size of the policy GRU
-        var_floor      : minimum variance for the role distribution
-        obs_window_len : number of past observations kept for MI loss
-        ego_dim        : number of ego-state features
-        partner_feat   : features per surrounding vehicle
-        max_partners   : maximum number of surrounding vehicles
-        road_feat      : features per road point
     """
 
     # Confirmed by check_env.py — do not change these.
@@ -119,7 +106,7 @@ class RomaPolicy(nn.Module):
 
     def __init__(
         self,
-        obs_dim        = 1121,   # confirmed by check_env.py
+        obs_dim        = 1121,
         action_dim     = 91,
         role_dim       = 8,
         role_hidden    = 64,
@@ -140,26 +127,20 @@ class RomaPolicy(nn.Module):
         self.ego_enc     = EgoEncoder(ego_dim, out_dim=32)
         self.partner_enc = PartnerEncoder(self.PARTNER_FEAT, out_dim=32,
                                           max_partners=self.MAX_PARTNERS)
-        # Road encoder uses 128 points × 7 features — the trailing padding
-        # byte (index 1120) is sliced off inside _split_obs before this runs.
         self.road_enc    = RoadEncoder(self.ROAD_FEAT, out_dim=64,
                                        max_roads=self.MAX_ROADS)
         env_embed_dim = 32 + 32 + 64  # = 128
 
-        # Role encoder (GRU-based, produces role_z conditioned on obs history)
-        self.role_encoder = RoleEncoder(obs_dim, role_dim, role_hidden, var_floor)
+        # Role encoder receives the structured env embedding (128-dim) rather
+        # than raw observations — cleaner signal, 9x fewer weights in fc_obs.
+        self.role_encoder = RoleEncoder(env_embed_dim, role_dim, role_hidden, var_floor)
 
         # Policy GRU: takes [env_embedding || role_z] → hidden → actor/critic
         self.policy_gru = nn.GRUCell(env_embed_dim + role_dim, policy_hidden)
         self.actor  = nn.Linear(policy_hidden, action_dim)
         self.critic = nn.Linear(policy_hidden, 1)
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
     def initial_state(self, batch_size, device):
-        """Return zero initial state for a batch of agents."""
         role_h   = torch.zeros(batch_size, self.role_encoder.hidden_dim, device=device)
         policy_h = torch.zeros(batch_size, self.policy_hidden,           device=device)
         obs_win  = torch.zeros(batch_size, self.obs_window_len,
@@ -167,61 +148,37 @@ class RomaPolicy(nn.Module):
         return (role_h, policy_h, obs_win)
 
     def _split_obs(self, obs):
-        """Split flat observation into ego / partners / roads slices.
-
-        Layout (all indices confirmed by check_env.py):
-          [0:7]    ego   (7 features)
-          [7:224]  partners (31 × 7 = 217 features)
-          [224:1120] roads (128 × 7 = 896 features)
-          [1120]   padding — dropped
-        """
-        ego      = obs[:, :self.EGO_DIM]                              # (B, 7)
-        p_end    = self.EGO_DIM + self.MAX_PARTNERS * self.PARTNER_FEAT  # 224
-        partners = obs[:, self.EGO_DIM : p_end]                       # (B, 217)
-        roads    = obs[:, p_end : p_end + self.MAX_ROADS * self.ROAD_FEAT]  # (B, 896) — drops [1120]
+        ego      = obs[:, :self.EGO_DIM]
+        p_end    = self.EGO_DIM + self.MAX_PARTNERS * self.PARTNER_FEAT
+        partners = obs[:, self.EGO_DIM : p_end]
+        roads    = obs[:, p_end : p_end + self.MAX_ROADS * self.ROAD_FEAT]
         return ego, partners, roads
 
     def _env_embed(self, obs):
-        """Run structured sub-encoders and concatenate embeddings."""
         ego, partners, roads = self._split_obs(obs)
-        e = self.ego_enc(ego)          # (B, 32)
-        p = self.partner_enc(partners) # (B, 32)
-        r = self.road_enc(roads)       # (B, 64)
+        e = self.ego_enc(ego)
+        p = self.partner_enc(partners)
+        r = self.road_enc(roads)
         return torch.cat([e, p, r], dim=-1)  # (B, 128)
 
-    # ------------------------------------------------------------------
-    # Forward pass
-    # ------------------------------------------------------------------
-
     def forward(self, obs, state):
-        """
-        Args:
-            obs   : (B, obs_dim) current observation
-            state : tuple (role_h, policy_h, obs_win)
-
-        Returns:
-            logits    : (B, action_dim)
-            value     : (B, 1)
-            new_state : updated (role_h, policy_h, obs_win)
-            role_info : dict with role_z, role_mean, role_log_var, obs_window
-        """
         role_h, policy_h, obs_win = state
 
-        # 1. Role encoder
-        role_z, role_mean, role_log_var, new_role_h = self.role_encoder(obs, role_h)
-
-        # 2. Environment encoder (structured)
+        # 1. Environment encoder — runs first, shared with role encoder
         env_emb = self._env_embed(obs)   # (B, 128)
 
+        # 2. Role encoder — receives structured env_emb, not raw obs
+        role_z, role_mean, role_log_var, new_role_h = self.role_encoder(env_emb, role_h)
+
         # 3. Policy GRU
-        policy_input = torch.cat([env_emb, role_z], dim=-1)  # (B, 128+role_dim)
+        policy_input = torch.cat([env_emb, role_z], dim=-1)
         new_policy_h = self.policy_gru(policy_input, policy_h)
 
         # 4. Actor / critic heads
-        logits = self.actor(new_policy_h)   # (B, action_dim)
-        value  = self.critic(new_policy_h)  # (B, 1)
+        logits = self.actor(new_policy_h)
+        value  = self.critic(new_policy_h)
 
-        # 5. Slide observation window (oldest obs dropped, newest appended)
+        # 5. Slide observation window
         new_obs_win = torch.cat([obs_win[:, 1:, :], obs.unsqueeze(1)], dim=1)
 
         new_state = (new_role_h, new_policy_h, new_obs_win)
@@ -234,6 +191,5 @@ class RomaPolicy(nn.Module):
         return logits, value, new_state, role_info
 
     def get_value(self, obs, state):
-        """Convenience wrapper for value-only calls."""
         _, value, new_state, _ = self.forward(obs, state)
         return value, new_state
