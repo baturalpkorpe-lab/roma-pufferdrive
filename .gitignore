@@ -5,3 +5,4 @@ __pycache__/
 checkpoints/
 eval_results/
 diversity_plots/
+slurm_logs/
