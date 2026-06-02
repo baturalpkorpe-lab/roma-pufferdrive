@@ -14,15 +14,15 @@ def _mlp(in_dim, hidden, out_dim, layers=2):
 
 
 class RoleEncoder(nn.Module):
-    def __init__(self, obs_dim, role_dim=8, hidden_dim=64, var_floor=1e-4):
+    def __init__(self, in_dim, role_dim=8, hidden_dim=64, var_floor=1e-4):
         super().__init__()
-        self.obs_dim    = obs_dim
+        self.in_dim     = in_dim
         self.role_dim   = role_dim
         self.hidden_dim = hidden_dim
         self.var_floor  = var_floor
 
         self.fc_obs = nn.Sequential(
-            nn.Linear(obs_dim, hidden_dim),
+            nn.Linear(in_dim, hidden_dim),
             nn.ReLU(),
         )
         self.gru = nn.GRUCell(hidden_dim, hidden_dim)
@@ -32,8 +32,8 @@ class RoleEncoder(nn.Module):
     def init_hidden(self, batch_size, device):
         return torch.zeros(batch_size, self.hidden_dim, device=device)
 
-    def forward(self, obs, hidden):
-        x          = self.fc_obs(obs)
+    def forward(self, env_emb, hidden):
+        x          = self.fc_obs(env_emb)
         new_hidden = self.gru(x, hidden)
         role_mean    = self.mu_head(new_hidden)
         role_log_var = self.logvar_head(new_hidden)
