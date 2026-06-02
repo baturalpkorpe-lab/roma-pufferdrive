@@ -21,7 +21,6 @@ class RoleEncoder(nn.Module):
         self.hidden_dim = hidden_dim
         self.var_floor  = var_floor
 
-        # Accepts env_emb (structured 128-dim) rather than raw observations
         self.fc_obs = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
             nn.ReLU(),

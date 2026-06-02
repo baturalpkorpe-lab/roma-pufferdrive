@@ -10,11 +10,6 @@ Observation layout (flat vector, confirmed by check_env.py):
   [7   : 224]    — up to 31 partner vehicles  (31 × 7 = 217 features)
   [224 : 1120]   — 128 road geometry points   (128 × 7 = 896 features)
   [1120: 1121]   — 1 padding/flag byte        (dropped before road encoder)
-
-The three sub-encoders (EgoEncoder, PartnerEncoder, RoadEncoder) each
-process their slice and produce a fixed-size embedding.  The embeddings
-are concatenated → 32+32+64 = 128 dims → fed into the policy GRU
-together with the role vector.
 """
 
 import torch
@@ -23,12 +18,7 @@ import torch.nn.functional as F
 from roma.role_encoder import RoleEncoder
 
 
-# ---------------------------------------------------------------------------
-# Sub-encoders
-# ---------------------------------------------------------------------------
-
 class EgoEncoder(nn.Module):
-    """Encode the ego vehicle state vector."""
     def __init__(self, ego_dim=7, out_dim=32):
         super().__init__()
         self.out_dim = out_dim
@@ -42,79 +32,70 @@ class EgoEncoder(nn.Module):
 
 
 class PartnerEncoder(nn.Module):
-    """
-    Encode up to max_partners surrounding vehicles with max-pooling
-    so the representation is permutation-invariant.
-    """
-    def __init__(self, partner_feat=7, out_dim=32, max_partners=31):
+    def __init__(self, partner_feat=7, out_dim=32, max_partners=31, embed_dim=64):
         super().__init__()
         self.max_partners = max_partners
         self.partner_feat = partner_feat
         self.out_dim      = out_dim
-        self.net = nn.Sequential(
-            nn.Linear(partner_feat, 32), nn.ReLU(),
-            nn.Linear(32, out_dim),      nn.ReLU(),
+        self.embed_dim    = embed_dim
+        self.scale        = embed_dim ** 0.5
+
+        self.input_proj = nn.Sequential(
+            nn.Linear(partner_feat, embed_dim), nn.ReLU(),
+            nn.Linear(embed_dim, embed_dim),    nn.ReLU(),
         )
+        self.query   = nn.Parameter(torch.zeros(embed_dim))
+        nn.init.xavier_uniform_(self.query.unsqueeze(0))
+        self.out_proj = nn.Linear(embed_dim, out_dim)
 
     def forward(self, x):
-        # x: (B, max_partners * partner_feat)
-        B = x.size(0)
-        x = x.view(B, self.max_partners, self.partner_feat)
-        x = self.net(x)                  # (B, max_partners, out_dim)
-        return x.max(dim=1).values       # (B, out_dim)  — permutation invariant
+        B     = x.size(0)
+        x     = x.view(B, self.max_partners, self.partner_feat)
+        keys  = self.input_proj(x)
+        q     = self.query.unsqueeze(0).unsqueeze(0)
+        scores   = (keys * q).sum(dim=-1) / self.scale
+        weights  = F.softmax(scores, dim=-1)
+        attended = (weights.unsqueeze(-1) * keys).sum(dim=1)
+        return self.out_proj(attended)
 
 
 class RoadEncoder(nn.Module):
-    """
-    Encode nearby road geometry points with max-pooling.
-    max_roads is derived from whatever is left in the observation.
-    """
-    def __init__(self, road_feat=7, out_dim=64, max_roads=232):
+    def __init__(self, road_feat=7, out_dim=64, max_roads=128, embed_dim=128):
         super().__init__()
         self.max_roads = max_roads
         self.road_feat = road_feat
         self.out_dim   = out_dim
-        self.net = nn.Sequential(
-            nn.Linear(road_feat, 32), nn.ReLU(),
-            nn.Linear(32, out_dim),   nn.ReLU(),
+        self.embed_dim = embed_dim
+        self.scale     = embed_dim ** 0.5
+
+        self.input_proj = nn.Sequential(
+            nn.Linear(road_feat, embed_dim), nn.ReLU(),
+            nn.Linear(embed_dim, embed_dim), nn.ReLU(),
         )
+        self.query    = nn.Parameter(torch.zeros(embed_dim))
+        nn.init.xavier_uniform_(self.query.unsqueeze(0))
+        self.out_proj = nn.Linear(embed_dim, out_dim)
 
     def forward(self, x):
-        # x: (B, max_roads * road_feat)
-        B = x.size(0)
-        x = x.view(B, self.max_roads, self.road_feat)
-        x = self.net(x)                  # (B, max_roads, out_dim)
-        return x.max(dim=1).values       # (B, out_dim)
+        B     = x.size(0)
+        x     = x.view(B, self.max_roads, self.road_feat)
+        keys  = self.input_proj(x)
+        q     = self.query.unsqueeze(0).unsqueeze(0)
+        scores   = (keys * q).sum(dim=-1) / self.scale
+        weights  = F.softmax(scores, dim=-1)
+        attended = (weights.unsqueeze(-1) * keys).sum(dim=1)
+        return self.out_proj(attended)
 
-
-# ---------------------------------------------------------------------------
-# Full ROMA policy
-# ---------------------------------------------------------------------------
 
 class RomaPolicy(nn.Module):
-    """
-    ROMA policy with structured observation encoders and a recurrent role encoder.
-    """
-
-    # Confirmed by check_env.py — do not change these.
     EGO_DIM      = 7
     PARTNER_FEAT = 7
-    MAX_PARTNERS = 31   # 31 × 7 = 217
+    MAX_PARTNERS = 31
     ROAD_FEAT    = 7
-    MAX_ROADS    = 128  # 128 × 7 = 896
-    # obs[1120] is 1 padding byte — dropped before road encoder
+    MAX_ROADS    = 128
 
-    def __init__(
-        self,
-        obs_dim        = 1121,
-        action_dim     = 91,
-        role_dim       = 8,
-        role_hidden    = 64,
-        policy_hidden  = 128,
-        var_floor      = 1e-4,
-        obs_window_len = 8,
-        ego_dim        = 7,
-    ):
+    def __init__(self, obs_dim=1121, action_dim=91, role_dim=8, role_hidden=64,
+                 policy_hidden=128, var_floor=1e-4, obs_window_len=8, ego_dim=7):
         super().__init__()
         self.obs_dim        = obs_dim
         self.action_dim     = action_dim
@@ -123,35 +104,27 @@ class RomaPolicy(nn.Module):
         self.obs_window_len = obs_window_len
         self.ego_dim        = ego_dim
 
-        # Sub-encoders: 32 + 32 + 64 = 128 dims total
         self.ego_enc     = EgoEncoder(ego_dim, out_dim=32)
-        self.partner_enc = PartnerEncoder(self.PARTNER_FEAT, out_dim=32,
-                                          max_partners=self.MAX_PARTNERS)
-        self.road_enc    = RoadEncoder(self.ROAD_FEAT, out_dim=64,
-                                       max_roads=self.MAX_ROADS)
-        env_embed_dim = 32 + 32 + 64  # = 128
+        self.partner_enc = PartnerEncoder(self.PARTNER_FEAT, out_dim=32, max_partners=self.MAX_PARTNERS)
+        self.road_enc    = RoadEncoder(self.ROAD_FEAT, out_dim=64, max_roads=self.MAX_ROADS)
+        env_embed_dim    = 32 + 32 + 64
 
-        # Role encoder receives the structured env embedding (128-dim) rather
-        # than raw observations — cleaner signal, 9x fewer weights in fc_obs.
         self.role_encoder = RoleEncoder(env_embed_dim, role_dim, role_hidden, var_floor)
-
-        # Policy GRU: takes [env_embedding || role_z] → hidden → actor/critic
-        self.policy_gru = nn.GRUCell(env_embed_dim + role_dim, policy_hidden)
-        self.actor  = nn.Linear(policy_hidden, action_dim)
-        self.critic = nn.Linear(policy_hidden, 1)
+        self.policy_gru   = nn.GRUCell(env_embed_dim + role_dim, policy_hidden)
+        self.actor        = nn.Linear(policy_hidden, action_dim)
+        self.critic       = nn.Linear(policy_hidden, 1)
 
     def initial_state(self, batch_size, device):
         role_h   = torch.zeros(batch_size, self.role_encoder.hidden_dim, device=device)
-        policy_h = torch.zeros(batch_size, self.policy_hidden,           device=device)
-        obs_win  = torch.zeros(batch_size, self.obs_window_len,
-                               self.obs_dim, device=device)
+        policy_h = torch.zeros(batch_size, self.policy_hidden, device=device)
+        obs_win  = torch.zeros(batch_size, self.obs_window_len, self.obs_dim, device=device)
         return (role_h, policy_h, obs_win)
 
     def _split_obs(self, obs):
         ego      = obs[:, :self.EGO_DIM]
         p_end    = self.EGO_DIM + self.MAX_PARTNERS * self.PARTNER_FEAT
-        partners = obs[:, self.EGO_DIM : p_end]
-        roads    = obs[:, p_end : p_end + self.MAX_ROADS * self.ROAD_FEAT]
+        partners = obs[:, self.EGO_DIM:p_end]
+        roads    = obs[:, p_end:p_end + self.MAX_ROADS * self.ROAD_FEAT]
         return ego, partners, roads
 
     def _env_embed(self, obs):
@@ -159,28 +132,17 @@ class RomaPolicy(nn.Module):
         e = self.ego_enc(ego)
         p = self.partner_enc(partners)
         r = self.road_enc(roads)
-        return torch.cat([e, p, r], dim=-1)  # (B, 128)
+        return torch.cat([e, p, r], dim=-1)
 
     def forward(self, obs, state):
         role_h, policy_h, obs_win = state
-
-        # 1. Environment encoder — runs first, shared with role encoder
-        env_emb = self._env_embed(obs)   # (B, 128)
-
-        # 2. Role encoder — receives structured env_emb, not raw obs
+        env_emb  = self._env_embed(obs)
         role_z, role_mean, role_log_var, new_role_h = self.role_encoder(env_emb, role_h)
-
-        # 3. Policy GRU
         policy_input = torch.cat([env_emb, role_z], dim=-1)
         new_policy_h = self.policy_gru(policy_input, policy_h)
-
-        # 4. Actor / critic heads
-        logits = self.actor(new_policy_h)
-        value  = self.critic(new_policy_h)
-
-        # 5. Slide observation window
+        logits   = self.actor(new_policy_h)
+        value    = self.critic(new_policy_h)
         new_obs_win = torch.cat([obs_win[:, 1:, :], obs.unsqueeze(1)], dim=1)
-
         new_state = (new_role_h, new_policy_h, new_obs_win)
         role_info = {
             "role_z"      : role_z,
