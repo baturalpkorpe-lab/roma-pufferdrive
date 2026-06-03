@@ -11,15 +11,15 @@ CPU TESTING (quick sanity check):
 
 DELFT / SUPERCOMPUTER (full training with wandb logging):
     PYTHONPATH=/path/to/roma_pufferdrive python3 roma_pufferdrive/train_roma.py \
-        --role_dim 1 --num_maps 10000 --total_steps 1000000000 \
-        --num_agents 64 --device cuda --run_eval \
+        --role_dim 1 --num_maps 10000 --total_steps 5000000000 \
+        --num_agents 1024 --device cuda --run_eval \
         --wandb_project roma-pufferdrive --wandb_entity YOUR_WANDB_USERNAME \
         --save_dir roma_pufferdrive/checkpoints/roma_dim1
 
 DELFT without wandb (offline CSV only):
     PYTHONPATH=/path/to/roma_pufferdrive python3 roma_pufferdrive/train_roma.py \
-        --role_dim 1 --num_maps 10000 --total_steps 1000000000 \
-        --num_agents 64 --device cuda --run_eval --wandb_offline \
+        --role_dim 1 --num_maps 10000 --total_steps 5000000000 \
+        --num_agents 1024 --device cuda --run_eval --wandb_offline \
         --save_dir roma_pufferdrive/checkpoints/roma_dim1
 
 Wandb tracks: all losses, scores, hyperparameters, learning curves.
@@ -101,12 +101,14 @@ def log_metrics(wandb_run, metrics_dict, step):
 # GAE
 # ---------------------------------------------------------------------------
 
-def compute_gae(rewards, values, dones, next_value, gamma=0.99, lam=0.95):
-    T    = len(rewards)
-    adv  = torch.zeros_like(rewards)
-    last = torch.zeros_like(next_value)
+def compute_gae(rewards, values, dones, last_vals, gamma=0.99, lam=0.95):
+    # rewards, values, dones: (T, B) — time × agents
+    # last_vals: (B,) — per-agent bootstrap value at end of rollout
+    T   = rewards.shape[0]
+    adv = torch.zeros_like(rewards)
+    last = torch.zeros_like(last_vals)
     for t in reversed(range(T)):
-        nv    = next_value if t == T - 1 else values[t + 1]
+        nv    = last_vals if t == T - 1 else values[t + 1]
         delta = rewards[t] + gamma * nv * (1 - dones[t]) - values[t]
         last  = delta + gamma * lam * (1 - dones[t]) * last
         adv[t] = last
@@ -122,15 +124,15 @@ def parse_args():
 
     # Environment
     p.add_argument("--data_dir",      type=str,   default="resources/drive/binaries/training")
-    p.add_argument("--num_agents",    type=int,   default=64,
-                   help="Agents per scene. 64 on GPU, 16 on CPU.")
+    p.add_argument("--num_agents",    type=int,   default=1024,
+                   help="Agents per scene. 1024 on GPU (recommended), 16 on CPU.")
     p.add_argument("--num_maps",      type=int,   default=10000,
                    help="Scenarios loaded. 10000 for full training, 100 for CPU test.")
     p.add_argument("--device",        type=str,   default="cuda",
                    help="cuda or cpu. Auto-falls back to cpu if cuda unavailable.")
 
     # Role
-    p.add_argument("--role_dim",      type=int,   default=1,
+    p.add_argument("--role_dim",      type=int,   default=8,
                    help="Role vector dimension. 1=original ROMA, 8=proposed extension.")
     p.add_argument("--role_hidden",   type=int,   default=64)
     p.add_argument("--policy_hidden", type=int,   default=128)
@@ -457,9 +459,19 @@ def train(args):
     b_rmean  = torch.zeros(N, args.role_dim, device=device)
     b_rlv    = torch.zeros(N, args.role_dim, device=device)
     b_obswin = torch.zeros(N, 8, obs_dim,    device=device)
+    # Hidden states captured before each forward pass
+    b_role_h   = torch.zeros(N, args.role_hidden,   device=device)
+    b_policy_h = torch.zeros(N, args.policy_hidden, device=device)
+    dummy_obs_win = torch.zeros(N, policy.obs_window_len, obs_dim, device=device)
+    # Hidden states captured before each forward pass — used during PPO update
+    # to avoid restarting GRU from zeros on shuffled minibatches.
+    b_role_h   = torch.zeros(N, args.role_hidden,   device=device)
+    b_policy_h = torch.zeros(N, args.policy_hidden, device=device)
+    # Reusable dummy obs_win for PPO update (obs_win doesn't affect logits/value)
+    dummy_obs_win = torch.zeros(N, policy.obs_window_len, obs_dim, device=device)
 
     state = policy.initial_state(B, device)
-    obs   = torch.tensor(obs_probe, dtype=torch.float32, device=device)
+    obs   = torch.as_tensor(obs_probe, dtype=torch.float32).to(device)
 
     print(f"[ROMA] Training for {args.total_steps:,} steps ...")
 
@@ -470,6 +482,8 @@ def train(args):
         ptr = 0
         with torch.no_grad():
             for _ in range(args.rollout_steps):
+                b_role_h[ptr:ptr+B]   = state[0]
+                b_policy_h[ptr:ptr+B] = state[1]
                 logits, value, state, role_info = policy(obs, state)
                 dist    = Categorical(logits=logits)
                 action  = dist.sample()
@@ -478,10 +492,9 @@ def train(args):
                 actions_np = action.cpu().numpy().reshape(B, 1)
                 obs_np, rew_np, term_np, trunc_np, info = env.step(actions_np)
 
-                obs  = torch.tensor(obs_np,  dtype=torch.float32, device=device)
-                rew  = torch.tensor(rew_np,  dtype=torch.float32, device=device)
-                done = torch.tensor((term_np | trunc_np),
-                                    dtype=torch.float32, device=device)
+                obs  = torch.as_tensor(obs_np,              dtype=torch.float32).to(device)
+                rew  = torch.as_tensor(rew_np,              dtype=torch.float32).to(device)
+                done = torch.as_tensor((term_np | trunc_np), dtype=torch.float32).to(device)
 
                 b_obs   [ptr:ptr+B] = obs
                 b_act   [ptr:ptr+B] = action
@@ -524,8 +537,15 @@ def train(args):
         # ---- GAE ----
         with torch.no_grad():
             _, last_val, _, _ = policy(obs, state)
-        adv     = compute_gae(b_rew[:ptr], b_val[:ptr], b_don[:ptr],
-                               last_val.squeeze(-1).mean(), args.gamma, args.gae_lambda)
+        T_steps   = args.rollout_steps
+        last_vals = last_val.squeeze(-1)                     # (B,) — one per agent
+        adv_2d    = compute_gae(
+            b_rew[:ptr].reshape(T_steps, B),
+            b_val[:ptr].reshape(T_steps, B),
+            b_don[:ptr].reshape(T_steps, B),
+            last_vals, args.gamma, args.gae_lambda,
+        )                                                    # (T, B)
+        adv     = adv_2d.reshape(-1)                         # back to (N,)
         returns = adv + b_val[:ptr]
         adv     = (adv - adv.mean()) / (adv.std() + 1e-8)
 
@@ -541,7 +561,7 @@ def train(args):
         for _ in range(args.ppo_epochs):
             for start in range(0, ptr, mb_size):
                 mb       = idx[start:start + mb_size]
-                mb_state = policy.initial_state(mb.size(0), device)
+                mb_state = (b_role_h[mb], b_policy_h[mb], dummy_obs_win[mb])
                 logits, value, _, role_info = policy(b_obs[mb], mb_state)
 
                 dist        = Categorical(logits=logits)
@@ -562,7 +582,10 @@ def train(args):
 
                 optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(policy.parameters(), args.max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(
+                    list(policy.parameters()) + list(aux_loss_fn.parameters()),
+                    args.max_grad_norm,
+                )
                 optimizer.step()
 
         # ---- Logging ----

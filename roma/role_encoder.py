@@ -29,9 +29,6 @@ class RoleEncoder(nn.Module):
         self.mu_head     = nn.Linear(hidden_dim, role_dim)
         self.logvar_head = nn.Linear(hidden_dim, role_dim)
 
-    def init_hidden(self, batch_size, device):
-        return torch.zeros(batch_size, self.hidden_dim, device=device)
-
     def forward(self, env_emb, hidden):
         x          = self.fc_obs(env_emb)
         new_hidden = self.gru(x, hidden)

@@ -210,7 +210,9 @@ def parse_args():
     p.add_argument("--role_dim",          type=int,  default=8,
                    help="Role dimension used during training. Use 0 for baseline.")
     p.add_argument("--obs_dim",           type=int,  default=1121)
-    p.add_argument("--num_agents",        type=int,  default=16)
+    p.add_argument("--num_agents",        type=int,  default=64)
+    p.add_argument("--device",            type=str,  default="cuda",
+                   help="cuda or cpu. Falls back to cpu if cuda unavailable.")
     p.add_argument("--n_episodes",        type=int,  default=30,
                    help="Episodes for environment metric evaluation.")
     p.add_argument("--map_dir",           type=str,  default="resources/drive/binaries/training")
@@ -232,7 +234,10 @@ def parse_args():
 # ---------------------------------------------------------------------------
 
 def evaluate(args):
-    device = torch.device("cpu")
+    if args.device == "cuda" and not torch.cuda.is_available():
+        print("[eval] CUDA not available, falling back to CPU.")
+        args.device = "cpu"
+    device = torch.device(args.device)
 
     print(f"\nCheckpoint : {args.checkpoint}")
     policy = load_policy(args.checkpoint, max(args.role_dim, 1), args.obs_dim, device)
@@ -256,12 +261,12 @@ def evaluate(args):
 
     print(f"\nPart 1: Environment metrics ({args.n_episodes} episodes) ...\n")
     obs_np, _ = env.reset()
-    obs = torch.tensor(obs_np, dtype=torch.float32)
+    obs = torch.as_tensor(obs_np, dtype=torch.float32).to(device)
 
     for ep in range(args.n_episodes):
         if ep > 0:
             obs_np, _ = env.reset()
-            obs = torch.tensor(obs_np, dtype=torch.float32)
+            obs = torch.as_tensor(obs_np, dtype=torch.float32).to(device)
 
         state = policy.initial_state(args.num_agents, device)
 
@@ -271,7 +276,7 @@ def evaluate(args):
             action     = Categorical(logits=logits).sample()
             actions_np = action.numpy().reshape(args.num_agents, 1)
             obs_np, _, term_np, trunc_np, info = env.step(actions_np)
-            obs = torch.tensor(obs_np, dtype=torch.float32)
+            obs = torch.as_tensor(obs_np, dtype=torch.float32).to(device)
 
             all_roles.append(role_info["role_z"].numpy())
             all_speeds.append(obs_np[:, 2])
