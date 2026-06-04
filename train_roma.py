@@ -465,10 +465,6 @@ def train(args):
     dummy_obs_win = torch.zeros(N, policy.obs_window_len, obs_dim, device=device)
     # Hidden states captured before each forward pass — used during PPO update
     # to avoid restarting GRU from zeros on shuffled minibatches.
-    b_role_h   = torch.zeros(N, args.role_hidden,   device=device)
-    b_policy_h = torch.zeros(N, args.policy_hidden, device=device)
-    # Reusable dummy obs_win for PPO update (obs_win doesn't affect logits/value)
-    dummy_obs_win = torch.zeros(N, policy.obs_window_len, obs_dim, device=device)
 
     state = policy.initial_state(B, device)
     obs   = torch.as_tensor(obs_probe, dtype=torch.float32).to(device)

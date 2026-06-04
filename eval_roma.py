@@ -180,7 +180,7 @@ def collect_wosac_trajectories(env, policy_adapter, num_rollouts, num_steps=91, 
             print(f"\r  WOSAC rollout {r+1}/{num_rollouts} ...", end="", flush=True)
         obs_np, _ = env.reset()
         policy_adapter.reset_state()
-        obs = torch.tensor(obs_np, dtype=torch.float32, device=policy_adapter.device)
+        obs = torch.as_tensor(obs_np, dtype=torch.float32).to(policy_adapter.device)
 
         for t in range(num_steps):
             agent_state = env.get_global_agent_state()
@@ -193,7 +193,7 @@ def collect_wosac_trajectories(env, policy_adapter, num_rollouts, num_steps=91, 
             logits, _ = policy_adapter.forward_eval(obs)
             action     = Categorical(logits=logits).sample()
             obs_np, _, _, _, _ = env.step(action.cpu().numpy().reshape(num_agents, 1))
-            obs = torch.tensor(obs_np, dtype=torch.float32, device=policy_adapter.device)
+            obs = torch.as_tensor(obs_np, dtype=torch.float32).to(policy_adapter.device)
 
     if not silent:
         print()
