@@ -18,16 +18,16 @@ CPU TESTING (quick sanity check):
 
 DELFT / SUPERCOMPUTER (full training with wandb logging):
     PYTHONPATH=/path/to/roma_pufferdrive python3 roma_pufferdrive/train_roma_flat.py \
-        --role_dim 1 --num_maps 10000 --total_steps 5000000000 \
+        --role_dim 8 --num_maps 10000 --total_steps 5000000000 \
         --num_agents 1024 --device cuda --run_eval \
         --wandb_project roma-pufferdrive --wandb_entity YOUR_WANDB_USERNAME \
-        --save_dir roma_pufferdrive/checkpoints/roma_flat_dim1
+        --save_dir roma_pufferdrive/checkpoints/roma_flat_dim8
 
 DELFT without wandb (offline CSV only):
     PYTHONPATH=/path/to/roma_pufferdrive python3 roma_pufferdrive/train_roma_flat.py \
-        --role_dim 1 --num_maps 10000 --total_steps 5000000000 \
+        --role_dim 8 --num_maps 10000 --total_steps 5000000000 \
         --num_agents 1024 --device cuda --run_eval --wandb_offline \
-        --save_dir roma_pufferdrive/checkpoints/roma_flat_dim1
+        --save_dir roma_pufferdrive/checkpoints/roma_flat_dim8
 """
 
 import argparse
