@@ -147,7 +147,10 @@ def parse_args():
                    help="Total training steps. 1B for full run, 2M for CPU test.")
     p.add_argument("--rollout_steps", type=int,   default=256)
     p.add_argument("--ppo_epochs",    type=int,   default=4)
-    p.add_argument("--num_minibatch", type=int,   default=4)
+    p.add_argument("--num_minibatch", type=int,   default=12,
+                   help="Minibatches per PPO epoch. 12 keeps the minibatch at "
+                        "~65k samples with 3072 agents — larger minibatches OOM "
+                        "the A100 through the road-attention activations.")
     p.add_argument("--lr",            type=float, default=3e-4)
     p.add_argument("--gamma",         type=float, default=0.99)
     p.add_argument("--gae_lambda",    type=float, default=0.95)
@@ -521,12 +524,10 @@ def train(args):
     # Env embedding window (128-dim) instead of raw obs window (1121-dim):
     # ~9x less GPU memory and memory traffic per rollout step.
     b_embwin = torch.zeros(N, 8, policy.env_embed_dim, device=device)
-    # Hidden states captured before each forward pass
-    b_role_h   = torch.zeros(N, args.role_hidden,   device=device)
-    b_policy_h = torch.zeros(N, args.policy_hidden, device=device)
-    dummy_emb_win = torch.zeros(N, policy.obs_window_len, policy.env_embed_dim, device=device)
     # Hidden states captured before each forward pass — used during PPO update
     # to avoid restarting GRU from zeros on shuffled minibatches.
+    b_role_h   = torch.zeros(N, args.role_hidden,   device=device)
+    b_policy_h = torch.zeros(N, args.policy_hidden, device=device)
 
     state = policy.initial_state(B, device)
     obs   = torch.as_tensor(obs_probe, dtype=torch.float32).to(device)
@@ -644,7 +645,12 @@ def train(args):
         for _ in range(args.ppo_epochs):
             for start in range(0, ptr, mb_size):
                 mb       = idx[start:start + mb_size]
-                mb_state = (b_role_h[mb], b_policy_h[mb], dummy_emb_win[mb])
+                # The emb window slot of the state is unused during the PPO
+                # forward (the MI target comes from b_embwin) — a per-batch
+                # zeros tensor avoids keeping a full N-sized dummy buffer.
+                mb_state = (b_role_h[mb], b_policy_h[mb],
+                            torch.zeros(len(mb), policy.obs_window_len,
+                                        policy.env_embed_dim, device=device))
                 logits, value, _, role_info = policy(b_obs[mb], mb_state)
 
                 dist        = Categorical(logits=logits)
