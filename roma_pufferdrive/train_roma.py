@@ -12,14 +12,14 @@ CPU TESTING (quick sanity check):
 DELFT / SUPERCOMPUTER (full training with wandb logging):
     PYTHONPATH=/path/to/roma_pufferdrive python3 roma_pufferdrive/train_roma.py \
         --role_dim 8 --num_maps 10000 --total_steps 5000000000 \
-        --num_agents 1024 --device cuda --run_eval \
+        --num_agents 3072 --device cuda --run_eval \
         --wandb_project roma-pufferdrive --wandb_entity YOUR_WANDB_USERNAME \
         --save_dir roma_pufferdrive/checkpoints/roma_dim8
 
 DELFT without wandb (offline CSV only):
     PYTHONPATH=/path/to/roma_pufferdrive python3 roma_pufferdrive/train_roma.py \
         --role_dim 8 --num_maps 10000 --total_steps 5000000000 \
-        --num_agents 1024 --device cuda --run_eval --wandb_offline \
+        --num_agents 3072 --device cuda --run_eval --wandb_offline \
         --save_dir roma_pufferdrive/checkpoints/roma_dim8
 
 Wandb tracks: all losses, scores, hyperparameters, learning curves.
@@ -124,8 +124,9 @@ def parse_args():
 
     # Environment
     p.add_argument("--data_dir",      type=str,   default="resources/drive/binaries/training")
-    p.add_argument("--num_agents",    type=int,   default=1024,
-                   help="Agents per scene. 1024 on GPU (recommended), 16 on CPU.")
+    p.add_argument("--num_agents",    type=int,   default=3072,
+                   help="Total agents across parallel envs. 3072 on GPU "
+                        "(~535 parallel C envs, ~6 agents each), 16 on CPU.")
     p.add_argument("--num_maps",      type=int,   default=10000,
                    help="Scenarios loaded. 10000 for full training, 100 for CPU test.")
     p.add_argument("--device",        type=str,   default="cuda",
@@ -436,6 +437,13 @@ def train(args):
         print("[ROMA] WARNING: CUDA not available, falling back to CPU.")
         args.device = "cpu"
     device = torch.device(args.device)
+
+    if device.type == "cuda":
+        # TF32 tensor cores on Ampere+ (A100): up to ~8x faster float32
+        # matmuls at negligible precision cost for RL workloads.
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
 
     print(f"[ROMA] Device        : {device}")
     print(f"[ROMA] role_dim      : {args.role_dim}")
