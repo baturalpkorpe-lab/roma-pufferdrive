@@ -70,21 +70,28 @@ import torch.nn.functional as F
 
 class BehaviourExtractor(nn.Module):
     """
-    Encodes the last `window` observations into a behaviour summary vector.
+    Encodes the last `window` env embeddings into a behaviour summary vector.
     This is the target that the MI loss tries to predict from the role vector.
+
+    Input is the policy's env embedding (ego + partner + road encoders,
+    128-dim) across the window — a structured, learned behavioural
+    trajectory — instead of raw 1121-dim observations. Two agents in the
+    same scene that drive differently produce different env-embedding
+    sequences (the ego encoder captures their own speed/heading), so the
+    MI target now distinguishes driving style, not just scene content.
     """
-    def __init__(self, obs_dim, behaviour_dim=32, window=8):
+    def __init__(self, emb_dim, behaviour_dim=32, window=8):
         super().__init__()
         self.window = window
         self.net = nn.Sequential(
-            nn.Linear(obs_dim * window, 128),
+            nn.Linear(emb_dim * window, 128),
             nn.ReLU(),
             nn.Linear(128, behaviour_dim),
         )
 
-    def forward(self, obs_window):
-        B = obs_window.size(0)
-        flat = obs_window.reshape(B, -1)
+    def forward(self, emb_window):
+        B = emb_window.size(0)
+        flat = emb_window.reshape(B, -1)
         return self.net(flat)
 
 
@@ -111,29 +118,29 @@ class RomaAuxLoss(nn.Module):
 
     Args:
         role_dim      : dimension of the role vector
-        obs_dim       : flat observation dimension
+        emb_dim       : env embedding dimension (policy.env_embed_dim)
         behaviour_dim : dimension of the behaviour summary vector
         hidden_dim    : hidden size of the MI decoder
-        window        : number of past observations for behaviour extraction
+        window        : number of past env embeddings for behaviour extraction
         mi_weight     : weight on the MI loss (default 1.0, from ROMA paper)
         div_weight    : weight on the diversity loss (default 0.1)
     """
-    def __init__(self, role_dim, obs_dim, behaviour_dim=32, hidden_dim=64,
+    def __init__(self, role_dim, emb_dim, behaviour_dim=32, hidden_dim=64,
                  window=8, mi_weight=1.0, div_weight=0.1):
         super().__init__()
         self.role_dim   = role_dim
         self.mi_weight  = mi_weight
         self.div_weight = div_weight
-        self.behaviour_extractor = BehaviourExtractor(obs_dim, behaviour_dim, window)
+        self.behaviour_extractor = BehaviourExtractor(emb_dim, behaviour_dim, window)
         self.mi_decoder          = MIDecoder(role_dim, behaviour_dim, hidden_dim)
 
-    def mi_loss(self, role_z, obs_window):
+    def mi_loss(self, role_z, emb_window):
         """
         MSE between predicted and actual behaviour summary.
         Forces role vector to encode real behavioural information.
         Range: [0, ∞) — lower is better.
         """
-        behaviour_target = self.behaviour_extractor(obs_window).detach()
+        behaviour_target = self.behaviour_extractor(emb_window).detach()
         behaviour_pred   = self.mi_decoder(role_z)
         return F.mse_loss(behaviour_pred, behaviour_target)
 
@@ -177,18 +184,18 @@ class RomaAuxLoss(nn.Module):
             mask       = 1.0 - torch.eye(B, device=role_mean.device)
             return (sim_matrix * mask).sum() / mask.sum()
 
-    def forward(self, role_z, role_mean, role_log_var, obs_window):
+    def forward(self, role_z, role_mean, role_log_var, emb_window):
         """
         Args:
             role_z       : sampled role vector (B, role_dim)
             role_mean    : role distribution mean (B, role_dim)
             role_log_var : role distribution log variance (B, role_dim)
-            obs_window   : last 8 observations (B, 8, obs_dim)
+            emb_window   : last 8 env embeddings (B, 8, emb_dim)
 
         Returns:
             dict with mi_loss, div_loss, aux_loss
         """
-        l_mi  = self.mi_loss(role_z, obs_window)
+        l_mi  = self.mi_loss(role_z, emb_window)
         l_div = self.diversity_loss(role_mean)
         aux   = self.mi_weight * l_mi + self.div_weight * l_div
 

@@ -421,7 +421,7 @@ def train(args):
 
     aux_loss_fn = RomaAuxLoss(
         role_dim   = args.role_dim,
-        obs_dim    = obs_dim,
+        emb_dim    = policy.env_embed_dim,
         mi_weight  = args.mi_weight,
         div_weight = args.div_weight,
     ).to(device)
@@ -458,11 +458,13 @@ def train(args):
     b_rz     = torch.zeros(N, args.role_dim, device=device)
     b_rmean  = torch.zeros(N, args.role_dim, device=device)
     b_rlv    = torch.zeros(N, args.role_dim, device=device)
-    b_obswin = torch.zeros(N, 8, obs_dim,    device=device)
+    # Env embedding window (128-dim) instead of raw obs window (1121-dim):
+    # ~9x less GPU memory and memory traffic per rollout step.
+    b_embwin = torch.zeros(N, 8, policy.env_embed_dim, device=device)
     # Hidden states captured before each forward pass
     b_role_h   = torch.zeros(N, args.role_hidden,   device=device)
     b_policy_h = torch.zeros(N, args.policy_hidden, device=device)
-    dummy_obs_win = torch.zeros(N, policy.obs_window_len, obs_dim, device=device)
+    dummy_emb_win = torch.zeros(N, policy.obs_window_len, policy.env_embed_dim, device=device)
     # Hidden states captured before each forward pass — used during PPO update
     # to avoid restarting GRU from zeros on shuffled minibatches.
 
@@ -501,7 +503,7 @@ def train(args):
                 b_rz    [ptr:ptr+B] = role_info["role_z"]
                 b_rmean [ptr:ptr+B] = role_info["role_mean"]
                 b_rlv   [ptr:ptr+B] = role_info["role_log_var"]
-                b_obswin[ptr:ptr+B] = role_info["obs_window"]
+                b_embwin[ptr:ptr+B] = role_info["emb_window"]
                 ptr += B
                 global_step += B
 
@@ -557,7 +559,7 @@ def train(args):
         for _ in range(args.ppo_epochs):
             for start in range(0, ptr, mb_size):
                 mb       = idx[start:start + mb_size]
-                mb_state = (b_role_h[mb], b_policy_h[mb], dummy_obs_win[mb])
+                mb_state = (b_role_h[mb], b_policy_h[mb], dummy_emb_win[mb])
                 logits, value, _, role_info = policy(b_obs[mb], mb_state)
 
                 dist        = Categorical(logits=logits)
@@ -569,7 +571,7 @@ def train(args):
                 s2 = ratio.clamp(1 - args.clip_coef, 1 + args.clip_coef) * adv[mb]
                 pl  = -torch.min(s1, s2).mean()
                 vl  = F.mse_loss(value.squeeze(-1), returns[mb])
-                aux = aux_loss_fn(b_rz[mb], b_rmean[mb], b_rlv[mb], b_obswin[mb])
+                aux = aux_loss_fn(b_rz[mb], b_rmean[mb], b_rlv[mb], b_embwin[mb])
 
                 loss = (pl
                         + args.vf_coef * vl

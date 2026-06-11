@@ -108,6 +108,7 @@ class RomaPolicy(nn.Module):
         self.partner_enc = PartnerEncoder(self.PARTNER_FEAT, out_dim=32, max_partners=self.MAX_PARTNERS)
         self.road_enc    = RoadEncoder(self.ROAD_FEAT, out_dim=64, max_roads=self.MAX_ROADS)
         env_embed_dim    = 32 + 32 + 64
+        self.env_embed_dim = env_embed_dim
 
         self.role_encoder = RoleEncoder(env_embed_dim, role_dim, role_hidden, var_floor)
         self.policy_gru   = nn.GRUCell(env_embed_dim + role_dim, policy_hidden)
@@ -117,8 +118,11 @@ class RomaPolicy(nn.Module):
     def initial_state(self, batch_size, device):
         role_h   = torch.zeros(batch_size, self.role_encoder.hidden_dim, device=device)
         policy_h = torch.zeros(batch_size, self.policy_hidden, device=device)
-        obs_win  = torch.zeros(batch_size, self.obs_window_len, self.obs_dim, device=device)
-        return (role_h, policy_h, obs_win)
+        # Window of past env embeddings (128-dim each) instead of raw obs
+        # (1121-dim) — 9x less memory and a structured, learned behavioural
+        # trajectory for the MI loss.
+        emb_win  = torch.zeros(batch_size, self.obs_window_len, self.env_embed_dim, device=device)
+        return (role_h, policy_h, emb_win)
 
     def _split_obs(self, obs):
         ego      = obs[:, :self.EGO_DIM]
@@ -135,20 +139,22 @@ class RomaPolicy(nn.Module):
         return torch.cat([e, p, r], dim=-1)
 
     def forward(self, obs, state):
-        role_h, policy_h, obs_win = state
+        role_h, policy_h, emb_win = state
         env_emb  = self._env_embed(obs)
         role_z, role_mean, role_log_var, new_role_h = self.role_encoder(env_emb, role_h)
         policy_input = torch.cat([env_emb, role_z], dim=-1)
         new_policy_h = self.policy_gru(policy_input, policy_h)
         logits   = self.actor(new_policy_h)
         value    = self.critic(new_policy_h)
-        new_obs_win = torch.cat([obs_win[:, 1:, :], obs.unsqueeze(1)], dim=1)
-        new_state = (new_role_h, new_policy_h, new_obs_win)
+        # Slide the window with the current env embedding (detached — the
+        # window is an MI-loss target, gradients should not flow through it)
+        new_emb_win = torch.cat([emb_win[:, 1:, :], env_emb.detach().unsqueeze(1)], dim=1)
+        new_state = (new_role_h, new_policy_h, new_emb_win)
         role_info = {
             "role_z"      : role_z,
             "role_mean"   : role_mean,
             "role_log_var": role_log_var,
-            "obs_window"  : new_obs_win,
+            "emb_window"  : new_emb_win,
         }
         return logits, value, new_state, role_info
 
