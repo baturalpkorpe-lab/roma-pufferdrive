@@ -384,7 +384,7 @@ def train(args):
 
     aux_loss_fn = RomaAuxLoss(
         role_dim   = args.role_dim,
-        obs_dim    = obs_dim,
+        emb_dim    = policy.env_embed_dim,
         mi_weight  = args.mi_weight,
         div_weight = args.div_weight,
     ).to(device)
@@ -420,13 +420,25 @@ def train(args):
     b_rz     = torch.zeros(N, args.role_dim,  device=device)
     b_rmean  = torch.zeros(N, args.role_dim,  device=device)
     b_rlv    = torch.zeros(N, args.role_dim,  device=device)
-    b_obswin = torch.zeros(N, 8, obs_dim,     device=device)
+    # Env embedding window (64-dim) instead of raw obs window (1121-dim):
+    # far less GPU memory and memory traffic per rollout step.
+    b_embwin = torch.zeros(N, 8, policy.env_embed_dim, device=device)
     b_role_h   = torch.zeros(N, args.role_hidden,   device=device)
     b_policy_h = torch.zeros(N, args.policy_hidden, device=device)
-    dummy_obs_win = torch.zeros(N, policy.obs_window_len, obs_dim, device=device)
+    dummy_emb_win = torch.zeros(N, policy.obs_window_len, policy.env_embed_dim, device=device)
 
     state = policy.initial_state(B, device)
     obs   = torch.as_tensor(obs_probe, dtype=torch.float32).to(device)
+
+    # Pinned staging buffers for CPU<->GPU transfers (CUDA only).
+    # Pinned memory makes host-to-device copies faster and allows them to
+    # run asynchronously (non_blocking=True) instead of stalling the GPU.
+    use_pin = device.type == "cuda"
+    if use_pin:
+        act_pin  = torch.zeros(B, 1,        dtype=torch.int32,   pin_memory=True)
+        obs_pin  = torch.zeros(B, obs_dim,  dtype=torch.float32, pin_memory=True)
+        rew_pin  = torch.zeros(B,           dtype=torch.float32, pin_memory=True)
+        done_pin = torch.zeros(B,           dtype=torch.float32, pin_memory=True)
 
     print(f"[ROMA-FLAT] Training for {args.total_steps:,} steps ...")
 
@@ -444,12 +456,27 @@ def train(args):
                 action  = dist.sample()
                 logprob = dist.log_prob(action)
 
-                actions_np = action.cpu().numpy().reshape(B, 1)
+                if use_pin:
+                    # GPU -> pinned host memory (faster than pageable)
+                    act_pin.copy_(action.unsqueeze(-1))
+                    actions_np = act_pin.numpy()
+                else:
+                    actions_np = action.cpu().numpy().reshape(B, 1)
                 obs_np, rew_np, term_np, trunc_np, info = env.step(actions_np)
 
-                obs  = torch.as_tensor(obs_np,               dtype=torch.float32).to(device)
-                rew  = torch.as_tensor(rew_np,               dtype=torch.float32).to(device)
-                done = torch.as_tensor((term_np | trunc_np), dtype=torch.float32).to(device)
+                done_np = (term_np | trunc_np)
+                if use_pin:
+                    # numpy -> pinned host buffer -> async copy to GPU
+                    obs_pin.copy_(torch.from_numpy(obs_np))
+                    rew_pin.copy_(torch.from_numpy(rew_np))
+                    done_pin.copy_(torch.from_numpy(done_np.astype(np.float32)))
+                    obs  = obs_pin.to(device,  non_blocking=True)
+                    rew  = rew_pin.to(device,  non_blocking=True)
+                    done = done_pin.to(device, non_blocking=True)
+                else:
+                    obs  = torch.as_tensor(obs_np,  dtype=torch.float32).to(device)
+                    rew  = torch.as_tensor(rew_np,  dtype=torch.float32).to(device)
+                    done = torch.as_tensor(done_np, dtype=torch.float32).to(device)
 
                 b_obs   [ptr:ptr+B] = obs
                 b_act   [ptr:ptr+B] = action
@@ -460,7 +487,7 @@ def train(args):
                 b_rz    [ptr:ptr+B] = role_info["role_z"]
                 b_rmean [ptr:ptr+B] = role_info["role_mean"]
                 b_rlv   [ptr:ptr+B] = role_info["role_log_var"]
-                b_obswin[ptr:ptr+B] = role_info["obs_window"]
+                b_embwin[ptr:ptr+B] = role_info["emb_window"]
                 ptr += B
                 global_step += B
 
@@ -515,7 +542,7 @@ def train(args):
         for _ in range(args.ppo_epochs):
             for start in range(0, ptr, mb_size):
                 mb       = idx[start:start + mb_size]
-                mb_state = (b_role_h[mb], b_policy_h[mb], dummy_obs_win[mb])
+                mb_state = (b_role_h[mb], b_policy_h[mb], dummy_emb_win[mb])
                 logits, value, _, role_info = policy(b_obs[mb], mb_state)
 
                 dist        = Categorical(logits=logits)
@@ -527,7 +554,7 @@ def train(args):
                 s2 = ratio.clamp(1 - args.clip_coef, 1 + args.clip_coef) * adv[mb]
                 pl  = -torch.min(s1, s2).mean()
                 vl  = F.mse_loss(value.squeeze(-1), returns[mb])
-                aux = aux_loss_fn(b_rz[mb], b_rmean[mb], b_rlv[mb], b_obswin[mb])
+                aux = aux_loss_fn(b_rz[mb], b_rmean[mb], b_rlv[mb], b_embwin[mb])
 
                 loss = (pl
                         + args.vf_coef * vl
