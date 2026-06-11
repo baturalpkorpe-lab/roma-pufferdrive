@@ -178,11 +178,19 @@ class RomaAuxLoss(nn.Module):
             return -(var / scale)                       # negative = we minimise this
 
         else:
-            # For multidim roles: minimise average pairwise cosine similarity
-            normed     = F.normalize(role_mean, dim=-1) # (B, role_dim)
-            sim_matrix = normed @ normed.T               # (B, B)
-            mask       = 1.0 - torch.eye(B, device=role_mean.device)
-            return (sim_matrix * mask).sum() / mask.sum()
+            # For multidim roles: minimise average pairwise cosine similarity.
+            #
+            # Closed form instead of the naive (B, B) similarity matrix:
+            #   sum_{i != j} n_i . n_j = ||sum_i n_i||^2 - sum_i ||n_i||^2
+            #                          = ||sum_i n_i||^2 - B   (unit vectors)
+            # The naive normed @ normed.T needs O(B^2) memory — at the
+            # production minibatch size (B ~ 65k+) that is a >16 GB tensor
+            # and an instant CUDA OOM. This form is O(B*d) and identical
+            # in value and gradient.
+            normed = F.normalize(role_mean, dim=-1)      # (B, role_dim)
+            s      = normed.sum(dim=0)                   # (role_dim,)
+            total  = (s * s).sum() - B                   # sum of off-diagonal sims
+            return total / (B * (B - 1))
 
     def forward(self, role_z, role_mean, role_log_var, emb_window):
         """
