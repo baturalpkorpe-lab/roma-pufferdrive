@@ -84,9 +84,9 @@ class BehaviourExtractor(nn.Module):
         super().__init__()
         self.window = window
         self.net = nn.Sequential(
-            nn.Linear(emb_dim * window, 128),
+            nn.Linear(emb_dim * window, 64),
             nn.ReLU(),
-            nn.Linear(128, behaviour_dim),
+            nn.Linear(64, behaviour_dim),
         )
 
     def forward(self, emb_window):

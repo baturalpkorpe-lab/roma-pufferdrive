@@ -471,6 +471,16 @@ def train(args):
     state = policy.initial_state(B, device)
     obs   = torch.as_tensor(obs_probe, dtype=torch.float32).to(device)
 
+    # Pinned staging buffers for CPU<->GPU transfers (CUDA only).
+    # Pinned memory makes host-to-device copies faster and allows them to
+    # run asynchronously (non_blocking=True) instead of stalling the GPU.
+    use_pin = device.type == "cuda"
+    if use_pin:
+        act_pin  = torch.zeros(B, 1,        dtype=torch.int32,   pin_memory=True)
+        obs_pin  = torch.zeros(B, obs_dim,  dtype=torch.float32, pin_memory=True)
+        rew_pin  = torch.zeros(B,           dtype=torch.float32, pin_memory=True)
+        done_pin = torch.zeros(B,           dtype=torch.float32, pin_memory=True)
+
     print(f"[ROMA] Training for {args.total_steps:,} steps ...")
 
     while global_step < args.total_steps:
@@ -487,12 +497,27 @@ def train(args):
                 action  = dist.sample()
                 logprob = dist.log_prob(action)
 
-                actions_np = action.cpu().numpy().reshape(B, 1)
+                if use_pin:
+                    # GPU -> pinned host memory (faster than pageable)
+                    act_pin.copy_(action.unsqueeze(-1))
+                    actions_np = act_pin.numpy()
+                else:
+                    actions_np = action.cpu().numpy().reshape(B, 1)
                 obs_np, rew_np, term_np, trunc_np, info = env.step(actions_np)
 
-                obs  = torch.as_tensor(obs_np,              dtype=torch.float32).to(device)
-                rew  = torch.as_tensor(rew_np,              dtype=torch.float32).to(device)
-                done = torch.as_tensor((term_np | trunc_np), dtype=torch.float32).to(device)
+                done_np = (term_np | trunc_np)
+                if use_pin:
+                    # numpy -> pinned host buffer -> async copy to GPU
+                    obs_pin.copy_(torch.from_numpy(obs_np))
+                    rew_pin.copy_(torch.from_numpy(rew_np))
+                    done_pin.copy_(torch.from_numpy(done_np.astype(np.float32)))
+                    obs  = obs_pin.to(device,  non_blocking=True)
+                    rew  = rew_pin.to(device,  non_blocking=True)
+                    done = done_pin.to(device, non_blocking=True)
+                else:
+                    obs  = torch.as_tensor(obs_np,  dtype=torch.float32).to(device)
+                    rew  = torch.as_tensor(rew_np,  dtype=torch.float32).to(device)
+                    done = torch.as_tensor(done_np, dtype=torch.float32).to(device)
 
                 b_obs   [ptr:ptr+B] = obs
                 b_act   [ptr:ptr+B] = action
