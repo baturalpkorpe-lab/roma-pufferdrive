@@ -480,9 +480,6 @@ def train(args):
     b_rew    = torch.zeros(N,                 device=device)
     b_don    = torch.zeros(N,                 device=device)
     b_val    = torch.zeros(N,                 device=device)
-    b_rz     = torch.zeros(N, args.role_dim,  device=device)
-    b_rmean  = torch.zeros(N, args.role_dim,  device=device)
-    b_rlv    = torch.zeros(N, args.role_dim,  device=device)
     # Env embedding window (64-dim) instead of raw obs window (1121-dim):
     # far less GPU memory and memory traffic per rollout step.
     b_embwin = torch.zeros(N, 8, policy.env_embed_dim, device=device)
@@ -512,6 +509,10 @@ def train(args):
         ptr = 0
         with torch.no_grad():
             for _ in range(args.rollout_steps):
+                # Store the obs the policy acts on BEFORE stepping the env —
+                # otherwise b_obs would hold obs_{t+1} while logprob/value
+                # belong to obs_t, corrupting the PPO ratio.
+                b_obs[ptr:ptr+B]      = obs
                 b_role_h[ptr:ptr+B]   = state[0]
                 b_policy_h[ptr:ptr+B] = state[1]
                 logits, value, state, role_info = policy(obs, state)
@@ -541,15 +542,11 @@ def train(args):
                     rew  = torch.as_tensor(rew_np,  dtype=torch.float32).to(device)
                     done = torch.as_tensor(done_np, dtype=torch.float32).to(device)
 
-                b_obs   [ptr:ptr+B] = obs
                 b_act   [ptr:ptr+B] = action
                 b_lp    [ptr:ptr+B] = logprob
                 b_rew   [ptr:ptr+B] = rew
                 b_don   [ptr:ptr+B] = done
                 b_val   [ptr:ptr+B] = value.squeeze(-1)
-                b_rz    [ptr:ptr+B] = role_info["role_z"]
-                b_rmean [ptr:ptr+B] = role_info["role_mean"]
-                b_rlv   [ptr:ptr+B] = role_info["role_log_var"]
                 b_embwin[ptr:ptr+B] = role_info["emb_window"]
                 ptr += B
                 global_step += B
@@ -617,7 +614,12 @@ def train(args):
                 s2 = ratio.clamp(1 - args.clip_coef, 1 + args.clip_coef) * adv[mb]
                 pl  = -torch.min(s1, s2).mean()
                 vl  = F.mse_loss(value.squeeze(-1), returns[mb])
-                aux = aux_loss_fn(b_rz[mb], b_rmean[mb], b_rlv[mb], b_embwin[mb])
+                # Use the freshly recomputed role variables (they carry a
+                # computation graph) — the rollout-buffer copies were created
+                # under no_grad, so the aux losses would otherwise send zero
+                # gradient to the role encoder.
+                aux = aux_loss_fn(role_info["role_z"], role_info["role_mean"],
+                                  role_info["role_log_var"], b_embwin[mb])
 
                 loss = (pl
                         + args.vf_coef * vl
