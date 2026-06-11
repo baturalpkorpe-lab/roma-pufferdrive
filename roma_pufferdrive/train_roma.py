@@ -178,6 +178,18 @@ def parse_args():
     p.add_argument("--wosac_num_maps",    type=int,   default=10000)
     p.add_argument("--wosac_max_batches", type=int,   default=500)
 
+    # Periodic WOSAC evaluation during training (lite settings).
+    # Inspired by PufferDrive kj/guidance_reward, which runs WOSAC realism
+    # eval every eval_interval epochs during training.
+    p.add_argument("--wosac_interval",      type=int, default=200_000_000,
+                   help="Run a lite WOSAC eval every N training steps. 0 disables.")
+    p.add_argument("--wosac_eval_maps",     type=int, default=200,
+                   help="Map pool size for the periodic (lite) WOSAC eval.")
+    p.add_argument("--wosac_eval_rollouts", type=int, default=8,
+                   help="Rollouts per scene for the periodic (lite) WOSAC eval.")
+    p.add_argument("--wosac_eval_batches",  type=int, default=20,
+                   help="Max scenario batches for the periodic (lite) WOSAC eval.")
+
     return p.parse_args()
 
 
@@ -263,18 +275,51 @@ def run_evaluation(args, policy, device, wandb_run=None):
     print(f"  Saved -> {env_csv}")
 
     # --- WOSAC metrics ---
-    print(f"\nWOSAC realism metrics ({args.wosac_rollouts} rollouts, "
-          f"up to {args.wosac_max_batches} batches)...")
+    run_wosac_eval(args, policy, device, wandb_run,
+                   global_step=args.total_steps, env=env, save_csv=True)
+
+
+def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
+                   env=None, num_maps=None, rollouts=None, max_batches=None,
+                   save_csv=False):
+    """
+    WOSAC realism evaluation.
+
+    Used in two modes:
+      - post-training (from run_evaluation): full settings, pass `env` and
+        save_csv=True
+      - periodically during training: lite settings (num_maps / rollouts /
+        max_batches overrides); creates and closes its own env so the
+        training env is untouched
+    """
+    rollouts    = rollouts    or args.wosac_rollouts
+    max_batches = max_batches or args.wosac_max_batches
+    num_maps    = num_maps    or args.wosac_num_maps
+    step        = global_step if global_step is not None else args.total_steps
+    own_env     = env is None
+
+    print(f"\nWOSAC realism metrics ({rollouts} rollouts, "
+          f"up to {max_batches} batches, step {step:,})...")
 
     try:
         import pandas as pd
         from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
         from torch.distributions import Categorical as Cat
 
+        if own_env:
+            from pufferlib.ocean.drive.drive import Drive
+            env = Drive(
+                num_maps       = num_maps,
+                num_agents     = args.num_agents,
+                map_dir        = args.data_dir,
+                episode_length = 91,
+            )
+        policy.eval()
+
         wosac_config = {
             "eval": {
                 "wosac_init_steps":   0,
-                "wosac_num_rollouts": args.wosac_rollouts,
+                "wosac_num_rollouts": rollouts,
             },
             "train": {"device": str(device)},
         }
@@ -282,9 +327,9 @@ def run_evaluation(args, policy, device, wandb_run=None):
         all_results      = []
         unique_scenarios = set()
         B = args.num_agents
-        R = args.wosac_rollouts
+        R = rollouts
 
-        for batch in range(args.wosac_max_batches):
+        for batch in range(max_batches):
             env.resample_maps()
             env.reset()
             gt          = env.get_ground_truth_trajectories()
@@ -324,7 +369,7 @@ def run_evaluation(args, policy, device, wandb_run=None):
             if (batch + 1) % 10 == 0:
                 score = pd.concat(all_results)["realism_meta_score"].mean() \
                         if all_results else 0.0
-                print(f"  Batch {batch+1}/{args.wosac_max_batches} | "
+                print(f"  Batch {batch+1}/{max_batches} | "
                       f"scenarios: {len(unique_scenarios)} | realism: {score:.4f}")
 
         if all_results:
@@ -357,16 +402,25 @@ def run_evaluation(args, policy, device, wandb_run=None):
             print(f"  likelihood_linear_speed   : {agg['likelihood_linear_speed']:.4f}")
             print(f"  likelihood_angular_speed  : {agg['likelihood_angular_speed']:.4f}")
 
-            log_metrics(wandb_run, wosac_metrics, step=args.total_steps)
+            log_metrics(wandb_run, wosac_metrics, step=step)
 
-            wosac_csv = Path(args.save_dir) / "eval_wosac_metrics.csv"
-            combined.to_csv(wosac_csv)
-            print(f"  Saved -> {wosac_csv}")
+            if save_csv:
+                wosac_csv = Path(args.save_dir) / "eval_wosac_metrics.csv"
+                combined.to_csv(wosac_csv)
+                print(f"  Saved -> {wosac_csv}")
 
     except Exception as e:
         print(f"  WOSAC evaluation failed: {e}")
         import traceback
         traceback.print_exc()
+    finally:
+        # Periodic mode owns its env — release it so the training env and
+        # GPU memory are unaffected.
+        if own_env and env is not None:
+            try:
+                env.close()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -444,6 +498,7 @@ def train(args):
     B           = args.num_agents
     global_step = 0
     next_save   = args.save_interval
+    next_wosac  = args.wosac_interval if args.wosac_interval > 0 else float("inf")
     ep_scores   = deque(maxlen=100)
     ep_returns  = deque(maxlen=100)
     start_time  = time.time()
@@ -658,6 +713,18 @@ def train(args):
             }, ckpt)
             print(f"[ROMA] Saved -> {ckpt}")
             next_save += args.save_interval
+
+        # ---- Periodic WOSAC evaluation (lite) ----
+        if global_step >= next_wosac:
+            print(f"[ROMA] Periodic WOSAC eval at step {global_step:,} ...")
+            run_wosac_eval(
+                args, policy, device, wandb_run,
+                global_step = global_step,
+                num_maps    = args.wosac_eval_maps,
+                rollouts    = args.wosac_eval_rollouts,
+                max_batches = args.wosac_eval_batches,
+            )
+            next_wosac += args.wosac_interval
 
     # ---- Final save ----
     final = Path(args.save_dir) / f"roma_dim{args.role_dim}_final.pt"
