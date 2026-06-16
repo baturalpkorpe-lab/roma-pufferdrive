@@ -664,6 +664,12 @@ def train(args):
         returns = adv + b_val[:ptr]
         adv     = (adv - adv.mean()) / (adv.std() + 1e-8)
 
+        # ---- LR annealing ----
+        frac = 1.0 - global_step / args.total_steps
+        lr_now = args.lr * frac
+        for pg in optimizer.param_groups:
+            pg["lr"] = lr_now
+
         # ---- PPO update ----
         policy.train()
         aux_loss_fn.train()
