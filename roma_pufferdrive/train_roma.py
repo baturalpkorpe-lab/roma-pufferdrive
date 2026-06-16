@@ -131,6 +131,20 @@ def parse_args():
                    help="Scenarios loaded. 10000 for full training, 100 for CPU test.")
     p.add_argument("--device",        type=str,   default="cuda",
                    help="cuda or cpu. Auto-falls back to cpu if cuda unavailable.")
+    p.add_argument("--reward_vehicle_collision",  type=float, default=-0.5,
+                   help="Penalty per step for vehicle collision. drive.ini default: -0.5.")
+    p.add_argument("--reward_offroad_collision",  type=float, default=-0.5,
+                   help="Penalty per step for going off-road. drive.ini default: -0.5.")
+    p.add_argument("--goal_speed",               type=float, default=100.0,
+                   help="Max target speed m/s toward goal. 100=uncapped (drive.ini default).")
+    p.add_argument("--reward_goal_post_respawn", type=float, default=0.25,
+                   help="Reward for reaching goal after respawn. drive.ini default: 0.25.")
+    p.add_argument("--goal_target_distance",     type=float, default=30.0,
+                   help="Target distance for new goals. drive.ini default: 30.0.")
+    p.add_argument("--resample_frequency",       type=int,   default=910,
+                   help="Steps between map resamples. drive.ini default: 910 (10 episodes).")
+    p.add_argument("--termination_mode",         type=int,   default=1,
+                   help="0=terminate all at episode_length, 1=terminate per agent on reset. drive.ini default: 1.")
 
     # Role
     p.add_argument("--role_dim",      type=int,   default=8,
@@ -212,10 +226,17 @@ def run_evaluation(args, policy, device, wandb_run=None):
 
     from pufferlib.ocean.drive.drive import Drive
     env = Drive(
-        num_maps       = args.wosac_num_maps,
-        num_agents     = args.num_agents,
-        map_dir        = args.data_dir,
-        episode_length = 91,
+        num_maps                  = args.wosac_num_maps,
+        num_agents                = args.num_agents,
+        map_dir                   = args.data_dir,
+        episode_length            = 91,
+        reward_vehicle_collision  = args.reward_vehicle_collision,
+        reward_offroad_collision  = args.reward_offroad_collision,
+        goal_speed                = args.goal_speed,
+        reward_goal_post_respawn  = args.reward_goal_post_respawn,
+        goal_target_distance      = args.goal_target_distance,
+        resample_frequency        = args.resample_frequency,
+        termination_mode          = args.termination_mode,
     )
     policy.eval()
 
@@ -313,10 +334,13 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
         if own_env:
             from pufferlib.ocean.drive.drive import Drive
             env = Drive(
-                num_maps       = num_maps,
-                num_agents     = args.num_agents,
-                map_dir        = args.data_dir,
-                episode_length = 91,
+                num_maps                  = num_maps,
+                num_agents                = args.num_agents,
+                map_dir                   = args.data_dir,
+                episode_length            = 91,
+                reward_vehicle_collision  = args.reward_vehicle_collision,
+                reward_offroad_collision  = args.reward_offroad_collision,
+                goal_speed                = args.goal_speed,
             )
         policy.eval()
 
@@ -461,10 +485,17 @@ def train(args):
 
     from pufferlib.ocean.drive.drive import Drive
     env = Drive(
-        num_maps       = args.num_maps,
-        num_agents     = args.num_agents,
-        map_dir        = args.data_dir,
-        episode_length = 91,
+        num_maps                  = args.num_maps,
+        num_agents                = args.num_agents,
+        map_dir                   = args.data_dir,
+        episode_length            = 91,
+        reward_vehicle_collision  = args.reward_vehicle_collision,
+        reward_offroad_collision  = args.reward_offroad_collision,
+        goal_speed                = args.goal_speed,
+        reward_goal_post_respawn  = args.reward_goal_post_respawn,
+        goal_target_distance      = args.goal_target_distance,
+        resample_frequency        = args.resample_frequency,
+        termination_mode          = args.termination_mode,
     )
 
     # Auto-detect obs_dim
