@@ -452,6 +452,30 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
 
 
 # ---------------------------------------------------------------------------
+# Encoder weight tracking helpers
+# ---------------------------------------------------------------------------
+
+def _snapshot_enc_weights(policy):
+    """Flatten each encoder's parameters into a CPU vector for delta comparison."""
+    return {
+        "ego"    : torch.nn.utils.parameters_to_vector(policy.ego_enc.parameters()).detach().cpu().clone(),
+        "partner": torch.nn.utils.parameters_to_vector(policy.partner_enc.parameters()).detach().cpu().clone(),
+        "road"   : torch.nn.utils.parameters_to_vector(policy.road_enc.parameters()).detach().cpu().clone(),
+    }
+
+
+def _enc_weight_deltas(policy, prev):
+    """Relative L2 weight change per encoder since prev snapshot (0 = no change, 1 = 100% change)."""
+    out = {}
+    for name, prev_vec in prev.items():
+        curr = torch.nn.utils.parameters_to_vector(
+            getattr(policy, f"{name}_enc").parameters()
+        ).detach().cpu()
+        out[name] = ((curr - prev_vec).norm() / (prev_vec.norm() + 1e-8)).item()
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Training loop
 # ---------------------------------------------------------------------------
 
@@ -533,7 +557,8 @@ def train(args):
     with open(log_csv, "w", newline="") as f:
         csv.writer(f).writerow([
             "step", "sps", "policy_loss", "value_loss",
-            "mi_loss", "div_loss", "score", "mean_return"
+            "mi_loss", "div_loss", "score", "mean_return",
+            "ego_enc_delta", "partner_enc_delta", "road_enc_delta",
         ])
     print(f"[ROMA] CSV log       : {log_csv}")
 
@@ -574,6 +599,8 @@ def train(args):
         done_pin = torch.zeros(B,           dtype=torch.float32, pin_memory=True)
 
     print(f"[ROMA] Training for {args.total_steps:,} steps ...")
+
+    enc_snapshot = _snapshot_enc_weights(policy)
 
     while global_step < args.total_steps:
 
@@ -725,13 +752,19 @@ def train(args):
             score = np.mean(ep_scores)  if ep_scores  else 0.0
             ret   = np.mean(ep_returns) if ep_returns else 0.0
 
+            enc_deltas   = _enc_weight_deltas(policy, enc_snapshot)
+            enc_snapshot = _snapshot_enc_weights(policy)
+
             print(f"[ROMA step {global_step:>12,}] "
                   f"sps={sps:>7,.0f}  "
                   f"policy_loss={pl.item():.4f}  "
                   f"value_loss={vl.item():.4f}  "
                   f"mi_loss={aux['mi_loss'].item():.4f}  "
                   f"div_loss={aux['div_loss'].item():.4f}  "
-                  f"score={score:.3f}  return={ret:.3f}")
+                  f"score={score:.3f}  return={ret:.3f}  "
+                  f"enc_delta ego={enc_deltas['ego']:.4f} "
+                  f"partner={enc_deltas['partner']:.4f} "
+                  f"road={enc_deltas['road']:.4f}")
 
             # CSV log
             with open(log_csv, "a", newline="") as f:
@@ -741,17 +774,23 @@ def train(args):
                     round(aux["mi_loss"].item(), 6),
                     round(aux["div_loss"].item(), 6),
                     round(score, 4), round(ret, 4),
+                    round(enc_deltas["ego"],     6),
+                    round(enc_deltas["partner"], 6),
+                    round(enc_deltas["road"],    6),
                 ])
 
             # Wandb log
             log_metrics(wandb_run, {
-                "train/policy_loss": pl.item(),
-                "train/value_loss":  vl.item(),
-                "train/mi_loss":     aux["mi_loss"].item(),
-                "train/div_loss":    aux["div_loss"].item(),
-                "train/score":       score,
-                "train/mean_return": ret,
-                "train/sps":         sps,
+                "train/policy_loss":      pl.item(),
+                "train/value_loss":       vl.item(),
+                "train/mi_loss":          aux["mi_loss"].item(),
+                "train/div_loss":         aux["div_loss"].item(),
+                "train/score":            score,
+                "train/mean_return":      ret,
+                "train/sps":              sps,
+                "encoders/ego_delta":     enc_deltas["ego"],
+                "encoders/partner_delta": enc_deltas["partner"],
+                "encoders/road_delta":    enc_deltas["road"],
             }, step=global_step)
 
         # ---- Checkpoint ----
