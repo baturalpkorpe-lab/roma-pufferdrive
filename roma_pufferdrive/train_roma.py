@@ -411,10 +411,14 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
                 "eval/wosac_map_based":        agg["map_based_metrics"],
                 "eval/wosac_min_ade":          agg["min_ade"],
                 "eval/wosac_offroad":          agg["likelihood_offroad_indication"],
+                "eval/wosac_dist_road_edge":   agg["likelihood_distance_to_road_edge"],
                 "eval/wosac_collision":        agg["likelihood_collision_indication"],
+                "eval/wosac_dist_obj":         agg["likelihood_distance_to_nearest_object"],
                 "eval/wosac_ttc":              agg["likelihood_time_to_collision"],
                 "eval/wosac_linear_speed":     agg["likelihood_linear_speed"],
+                "eval/wosac_linear_accel":     agg["likelihood_linear_acceleration"],
                 "eval/wosac_angular_speed":    agg["likelihood_angular_speed"],
+                "eval/wosac_angular_accel":    agg["likelihood_angular_acceleration"],
                 "eval/wosac_scenarios":        len(combined),
             }
 
@@ -425,10 +429,14 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
             print(f"  Map-based metrics         : {agg['map_based_metrics']:.4f}")
             print(f"  minADE (m)                : {agg['min_ade']:.4f}")
             print(f"  likelihood_offroad        : {agg['likelihood_offroad_indication']:.4f}")
+            print(f"  likelihood_dist_road_edge : {agg['likelihood_distance_to_road_edge']:.4f}")
             print(f"  likelihood_collision      : {agg['likelihood_collision_indication']:.4f}")
+            print(f"  likelihood_dist_obj       : {agg['likelihood_distance_to_nearest_object']:.4f}")
             print(f"  likelihood_ttc            : {agg['likelihood_time_to_collision']:.4f}")
             print(f"  likelihood_linear_speed   : {agg['likelihood_linear_speed']:.4f}")
+            print(f"  likelihood_linear_accel   : {agg['likelihood_linear_acceleration']:.4f}")
             print(f"  likelihood_angular_speed  : {agg['likelihood_angular_speed']:.4f}")
+            print(f"  likelihood_angular_accel  : {agg['likelihood_angular_acceleration']:.4f}")
 
             log_metrics(wandb_run, wosac_metrics, step=step)
 
