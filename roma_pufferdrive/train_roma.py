@@ -341,12 +341,14 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
                 reward_vehicle_collision  = args.reward_vehicle_collision,
                 reward_offroad_collision  = args.reward_offroad_collision,
                 goal_speed                = args.goal_speed,
+                goal_behavior             = 2,                # GOAL_STOP per WOSAC spec
+                control_mode              = "control_wosac",  # WOSAC protocol
             )
         policy.eval()
 
         wosac_config = {
             "eval": {
-                "wosac_init_steps":   0,
+                "wosac_init_steps":   10,  # 1-second GT warm-up per WOSAC spec
                 "wosac_num_rollouts": rollouts,
             },
             "train": {"device": str(device)},
