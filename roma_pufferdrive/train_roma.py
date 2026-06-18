@@ -201,9 +201,9 @@ def parse_args():
     # eval every eval_interval epochs during training.
     p.add_argument("--wosac_interval",      type=int, default=200_000_000,
                    help="Run a lite WOSAC eval every N training steps. 0 disables.")
-    p.add_argument("--wosac_eval_maps",     type=int, default=200,
+    p.add_argument("--wosac_eval_maps",     type=int, default=10000,
                    help="Map pool size for the periodic (lite) WOSAC eval.")
-    p.add_argument("--wosac_eval_rollouts", type=int, default=8,
+    p.add_argument("--wosac_eval_rollouts", type=int, default=32,
                    help="Rollouts per scene for the periodic (lite) WOSAC eval.")
     p.add_argument("--wosac_eval_batches",  type=int, default=20,
                    help="Max scenario batches for the periodic (lite) WOSAC eval.")
