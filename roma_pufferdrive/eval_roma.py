@@ -426,7 +426,7 @@ def evaluate(args):
                     "wosac_init_steps": 0,  # original 0.613 baseline (no GT warm-up)
                     "wosac_num_rollouts": args.wosac_rollouts,
                 },
-                "train": {"device": "cpu"},
+                "train": {"device": str(device)},
             }
             evaluator        = WOSACEvaluator(wosac_config)
             adapter          = WOSACPolicyAdapter(policy, env.num_agents, device)
