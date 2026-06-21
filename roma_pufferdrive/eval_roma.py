@@ -210,7 +210,7 @@ def parse_args():
     p.add_argument("--role_dim",          type=int,  default=8,
                    help="Role dimension used during training. Use 0 for baseline.")
     p.add_argument("--obs_dim",           type=int,  default=1121)
-    p.add_argument("--num_agents",        type=int,  default=64)
+    p.add_argument("--num_agents",        type=int,  default=512)
     p.add_argument("--device",            type=str,  default="cuda",
                    help="cuda or cpu. Falls back to cpu if cuda unavailable.")
     p.add_argument("--n_episodes",        type=int,  default=30,
@@ -226,6 +226,11 @@ def parse_args():
                    help="Max resample batches. 500 batches with num_maps=10000 covers most scenarios.")
     p.add_argument("--save_plots",        action="store_true")
     p.add_argument("--output_dir",        type=str,  default="roma_pufferdrive/eval_results")
+    p.add_argument("--wandb",             action="store_true",
+                   help="Log results to Weights & Biases.")
+    p.add_argument("--wandb_project",     type=str,  default="roma-pufferdrive")
+    p.add_argument("--wandb_run_name",    type=str,  default=None,
+                   help="W&B run name. Defaults to checkpoint filename.")
     return p.parse_args()
 
 
@@ -238,6 +243,12 @@ def evaluate(args):
         print("[eval] CUDA not available, falling back to CPU.")
         args.device = "cpu"
     device = torch.device(args.device)
+
+    wandb_run = None
+    if args.wandb:
+        import wandb
+        run_name = args.wandb_run_name or Path(args.checkpoint).stem
+        wandb_run = wandb.init(project=args.wandb_project, name=run_name, config=vars(args))
 
     print(f"\nCheckpoint : {args.checkpoint}")
     policy = load_policy(args.checkpoint, max(args.role_dim, 1), args.obs_dim, device)
@@ -276,11 +287,11 @@ def evaluate(args):
             with torch.no_grad():
                 logits, _, state, role_info = policy(obs, state)
             action     = Categorical(logits=logits).sample()
-            actions_np = action.numpy().reshape(args.num_agents, 1)
+            actions_np = action.cpu().numpy().reshape(args.num_agents, 1)
             obs_np, _, term_np, trunc_np, info = env.step(actions_np)
             obs = torch.as_tensor(obs_np, dtype=torch.float32).to(device)
 
-            all_roles.append(role_info["role_z"].numpy())
+            all_roles.append(role_info["role_z"].cpu().numpy())
             all_speeds.append(obs_np[:, 2])
 
             if isinstance(info, list):
@@ -314,6 +325,14 @@ def evaluate(args):
         print(f"  Off-road rate   : {np.mean(all_offroads):.4f}")
         print(f"  Completion rate : {np.mean(all_completions):.4f}")
         print(f"  Mean return     : {np.mean(all_returns):.4f}")
+        if wandb_run:
+            wandb_run.log({
+                "env/score":           np.mean(all_scores),
+                "env/collision_rate":  np.mean(all_collisions),
+                "env/offroad_rate":    np.mean(all_offroads),
+                "env/completion_rate": np.mean(all_completions),
+                "env/mean_return":     np.mean(all_returns),
+            })
     print("=" * 57)
 
     # Role-speed correlations
@@ -418,6 +437,25 @@ def evaluate(args):
                 print(f"  likelihood_dist_road_edge : {agg['likelihood_distance_to_road_edge']:.4f}")
                 print(f"  likelihood_offroad        : {agg['likelihood_offroad_indication']:.4f}")
                 print("=" * 57)
+
+                if wandb_run:
+                    wandb_run.log({
+                        "wosac/realism_meta_score":              agg["realism_meta_score"],
+                        "wosac/kinematic_metrics":               agg["kinematic_metrics"],
+                        "wosac/interactive_metrics":             agg["interactive_metrics"],
+                        "wosac/map_based_metrics":               agg["map_based_metrics"],
+                        "wosac/min_ade":                         agg["min_ade"],
+                        "wosac/likelihood_linear_speed":         agg["likelihood_linear_speed"],
+                        "wosac/likelihood_linear_acceleration":  agg["likelihood_linear_acceleration"],
+                        "wosac/likelihood_angular_speed":        agg["likelihood_angular_speed"],
+                        "wosac/likelihood_angular_acceleration": agg["likelihood_angular_acceleration"],
+                        "wosac/likelihood_collision":            agg["likelihood_collision_indication"],
+                        "wosac/likelihood_dist_obj":             agg["likelihood_distance_to_nearest_object"],
+                        "wosac/likelihood_ttc":                  agg["likelihood_time_to_collision"],
+                        "wosac/likelihood_dist_road_edge":       agg["likelihood_distance_to_road_edge"],
+                        "wosac/likelihood_offroad":              agg["likelihood_offroad_indication"],
+                        "wosac/scenarios_evaluated":             len(combined),
+                    })
 
                 Path(args.output_dir).mkdir(parents=True, exist_ok=True)
                 ckpt_name = Path(args.checkpoint).stem
