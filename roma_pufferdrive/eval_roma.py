@@ -134,7 +134,7 @@ class WOSACPolicyAdapter:
 # ---------------------------------------------------------------------------
 
 def load_policy(checkpoint_path, role_dim, obs_dim, device):
-    ckpt = torch.load(checkpoint_path, map_location=device)
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     key  = "policy_state" if "policy_state" in ckpt else "policy"
     sd   = ckpt[key]
     keys = set(sd.keys())
@@ -329,6 +329,7 @@ def evaluate(args):
     all_returns                   = []
     all_roles, all_speeds         = [], []
 
+    num_agents = env.num_agents  # actual count after map packing (may differ from args.num_agents)
     print(f"\nPart 1: Environment metrics ({args.n_episodes} episodes) ...\n")
     obs_np, _ = env.reset()
     obs = torch.as_tensor(obs_np, dtype=torch.float32).to(device)
@@ -338,18 +339,18 @@ def evaluate(args):
             obs_np, _ = env.reset()
             obs = torch.as_tensor(obs_np, dtype=torch.float32).to(device)
 
-        state = policy.initial_state(args.num_agents, device)
+        state = policy.initial_state(num_agents, device)
 
         for step in range(91):
             with torch.no_grad():
                 logits, _, state, role_info = policy(obs, state)
             action     = Categorical(logits=logits).sample()
-            actions_np = action.cpu().numpy().reshape(args.num_agents, 1)
+            actions_np = action.cpu().numpy().reshape(num_agents, 1)
             obs_np, _, term_np, trunc_np, info = env.step(actions_np)
             obs = torch.as_tensor(obs_np, dtype=torch.float32).to(device)
 
             all_roles.append(role_info["role_z"].cpu().numpy())
-            all_speeds.append(obs_np[:, 2])
+            all_speeds.append(obs_np[:, 3])  # obs[:, 3] = ego speed (after x, y, heading)
 
             if isinstance(info, list):
                 for item in info:
@@ -428,7 +429,7 @@ def evaluate(args):
                 "train": {"device": "cpu"},
             }
             evaluator        = WOSACEvaluator(wosac_config)
-            adapter          = WOSACPolicyAdapter(policy, args.num_agents, device)
+            adapter          = WOSACPolicyAdapter(policy, env.num_agents, device)
             all_results      = []
             unique_scenarios = set()
 
