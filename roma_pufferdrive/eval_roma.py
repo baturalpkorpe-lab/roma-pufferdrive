@@ -151,6 +151,7 @@ def load_policy(checkpoint_path, role_dim, obs_dim, device):
         policy = LegacyBaselinePolicy(obs_dim=obs_dim)
 
     policy.load_state_dict(sd)
+    policy.to(device)
     policy.eval()
     return policy
 
