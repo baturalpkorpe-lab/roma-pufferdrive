@@ -201,6 +201,52 @@ def collect_wosac_trajectories(env, policy_adapter, num_rollouts, num_steps=91, 
 
 
 # ---------------------------------------------------------------------------
+# WOSAC metric reporting helpers (shared by periodic logs + final summary)
+# ---------------------------------------------------------------------------
+
+def wosac_metric_dict(agg, scenarios, prefix="wosac/"):
+    """Flatten a WOSAC aggregate row into a wandb-loggable dict so the
+    periodic progress logs and the final summary report the exact same set
+    of sub-metrics."""
+    return {
+        f"{prefix}realism_meta_score":              agg["realism_meta_score"],
+        f"{prefix}kinematic_metrics":               agg["kinematic_metrics"],
+        f"{prefix}interactive_metrics":             agg["interactive_metrics"],
+        f"{prefix}map_based_metrics":               agg["map_based_metrics"],
+        f"{prefix}min_ade":                         agg["min_ade"],
+        f"{prefix}likelihood_linear_speed":         agg["likelihood_linear_speed"],
+        f"{prefix}likelihood_linear_acceleration":  agg["likelihood_linear_acceleration"],
+        f"{prefix}likelihood_angular_speed":        agg["likelihood_angular_speed"],
+        f"{prefix}likelihood_angular_acceleration": agg["likelihood_angular_acceleration"],
+        f"{prefix}likelihood_collision":            agg["likelihood_collision_indication"],
+        f"{prefix}likelihood_dist_obj":             agg["likelihood_distance_to_nearest_object"],
+        f"{prefix}likelihood_ttc":                  agg["likelihood_time_to_collision"],
+        f"{prefix}likelihood_dist_road_edge":       agg["likelihood_distance_to_road_edge"],
+        f"{prefix}likelihood_offroad":              agg["likelihood_offroad_indication"],
+        f"{prefix}scenarios_evaluated":             scenarios,
+    }
+
+
+def print_wosac_progress(agg, batch, max_batches, scenarios):
+    """Compact multi-line progress print showing every sub-metric, not just
+    the realism meta-score."""
+    print(f"  Batch {batch}/{max_batches} | scenarios: {scenarios} | "
+          f"realism: {agg['realism_meta_score']:.4f}")
+    print(f"      kinematic {agg['kinematic_metrics']:.4f} | "
+          f"interactive {agg['interactive_metrics']:.4f} | "
+          f"map_based {agg['map_based_metrics']:.4f}")
+    print(f"      lin_spd {agg['likelihood_linear_speed']:.3f} | "
+          f"lin_acc {agg['likelihood_linear_acceleration']:.3f} | "
+          f"ang_spd {agg['likelihood_angular_speed']:.3f} | "
+          f"ang_acc {agg['likelihood_angular_acceleration']:.3f}")
+    print(f"      collision {agg['likelihood_collision_indication']:.3f} | "
+          f"dist_obj {agg['likelihood_distance_to_nearest_object']:.3f} | "
+          f"ttc {agg['likelihood_time_to_collision']:.3f} | "
+          f"dist_edge {agg['likelihood_distance_to_road_edge']:.3f} | "
+          f"offroad {agg['likelihood_offroad_indication']:.3f}")
+
+
+# ---------------------------------------------------------------------------
 # Args
 # ---------------------------------------------------------------------------
 
@@ -211,6 +257,9 @@ def parse_args():
                    help="Role dimension used during training. Use 0 for baseline.")
     p.add_argument("--obs_dim",           type=int,  default=1121)
     p.add_argument("--num_agents",        type=int,  default=512)
+    p.add_argument("--goal_speed",        type=float, default=100.0,
+                   help="Goal-reached speed threshold. Must match training "
+                        "(train_roma default 100.0) to reproduce the 0.613 baseline.")
     p.add_argument("--device",            type=str,  default="cuda",
                    help="cuda or cpu. Falls back to cpu if cuda unavailable.")
     p.add_argument("--n_episodes",        type=int,  default=30,
@@ -249,6 +298,10 @@ def evaluate(args):
         import wandb
         run_name = args.wandb_run_name or Path(args.checkpoint).stem
         wandb_run = wandb.init(project=args.wandb_project, name=run_name, config=vars(args))
+        # Plot all WOSAC sub-metrics against batch number (their convergence
+        # curve) instead of wandb's internal step counter.
+        wandb_run.define_metric("wosac/batch")
+        wandb_run.define_metric("wosac/*", step_metric="wosac/batch")
 
     print(f"\nCheckpoint : {args.checkpoint}")
     policy = load_policy(args.checkpoint, max(args.role_dim, 1), args.obs_dim, device)
@@ -260,8 +313,11 @@ def evaluate(args):
         num_agents     = args.num_agents,
         map_dir        = args.map_dir,
         episode_length = 91,
-        goal_behavior  = 2,                  # GOAL_STOP: freeze at goal instead of teleporting
-        control_mode   = "control_wosac",    # WOSAC protocol: only simulate assigned agents
+        goal_speed     = args.goal_speed,    # match training (100.0) — gates goal respawn
+        # control_mode / goal_behavior left at Drive defaults
+        # (control_vehicles, GOAL_RESPAWN) — the original settings that
+        # produced the 0.613 realism baseline. Do NOT add control_wosac /
+        # goal_behavior=2 here unless running the strict-WOSAC-spec eval.
     )
 
     # -----------------------------------------------------------------------
@@ -365,7 +421,7 @@ def evaluate(args):
 
             wosac_config = {
                 "eval": {
-                    "wosac_init_steps": 10,  # 1-second GT warm-up per WOSAC spec
+                    "wosac_init_steps": 0,  # original 0.613 baseline (no GT warm-up)
                     "wosac_num_rollouts": args.wosac_rollouts,
                 },
                 "train": {"device": "cpu"},
@@ -402,11 +458,19 @@ def evaluate(args):
                     pass
 
                 if (batch + 1) % 10 == 0:
-                    score = pd.concat(all_results)["realism_meta_score"].mean() \
-                            if all_results else 0.0
-                    print(f"  Batch {batch+1}/{args.wosac_max_batches} | "
-                          f"unique scenarios: {len(unique_scenarios)} | "
-                          f"realism: {score:.4f}")
+                    if all_results:
+                        combined_so_far = pd.concat(all_results)
+                        agg_so_far      = combined_so_far.mean()
+                        print_wosac_progress(agg_so_far, batch + 1,
+                                             args.wosac_max_batches,
+                                             len(combined_so_far))
+                        if wandb_run:
+                            d = wosac_metric_dict(agg_so_far, len(combined_so_far))
+                            d["wosac/batch"] = batch + 1
+                            wandb_run.log(d)
+                    else:
+                        print(f"  Batch {batch+1}/{args.wosac_max_batches} | "
+                              f"no scenarios collected yet")
 
             if not all_results:
                 print("  No WOSAC results collected.")
@@ -439,23 +503,9 @@ def evaluate(args):
                 print("=" * 57)
 
                 if wandb_run:
-                    wandb_run.log({
-                        "wosac/realism_meta_score":              agg["realism_meta_score"],
-                        "wosac/kinematic_metrics":               agg["kinematic_metrics"],
-                        "wosac/interactive_metrics":             agg["interactive_metrics"],
-                        "wosac/map_based_metrics":               agg["map_based_metrics"],
-                        "wosac/min_ade":                         agg["min_ade"],
-                        "wosac/likelihood_linear_speed":         agg["likelihood_linear_speed"],
-                        "wosac/likelihood_linear_acceleration":  agg["likelihood_linear_acceleration"],
-                        "wosac/likelihood_angular_speed":        agg["likelihood_angular_speed"],
-                        "wosac/likelihood_angular_acceleration": agg["likelihood_angular_acceleration"],
-                        "wosac/likelihood_collision":            agg["likelihood_collision_indication"],
-                        "wosac/likelihood_dist_obj":             agg["likelihood_distance_to_nearest_object"],
-                        "wosac/likelihood_ttc":                  agg["likelihood_time_to_collision"],
-                        "wosac/likelihood_dist_road_edge":       agg["likelihood_distance_to_road_edge"],
-                        "wosac/likelihood_offroad":              agg["likelihood_offroad_indication"],
-                        "wosac/scenarios_evaluated":             len(combined),
-                    })
+                    final = wosac_metric_dict(agg, len(combined))
+                    final["wosac/batch"] = args.wosac_max_batches
+                    wandb_run.log(final)
 
                 Path(args.output_dir).mkdir(parents=True, exist_ok=True)
                 ckpt_name = Path(args.checkpoint).stem
