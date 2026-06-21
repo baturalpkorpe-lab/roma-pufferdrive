@@ -257,7 +257,7 @@ def parse_args():
     p.add_argument("--role_dim",          type=int,  default=8,
                    help="Role dimension used during training. Use 0 for baseline.")
     p.add_argument("--obs_dim",           type=int,  default=1121)
-    p.add_argument("--num_agents",        type=int,  default=512)
+    p.add_argument("--num_agents",        type=int,  default=3072)
     p.add_argument("--goal_speed",        type=float, default=100.0,
                    help="Goal-reached speed threshold. Must match training "
                         "(train_roma default 100.0) to reproduce the 0.613 baseline.")
