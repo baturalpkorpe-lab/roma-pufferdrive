@@ -144,7 +144,10 @@ def run_lane_diagnostic(map_dir, num_maps=30, curve_deg=30.0, turn_deg_per_step=
     d_straight, d_turn = [], []
 
     for path in files:
-        lanes, vehicles = _parse_map(path)
+        try:
+            lanes, vehicles = _parse_map(path)
+        except Exception:
+            continue  # skip a truncated / unexpected map file rather than crash
         n_lanes_total += len(lanes)
         n_veh_total += len(vehicles)
         for x, y in lanes:
@@ -209,9 +212,9 @@ def run_lane_diagnostic(map_dir, num_maps=30, curve_deg=30.0, turn_deg_per_step=
     if len(dt):
         far = float(np.mean(dt > _LANE_THRESHOLD))
         m["lane/turns_covered"] = 1.0 if far < 0.15 else 0.0
-        verdict = ("turns ARE covered — lane-centering reward works through junctions"
+        verdict = ("turns ARE covered - lane-centering reward works through junctions"
                    if far < 0.15 else
-                   "turns POORLY covered — reward gives 0 through many turns")
+                   "turns POORLY covered - reward gives 0 through many turns")
         print(f"\n  => {100*far:.1f}% of human TURNING points are >4m from any lane")
         print(f"     {verdict}")
     print("=" * 57)
@@ -346,10 +349,14 @@ def evaluate(args):
         wandb_run.define_metric("wosac/*", step_metric="wosac/batch")
 
     # --- Part 1: lane-coverage diagnostic (no policy / env needed) ---
+    # Non-fatal: a diagnostic failure must never block the WOSAC eval.
     if args.lane_maps > 0:
-        lane_metrics = run_lane_diagnostic(args.map_dir, args.lane_maps)
-        if wandb_run and lane_metrics:
-            wandb_run.log(lane_metrics)
+        try:
+            lane_metrics = run_lane_diagnostic(args.map_dir, args.lane_maps)
+            if wandb_run and lane_metrics:
+                wandb_run.log(lane_metrics)
+        except Exception as e:
+            print(f"[lane diagnostic skipped: {e}]")
     if args.lane_only:
         if wandb_run:
             wandb_run.finish()
