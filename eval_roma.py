@@ -135,7 +135,7 @@ def run_lane_diagnostic(map_dir, num_maps=30, curve_deg=30.0, turn_deg_per_step=
     print("=" * 57)
     if not files:
         print(f"  No .bin files in {map_dir}")
-        return
+        return {}
 
     curve_thr = math.radians(curve_deg)
     turn_thr = math.radians(turn_deg_per_step)
@@ -173,37 +173,49 @@ def run_lane_diagnostic(map_dir, num_maps=30, curve_deg=30.0, turn_deg_per_step=
         d_straight.append(d[~turning])
         d_turn.append(d[turning])
 
+    m = {}  # metrics dict (returned for wandb logging)
+    m["lane/lanes_per_map"]    = n_lanes_total / len(files)
+    m["lane/vehicles_per_map"] = n_veh_total / len(files)
     print(f"  maps parsed : {len(files)}")
-    print(f"  ROAD_LANE   : {n_lanes_total} ({n_lanes_total/len(files):.0f}/map)")
-    print(f"  VEHICLE     : {n_veh_total} ({n_veh_total/len(files):.0f}/map)")
+    print(f"  ROAD_LANE   : {n_lanes_total} ({m['lane/lanes_per_map']:.0f}/map)")
+    print(f"  VEHICLE     : {n_veh_total} ({m['lane/vehicles_per_map']:.0f}/map)")
 
     if lane_curv:
         lc, ll = np.array(lane_curv), np.array(lane_len)
         n_curved = int(np.sum(lc > curve_thr))
+        m["lane/turn_connector_pct"] = 100 * n_curved / len(lc)
+        m["lane/bend_median_deg"]    = math.degrees(np.median(lc))
+        m["lane/bend_max_deg"]       = math.degrees(lc.max())
+        m["lane/length_median_m"]    = float(np.median(ll))
         print(f"\n  turn connectors (>{curve_deg:.0f}deg bend): {n_curved} "
-              f"({100*n_curved/len(lc):.1f}% of lanes)")
-        print(f"  lane bend: median {math.degrees(np.median(lc)):.1f}deg | "
-              f"max {math.degrees(lc.max()):.1f}deg")
-        print(f"  lane length: median {np.median(ll):.1f}m")
+              f"({m['lane/turn_connector_pct']:.1f}% of lanes)")
+        print(f"  lane bend: median {m['lane/bend_median_deg']:.1f}deg | "
+              f"max {m['lane/bend_max_deg']:.1f}deg")
+        print(f"  lane length: median {m['lane/length_median_m']:.1f}m")
 
     ds = np.concatenate(d_straight) if d_straight else np.array([])
     dt = np.concatenate(d_turn) if d_turn else np.array([])
     print("\n  human distance to nearest lane centerline:")
-    for label, d in (("straight", ds), ("turning ", dt)):
+    for label, key, d in (("straight", "straight", ds), ("turning ", "turning", dt)):
         if len(d) == 0:
             print(f"    {label}: (none)")
             continue
-        print(f"    {label}: n={len(d):>7} | median {np.median(d):.2f}m | "
-              f"90pct {np.percentile(d, 90):.2f}m | "
-              f">{_LANE_THRESHOLD:.0f}m: {100*np.mean(d > _LANE_THRESHOLD):.1f}%")
+        m[f"lane/{key}_dist_median_m"] = float(np.median(d))
+        m[f"lane/{key}_dist_90pct_m"]  = float(np.percentile(d, 90))
+        m[f"lane/{key}_pct_over_4m"]   = 100 * float(np.mean(d > _LANE_THRESHOLD))
+        print(f"    {label}: n={len(d):>7} | median {m[f'lane/{key}_dist_median_m']:.2f}m | "
+              f"90pct {m[f'lane/{key}_dist_90pct_m']:.2f}m | "
+              f">{_LANE_THRESHOLD:.0f}m: {m[f'lane/{key}_pct_over_4m']:.1f}%")
     if len(dt):
         far = float(np.mean(dt > _LANE_THRESHOLD))
+        m["lane/turns_covered"] = 1.0 if far < 0.15 else 0.0
         verdict = ("turns ARE covered — lane-centering reward works through junctions"
                    if far < 0.15 else
                    "turns POORLY covered — reward gives 0 through many turns")
         print(f"\n  => {100*far:.1f}% of human TURNING points are >4m from any lane")
         print(f"     {verdict}")
     print("=" * 57)
+    return m
 
 
 class WOSACPolicyAdapter:
@@ -324,17 +336,7 @@ def parse_args():
 
 
 def evaluate(args):
-    # --- Part 1: lane-coverage diagnostic (no policy / env needed) ---
-    if args.lane_maps > 0:
-        run_lane_diagnostic(args.map_dir, args.lane_maps)
-    if args.lane_only:
-        return
-
-    # --- Part 2: WOSAC realism metrics ---
-    if args.device == "cuda" and not torch.cuda.is_available():
-        args.device = "cpu"
-    device = torch.device(args.device)
-
+    # wandb is initialized first so the lane diagnostic can log to it too.
     wandb_run = None
     if args.wandb:
         import wandb
@@ -342,6 +344,21 @@ def evaluate(args):
         wandb_run = wandb.init(project=args.wandb_project, name=run_name, config=vars(args))
         wandb_run.define_metric("wosac/batch")
         wandb_run.define_metric("wosac/*", step_metric="wosac/batch")
+
+    # --- Part 1: lane-coverage diagnostic (no policy / env needed) ---
+    if args.lane_maps > 0:
+        lane_metrics = run_lane_diagnostic(args.map_dir, args.lane_maps)
+        if wandb_run and lane_metrics:
+            wandb_run.log(lane_metrics)
+    if args.lane_only:
+        if wandb_run:
+            wandb_run.finish()
+        return
+
+    # --- Part 2: WOSAC realism metrics ---
+    if args.device == "cuda" and not torch.cuda.is_available():
+        args.device = "cpu"
+    device = torch.device(args.device)
 
     print(f"Checkpoint : {args.checkpoint}")
     policy = load_policy(args.checkpoint, args.role_dim, args.obs_dim, device)
