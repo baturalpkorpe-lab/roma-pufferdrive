@@ -134,14 +134,14 @@ class WOSACPolicyAdapter:
 # ---------------------------------------------------------------------------
 
 def load_policy(checkpoint_path, role_dim, obs_dim, device):
-    ckpt = torch.load(checkpoint_path, map_location=device)
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     key  = "policy_state" if "policy_state" in ckpt else "policy"
     sd   = ckpt[key]
     keys = set(sd.keys())
 
     if any("ego_enc" in k or "role_encoder" in k for k in keys):
         print("  Architecture : new structured encoder (RomaPolicy)")
-        from roma.policy import RomaPolicy
+        from roma_pufferdrive.roma.policy import RomaPolicy
         policy = RomaPolicy(obs_dim=obs_dim, role_dim=role_dim)
     elif any("role_fc" in k for k in keys):
         print("  Architecture : legacy flat-MLP ROMA (LegacyRomaPolicy)")
@@ -151,6 +151,7 @@ def load_policy(checkpoint_path, role_dim, obs_dim, device):
         policy = LegacyBaselinePolicy(obs_dim=obs_dim)
 
     policy.load_state_dict(sd)
+    policy.to(device)
     policy.eval()
     return policy
 
@@ -201,6 +202,52 @@ def collect_wosac_trajectories(env, policy_adapter, num_rollouts, num_steps=91, 
 
 
 # ---------------------------------------------------------------------------
+# WOSAC metric reporting helpers (shared by periodic logs + final summary)
+# ---------------------------------------------------------------------------
+
+def wosac_metric_dict(agg, scenarios, prefix="wosac/"):
+    """Flatten a WOSAC aggregate row into a wandb-loggable dict so the
+    periodic progress logs and the final summary report the exact same set
+    of sub-metrics."""
+    return {
+        f"{prefix}realism_meta_score":              agg["realism_meta_score"],
+        f"{prefix}kinematic_metrics":               agg["kinematic_metrics"],
+        f"{prefix}interactive_metrics":             agg["interactive_metrics"],
+        f"{prefix}map_based_metrics":               agg["map_based_metrics"],
+        f"{prefix}min_ade":                         agg["min_ade"],
+        f"{prefix}likelihood_linear_speed":         agg["likelihood_linear_speed"],
+        f"{prefix}likelihood_linear_acceleration":  agg["likelihood_linear_acceleration"],
+        f"{prefix}likelihood_angular_speed":        agg["likelihood_angular_speed"],
+        f"{prefix}likelihood_angular_acceleration": agg["likelihood_angular_acceleration"],
+        f"{prefix}likelihood_collision":            agg["likelihood_collision_indication"],
+        f"{prefix}likelihood_dist_obj":             agg["likelihood_distance_to_nearest_object"],
+        f"{prefix}likelihood_ttc":                  agg["likelihood_time_to_collision"],
+        f"{prefix}likelihood_dist_road_edge":       agg["likelihood_distance_to_road_edge"],
+        f"{prefix}likelihood_offroad":              agg["likelihood_offroad_indication"],
+        f"{prefix}scenarios_evaluated":             scenarios,
+    }
+
+
+def print_wosac_progress(agg, batch, max_batches, scenarios):
+    """Compact multi-line progress print showing every sub-metric, not just
+    the realism meta-score."""
+    print(f"  Batch {batch}/{max_batches} | scenarios: {scenarios} | "
+          f"realism: {agg['realism_meta_score']:.4f}")
+    print(f"      kinematic {agg['kinematic_metrics']:.4f} | "
+          f"interactive {agg['interactive_metrics']:.4f} | "
+          f"map_based {agg['map_based_metrics']:.4f}")
+    print(f"      lin_spd {agg['likelihood_linear_speed']:.3f} | "
+          f"lin_acc {agg['likelihood_linear_acceleration']:.3f} | "
+          f"ang_spd {agg['likelihood_angular_speed']:.3f} | "
+          f"ang_acc {agg['likelihood_angular_acceleration']:.3f}")
+    print(f"      collision {agg['likelihood_collision_indication']:.3f} | "
+          f"dist_obj {agg['likelihood_distance_to_nearest_object']:.3f} | "
+          f"ttc {agg['likelihood_time_to_collision']:.3f} | "
+          f"dist_edge {agg['likelihood_distance_to_road_edge']:.3f} | "
+          f"offroad {agg['likelihood_offroad_indication']:.3f}")
+
+
+# ---------------------------------------------------------------------------
 # Args
 # ---------------------------------------------------------------------------
 
@@ -210,7 +257,10 @@ def parse_args():
     p.add_argument("--role_dim",          type=int,  default=8,
                    help="Role dimension used during training. Use 0 for baseline.")
     p.add_argument("--obs_dim",           type=int,  default=1121)
-    p.add_argument("--num_agents",        type=int,  default=64)
+    p.add_argument("--num_agents",        type=int,  default=3072)
+    p.add_argument("--goal_speed",        type=float, default=100.0,
+                   help="Goal-reached speed threshold. Must match training "
+                        "(train_roma default 100.0) to reproduce the 0.613 baseline.")
     p.add_argument("--device",            type=str,  default="cuda",
                    help="cuda or cpu. Falls back to cpu if cuda unavailable.")
     p.add_argument("--n_episodes",        type=int,  default=30,
@@ -226,6 +276,11 @@ def parse_args():
                    help="Max resample batches. 500 batches with num_maps=10000 covers most scenarios.")
     p.add_argument("--save_plots",        action="store_true")
     p.add_argument("--output_dir",        type=str,  default="roma_pufferdrive/eval_results")
+    p.add_argument("--wandb",             action="store_true",
+                   help="Log results to Weights & Biases.")
+    p.add_argument("--wandb_project",     type=str,  default="roma-pufferdrive")
+    p.add_argument("--wandb_run_name",    type=str,  default=None,
+                   help="W&B run name. Defaults to checkpoint filename.")
     return p.parse_args()
 
 
@@ -239,6 +294,16 @@ def evaluate(args):
         args.device = "cpu"
     device = torch.device(args.device)
 
+    wandb_run = None
+    if args.wandb:
+        import wandb
+        run_name = args.wandb_run_name or Path(args.checkpoint).stem
+        wandb_run = wandb.init(project=args.wandb_project, name=run_name, config=vars(args))
+        # Plot all WOSAC sub-metrics against batch number (their convergence
+        # curve) instead of wandb's internal step counter.
+        wandb_run.define_metric("wosac/batch")
+        wandb_run.define_metric("wosac/*", step_metric="wosac/batch")
+
     print(f"\nCheckpoint : {args.checkpoint}")
     policy = load_policy(args.checkpoint, max(args.role_dim, 1), args.obs_dim, device)
     print(f"obs_dim    : {args.obs_dim}  |  role_dim : {args.role_dim}")
@@ -249,6 +314,11 @@ def evaluate(args):
         num_agents     = args.num_agents,
         map_dir        = args.map_dir,
         episode_length = 91,
+        goal_speed     = args.goal_speed,    # match training (100.0) — gates goal respawn
+        # control_mode / goal_behavior left at Drive defaults
+        # (control_vehicles, GOAL_RESPAWN) — the original settings that
+        # produced the 0.613 realism baseline. Do NOT add control_wosac /
+        # goal_behavior=2 here unless running the strict-WOSAC-spec eval.
     )
 
     # -----------------------------------------------------------------------
@@ -259,6 +329,7 @@ def evaluate(args):
     all_returns                   = []
     all_roles, all_speeds         = [], []
 
+    num_agents = env.num_agents  # actual count after map packing (may differ from args.num_agents)
     print(f"\nPart 1: Environment metrics ({args.n_episodes} episodes) ...\n")
     obs_np, _ = env.reset()
     obs = torch.as_tensor(obs_np, dtype=torch.float32).to(device)
@@ -268,18 +339,18 @@ def evaluate(args):
             obs_np, _ = env.reset()
             obs = torch.as_tensor(obs_np, dtype=torch.float32).to(device)
 
-        state = policy.initial_state(args.num_agents, device)
+        state = policy.initial_state(num_agents, device)
 
         for step in range(91):
             with torch.no_grad():
                 logits, _, state, role_info = policy(obs, state)
             action     = Categorical(logits=logits).sample()
-            actions_np = action.numpy().reshape(args.num_agents, 1)
+            actions_np = action.cpu().numpy().reshape(num_agents, 1)
             obs_np, _, term_np, trunc_np, info = env.step(actions_np)
             obs = torch.as_tensor(obs_np, dtype=torch.float32).to(device)
 
-            all_roles.append(role_info["role_z"].numpy())
-            all_speeds.append(obs_np[:, 2])
+            all_roles.append(role_info["role_z"].cpu().numpy())
+            all_speeds.append(obs_np[:, 3])  # obs[:, 3] = ego speed (after x, y, heading)
 
             if isinstance(info, list):
                 for item in info:
@@ -312,6 +383,14 @@ def evaluate(args):
         print(f"  Off-road rate   : {np.mean(all_offroads):.4f}")
         print(f"  Completion rate : {np.mean(all_completions):.4f}")
         print(f"  Mean return     : {np.mean(all_returns):.4f}")
+        if wandb_run:
+            wandb_run.log({
+                "env/score":           np.mean(all_scores),
+                "env/collision_rate":  np.mean(all_collisions),
+                "env/offroad_rate":    np.mean(all_offroads),
+                "env/completion_rate": np.mean(all_completions),
+                "env/mean_return":     np.mean(all_returns),
+            })
     print("=" * 57)
 
     # Role-speed correlations
@@ -344,13 +423,13 @@ def evaluate(args):
 
             wosac_config = {
                 "eval": {
-                    "wosac_init_steps": 0,
+                    "wosac_init_steps": 0,  # original 0.613 baseline (no GT warm-up)
                     "wosac_num_rollouts": args.wosac_rollouts,
                 },
-                "train": {"device": "cpu"},
+                "train": {"device": str(device)},
             }
             evaluator        = WOSACEvaluator(wosac_config)
-            adapter          = WOSACPolicyAdapter(policy, args.num_agents, device)
+            adapter          = WOSACPolicyAdapter(policy, env.num_agents, device)
             all_results      = []
             unique_scenarios = set()
 
@@ -381,11 +460,19 @@ def evaluate(args):
                     pass
 
                 if (batch + 1) % 10 == 0:
-                    score = pd.concat(all_results)["realism_meta_score"].mean() \
-                            if all_results else 0.0
-                    print(f"  Batch {batch+1}/{args.wosac_max_batches} | "
-                          f"unique scenarios: {len(unique_scenarios)} | "
-                          f"realism: {score:.4f}")
+                    if all_results:
+                        combined_so_far = pd.concat(all_results)
+                        agg_so_far      = combined_so_far.mean()
+                        print_wosac_progress(agg_so_far, batch + 1,
+                                             args.wosac_max_batches,
+                                             len(combined_so_far))
+                        if wandb_run:
+                            d = wosac_metric_dict(agg_so_far, len(combined_so_far))
+                            d["wosac/batch"] = batch + 1
+                            wandb_run.log(d)
+                    else:
+                        print(f"  Batch {batch+1}/{args.wosac_max_batches} | "
+                              f"no scenarios collected yet")
 
             if not all_results:
                 print("  No WOSAC results collected.")
@@ -416,6 +503,11 @@ def evaluate(args):
                 print(f"  likelihood_dist_road_edge : {agg['likelihood_distance_to_road_edge']:.4f}")
                 print(f"  likelihood_offroad        : {agg['likelihood_offroad_indication']:.4f}")
                 print("=" * 57)
+
+                if wandb_run:
+                    final = wosac_metric_dict(agg, len(combined))
+                    final["wosac/batch"] = args.wosac_max_batches
+                    wandb_run.log(final)
 
                 Path(args.output_dir).mkdir(parents=True, exist_ok=True)
                 ckpt_name = Path(args.checkpoint).stem
