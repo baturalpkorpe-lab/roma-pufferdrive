@@ -30,81 +30,8 @@ DELFT / SUPERCOMPUTER (full evaluation on all 10,000 scenarios):
 import argparse
 import numpy as np
 import torch
-import torch.nn as nn
 from pathlib import Path
 from torch.distributions import Categorical
-
-
-# ---------------------------------------------------------------------------
-# Legacy flat-MLP architectures (match checkpoints trained before the fix)
-# ---------------------------------------------------------------------------
-
-class LegacyRomaPolicy(nn.Module):
-    """Flat-MLP ROMA policy — matches checkpoints trained before the fix."""
-    def __init__(self, obs_dim=1121, action_dim=91, role_dim=8,
-                 role_hidden=64, policy_hidden=128, obs_window_len=8):
-        super().__init__()
-        self.role_hidden    = role_hidden
-        self.policy_hidden  = policy_hidden
-        self.obs_window_len = obs_window_len
-        self.role_dim       = role_dim
-        self.obs_encoder = nn.Sequential(
-            nn.Linear(obs_dim, 256), nn.ReLU(),
-            nn.Linear(256, 128),    nn.ReLU(),
-        )
-        self.role_fc     = nn.Sequential(nn.Linear(obs_dim, role_hidden), nn.ReLU())
-        self.role_gru    = nn.GRUCell(role_hidden, role_hidden)
-        self.mu_head     = nn.Linear(role_hidden, role_dim)
-        self.logvar_head = nn.Linear(role_hidden, role_dim)
-        self.policy_gru  = nn.GRUCell(128 + role_dim, policy_hidden)
-        self.actor       = nn.Linear(policy_hidden, action_dim)
-        self.critic      = nn.Linear(policy_hidden, 1)
-
-    def initial_state(self, B, device):
-        return (
-            torch.zeros(B, self.role_hidden,    device=device),
-            torch.zeros(B, self.policy_hidden,  device=device),
-            torch.zeros(B, self.obs_window_len, 1121, device=device),
-        )
-
-    def forward(self, obs, state):
-        role_h, policy_h, obs_win = state
-        new_role_h   = self.role_gru(self.role_fc(obs), role_h)
-        role_z       = self.mu_head(new_role_h)
-        env_emb      = self.obs_encoder(obs)
-        new_policy_h = self.policy_gru(torch.cat([env_emb, role_z], dim=-1), policy_h)
-        logits       = self.actor(new_policy_h)
-        value        = self.critic(new_policy_h)
-        new_obs_win  = torch.cat([obs_win[:, 1:, :], obs.unsqueeze(1)], dim=1)
-        return logits, value, (new_role_h, new_policy_h, new_obs_win), {"role_z": role_z}
-
-
-class LegacyBaselinePolicy(nn.Module):
-    """Flat-MLP baseline — matches baseline checkpoints."""
-    def __init__(self, obs_dim=1121, action_dim=91, hidden_dim=128):
-        super().__init__()
-        self.hidden_dim = hidden_dim
-        self.encoder = nn.Sequential(
-            nn.Linear(obs_dim, 256), nn.ReLU(),
-            nn.Linear(256, 128),    nn.ReLU(),
-        )
-        self.gru    = nn.GRUCell(128, hidden_dim)
-        self.actor  = nn.Linear(hidden_dim, action_dim)
-        self.critic = nn.Linear(hidden_dim, 1)
-
-    def initial_state(self, B, device):
-        return (
-            torch.zeros(B, self.hidden_dim, device=device),
-            torch.zeros(B, 8, 1121,         device=device),
-        )
-
-    def forward(self, obs, state):
-        hidden, obs_win = state
-        hidden      = self.gru(self.encoder(obs), hidden)
-        logits      = self.actor(hidden)
-        value       = self.critic(hidden)
-        new_obs_win = torch.cat([obs_win[:, 1:, :], obs.unsqueeze(1)], dim=1)
-        return logits, value, (hidden, new_obs_win), {"role_z": torch.zeros(obs.size(0), 1)}
 
 
 # ---------------------------------------------------------------------------
@@ -134,23 +61,11 @@ class WOSACPolicyAdapter:
 # ---------------------------------------------------------------------------
 
 def load_policy(checkpoint_path, role_dim, obs_dim, device):
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    key  = "policy_state" if "policy_state" in ckpt else "policy"
-    sd   = ckpt[key]
-    keys = set(sd.keys())
-
-    if any("ego_enc" in k or "role_encoder" in k for k in keys):
-        print("  Architecture : new structured encoder (RomaPolicy)")
-        from roma_pufferdrive.roma.policy import RomaPolicy
-        policy = RomaPolicy(obs_dim=obs_dim, role_dim=role_dim)
-    elif any("role_fc" in k for k in keys):
-        print("  Architecture : legacy flat-MLP ROMA (LegacyRomaPolicy)")
-        policy = LegacyRomaPolicy(obs_dim=obs_dim, role_dim=role_dim)
-    else:
-        print("  Architecture : legacy flat-MLP baseline (LegacyBaselinePolicy)")
-        policy = LegacyBaselinePolicy(obs_dim=obs_dim)
-
-    policy.load_state_dict(sd)
+    from roma_pufferdrive.roma.policy import RomaPolicy
+    ckpt   = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    key    = "policy_state" if "policy_state" in ckpt else "policy"
+    policy = RomaPolicy(obs_dim=obs_dim, role_dim=role_dim)
+    policy.load_state_dict(ckpt[key])
     policy.to(device)
     policy.eval()
     return policy
