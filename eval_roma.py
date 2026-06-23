@@ -143,11 +143,15 @@ def run_lane_diagnostic(map_dir, num_maps=30, curve_deg=30.0, turn_deg_per_step=
     lane_curv, lane_len = [], []
     d_straight, d_turn = [], []
 
+    n_parse_errors = 0
     for path in files:
         try:
             lanes, vehicles = _parse_map(path)
-        except Exception:
-            continue  # skip a truncated / unexpected map file rather than crash
+        except Exception as e:
+            n_parse_errors += 1
+            if n_parse_errors <= 3:
+                print(f"  WARNING: failed to parse {os.path.basename(path)}: {e}")
+            continue
         n_lanes_total += len(lanes)
         n_veh_total += len(vehicles)
         for x, y in lanes:
@@ -177,9 +181,14 @@ def run_lane_diagnostic(map_dir, num_maps=30, curve_deg=30.0, turn_deg_per_step=
         d_turn.append(d[turning])
 
     m = {}  # metrics dict (returned for wandb logging)
-    m["lane/lanes_per_map"]    = n_lanes_total / len(files)
-    m["lane/vehicles_per_map"] = n_veh_total / len(files)
-    print(f"  maps parsed : {len(files)}")
+    n_ok = len(files) - n_parse_errors
+    m["lane/lanes_per_map"]    = n_lanes_total / max(n_ok, 1)
+    m["lane/vehicles_per_map"] = n_veh_total   / max(n_ok, 1)
+    print(f"  map_dir     : {map_dir}")
+    print(f"  maps found  : {len(files)}  (parsed ok: {n_ok}, errors: {n_parse_errors})")
+    if n_parse_errors == len(files):
+        print("  ERROR: all maps failed to parse — check map_dir path and binary format")
+        return m
     print(f"  ROAD_LANE   : {n_lanes_total} ({m['lane/lanes_per_map']:.0f}/map)")
     print(f"  VEHICLE     : {n_veh_total} ({m['lane/vehicles_per_map']:.0f}/map)")
 
