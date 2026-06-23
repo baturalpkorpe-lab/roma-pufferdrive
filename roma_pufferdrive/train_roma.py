@@ -131,6 +131,8 @@ def parse_args():
                    help="Scenarios loaded. 10000 for full training, 100 for CPU test.")
     p.add_argument("--device",        type=str,   default="cuda",
                    help="cuda or cpu. Auto-falls back to cpu if cuda unavailable.")
+    p.add_argument("--no_amp",        action="store_true",
+                   help="Disable bf16 AMP. Use for debugging or on GPUs without bf16 support.")
     p.add_argument("--reward_vehicle_collision",  type=float, default=-0.5,
                    help="Penalty per step for vehicle collision. drive.ini default: -0.5.")
     p.add_argument("--reward_offroad_collision",  type=float, default=-0.5,
@@ -499,6 +501,12 @@ def train(args):
         args.device = "cpu"
     device = torch.device(args.device)
 
+    use_amp = (
+        device.type == "cuda"
+        and not args.no_amp
+        and torch.cuda.is_bf16_supported()
+    )
+
     if device.type == "cuda":
         # TF32 tensor cores on Ampere+ (A100): up to ~8x faster float32
         # matmuls at negligible precision cost for RL workloads.
@@ -507,6 +515,7 @@ def train(args):
         torch.backends.cudnn.benchmark = True
 
     print(f"[ROMA] Device        : {device}")
+    print(f"[ROMA] AMP (bf16)    : {'enabled' if use_amp else 'disabled (CPU)'}")
     print(f"[ROMA] role_dim      : {args.role_dim}")
     print(f"[ROMA] num_maps      : {args.num_maps}")
     print(f"[ROMA] num_agents    : {args.num_agents}")
@@ -625,8 +634,9 @@ def train(args):
                 b_obs[ptr:ptr+B]      = obs
                 b_role_h[ptr:ptr+B]   = state[0]
                 b_policy_h[ptr:ptr+B] = state[1]
-                logits, value, state, role_info = policy(obs, state)
-                dist    = Categorical(logits=logits)
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
+                    logits, value, state, role_info = policy(obs, state)
+                dist    = Categorical(logits=logits.float())
                 action  = dist.sample()
                 logprob = dist.log_prob(action)
 
@@ -688,9 +698,10 @@ def train(args):
 
         # ---- GAE ----
         with torch.no_grad():
-            _, last_val, _, _ = policy(obs, state)
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
+                _, last_val, _, _ = policy(obs, state)
         T_steps   = args.rollout_steps
-        last_vals = last_val.squeeze(-1)                     # (B,) — one per agent
+        last_vals = last_val.squeeze(-1).float()             # (B,) — one per agent
         adv_2d    = compute_gae(
             b_rew[:ptr].reshape(T_steps, B),
             b_val[:ptr].reshape(T_steps, B),
@@ -725,28 +736,29 @@ def train(args):
                 mb_state = (b_role_h[mb], b_policy_h[mb],
                             torch.zeros(len(mb), policy.obs_window_len,
                                         policy.env_embed_dim, device=device))
-                logits, value, _, role_info = policy(b_obs[mb], mb_state)
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
+                    logits, value, _, role_info = policy(b_obs[mb], mb_state)
 
-                dist        = Categorical(logits=logits)
-                new_logprob = dist.log_prob(b_act[mb])
-                entropy     = dist.entropy()
+                    dist        = Categorical(logits=logits.float())
+                    new_logprob = dist.log_prob(b_act[mb])
+                    entropy     = dist.entropy()
 
-                ratio = (new_logprob - b_lp[mb]).exp()
-                s1 = ratio * adv[mb]
-                s2 = ratio.clamp(1 - args.clip_coef, 1 + args.clip_coef) * adv[mb]
-                pl  = -torch.min(s1, s2).mean()
-                vl  = F.mse_loss(value.squeeze(-1), returns[mb])
-                # Use the freshly recomputed role variables (they carry a
-                # computation graph) — the rollout-buffer copies were created
-                # under no_grad, so the aux losses would otherwise send zero
-                # gradient to the role encoder.
-                aux = aux_loss_fn(role_info["role_z"], role_info["role_mean"],
-                                  role_info["role_log_var"], b_embwin[mb])
+                    ratio = (new_logprob - b_lp[mb]).exp()
+                    s1 = ratio * adv[mb]
+                    s2 = ratio.clamp(1 - args.clip_coef, 1 + args.clip_coef) * adv[mb]
+                    pl  = -torch.min(s1, s2).mean()
+                    vl  = F.mse_loss(value.squeeze(-1).float(), returns[mb])
+                    # Use the freshly recomputed role variables (they carry a
+                    # computation graph) — the rollout-buffer copies were created
+                    # under no_grad, so the aux losses would otherwise send zero
+                    # gradient to the role encoder.
+                    aux = aux_loss_fn(role_info["role_z"], role_info["role_mean"],
+                                      role_info["role_log_var"], b_embwin[mb])
 
-                loss = (pl
-                        + args.vf_coef * vl
-                        - args.ent_coef * entropy.mean()
-                        + aux["aux_loss"])
+                    loss = (pl
+                            + args.vf_coef * vl
+                            - args.ent_coef * entropy.mean()
+                            + aux["aux_loss"])
 
                 optimizer.zero_grad()
                 loss.backward()
