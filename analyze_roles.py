@@ -70,23 +70,24 @@ def main():
     print(f"[analyze_roles] episodes: {args.n_episodes}")
 
     # Build env (smaller map pool is fine for analysis)
+    # Use getattr fallbacks so older checkpoints without these args still work.
     from pufferlib.ocean.drive.drive import Drive
     env = Drive(
         num_maps                 = args.num_maps,
-        num_agents               = saved.num_agents,
+        num_agents               = getattr(saved, "num_agents",               3072),
         map_dir                  = args.data_dir,
         episode_length           = 91,
-        reward_vehicle_collision = saved.reward_vehicle_collision,
-        reward_offroad_collision = saved.reward_offroad_collision,
-        goal_speed               = saved.goal_speed,
-        reward_goal_post_respawn = saved.reward_goal_post_respawn,
-        goal_target_distance     = saved.goal_target_distance,
-        resample_frequency       = saved.resample_frequency,
-        termination_mode         = saved.termination_mode,
+        reward_vehicle_collision = getattr(saved, "reward_vehicle_collision", -0.5),
+        reward_offroad_collision = getattr(saved, "reward_offroad_collision", -0.5),
+        goal_speed               = getattr(saved, "goal_speed",               100.0),
+        reward_goal_post_respawn = getattr(saved, "reward_goal_post_respawn", 0.25),
+        goal_target_distance     = getattr(saved, "goal_target_distance",     30.0),
+        resample_frequency       = getattr(saved, "resample_frequency",       910),
+        termination_mode         = getattr(saved, "termination_mode",         1),
     )
     obs_probe, _ = env.reset()
     obs_dim = obs_probe.shape[-1]
-    B = saved.num_agents
+    B = getattr(saved, "num_agents", 3072)
 
     # Build and load policy
     from roma_pufferdrive.roma.policy import RomaPolicy
@@ -94,9 +95,9 @@ def main():
         obs_dim       = obs_dim,
         action_dim    = 91,
         role_dim      = saved.role_dim,
-        role_hidden   = saved.role_hidden,
-        policy_hidden = saved.policy_hidden,
-        var_floor     = saved.var_floor,
+        role_hidden   = getattr(saved, "role_hidden",   64),
+        policy_hidden = getattr(saved, "policy_hidden", 128),
+        var_floor     = getattr(saved, "var_floor",     1e-4),
         obs_window_len= 8,
     ).to(device)
     policy.load_state_dict(ckpt["policy_state"])
@@ -135,7 +136,7 @@ def main():
                 logits, _, state, role_info = policy(obs, state)
             role_acc += role_info["role_mean"].float().cpu().numpy()
 
-            action = Categorical(logits=logits).sample()
+            action = Categorical(logits=logits.float()).sample()
             obs_np, _, _, _, _ = env.step(action.cpu().numpy().reshape(B, 1))
             obs = torch.tensor(obs_np, dtype=torch.float32, device=device)
 
@@ -160,7 +161,10 @@ def main():
               f"mean_speed={all_mean_speed[-1].mean():.2f} m/s  "
               f"role_std={role_info['role_mean'].float().std(dim=0).mean().item():.4f}")
 
-    env.close()
+    try:
+        env.close()
+    except Exception:
+        pass
 
     # Concatenate: (n_ep × B, ...)
     role_means  = np.concatenate(all_role_means,  axis=0).astype(np.float32)

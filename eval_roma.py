@@ -344,7 +344,8 @@ def print_progress(agg, batch, max_batches, scenarios):
           f"offroad {agg['likelihood_offroad_indication']:.3f}")
 
 
-def run_role_analysis(policy, env, num_episodes, role_dim, device, out_dir, ckpt_name):
+def run_role_analysis(policy, env, num_episodes, role_dim, device, out_dir, ckpt_name,
+                      wandb_run=None):
     """
     Collect (role_mean, behavioral stats) over N episodes, then save:
       role_pca_<ckpt>.png         — PCA scatter colored by speed / steering / accel
@@ -393,7 +394,7 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device, out_dir, ckpt
                 logits, _, state, role_info = policy(obs, state)
             role_acc += role_info["role_mean"].float().cpu().numpy()
 
-            action = Categorical(logits=logits).sample()
+            action = Categorical(logits=logits.float()).sample()
             obs_np, _, _, _, _ = env.step(action.cpu().numpy().reshape(B, 1))
             obs = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
 
@@ -482,6 +483,18 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device, out_dir, ckpt
     plt.savefig(corr_out, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {corr_out}")
+
+    # Log images to wandb so they're visible remotely without file transfer
+    if wandb_run is not None:
+        try:
+            import wandb as _wandb
+            wandb_run.log({
+                "role/pca_scatter":         _wandb.Image(str(pca_out)),
+                "role/correlation_heatmap": _wandb.Image(str(corr_out)),
+            })
+            print("  Logged images to wandb")
+        except Exception as e:
+            print(f"  wandb image log failed: {e}")
 
     print("\n  Correlation summary (|r| > 0.30 = interpretable):")
     found = False
@@ -660,6 +673,7 @@ def evaluate(args):
             run_role_analysis(
                 policy, env, args.role_episodes, args.role_dim,
                 device, args.output_dir, Path(args.checkpoint).stem,
+                wandb_run=wandb_run,
             )
         except Exception as e:
             print(f"[role analysis skipped: {e}]")
