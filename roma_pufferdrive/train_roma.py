@@ -581,6 +581,7 @@ def train(args):
             "step", "sps", "policy_loss", "value_loss",
             "mi_loss", "div_loss", "score", "mean_return",
             "ego_enc_delta", "partner_enc_delta", "road_enc_delta",
+            "role_std", "role_norm",
         ])
     print(f"[ROMA] CSV log       : {log_csv}")
 
@@ -699,6 +700,10 @@ def train(args):
                     if "episode_return" in info:
                         ep_returns.append(float(np.mean(info["episode_return"])))
 
+        # Role health: std across agents (>0 = diverse roles), norm (grows as roles sharpen)
+        role_std_all  = role_info["role_mean"].float().std(dim=0).mean().item()
+        role_norm_all = role_info["role_mean"].float().norm(dim=-1).mean().item()
+
         # ---- GAE ----
         with torch.no_grad():
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
@@ -787,6 +792,7 @@ def train(args):
                   f"mi_loss={aux['mi_loss'].item():.4f}  "
                   f"div_loss={aux['div_loss'].item():.4f}  "
                   f"score={score:.3f}  return={ret:.3f}  "
+                  f"role_std={role_std_all:.4f}  role_norm={role_norm_all:.4f}  "
                   f"enc_delta ego={enc_deltas['ego']:.4f} "
                   f"partner={enc_deltas['partner']:.4f} "
                   f"road={enc_deltas['road']:.4f}")
@@ -802,6 +808,8 @@ def train(args):
                     round(enc_deltas["ego"],     6),
                     round(enc_deltas["partner"], 6),
                     round(enc_deltas["road"],    6),
+                    round(role_std_all,          6),
+                    round(role_norm_all,         6),
                 ])
 
             # Wandb log
@@ -816,6 +824,8 @@ def train(args):
                 "encoders/ego_delta":     enc_deltas["ego"],
                 "encoders/partner_delta": enc_deltas["partner"],
                 "encoders/road_delta":    enc_deltas["road"],
+                "role/role_std":          role_std_all,
+                "role/role_norm":         role_norm_all,
             }, step=global_step)
 
         # ---- Checkpoint ----
