@@ -372,11 +372,15 @@ def evaluate(args):
 
     from pufferlib.ocean.drive.drive import Drive
     env = Drive(
-        num_maps       = args.wosac_num_maps,
-        num_agents     = args.num_agents,
-        map_dir        = args.map_dir,
-        episode_length = 91,
-        goal_speed     = args.goal_speed,
+        num_maps             = args.wosac_num_maps,
+        num_agents           = args.num_agents,
+        map_dir              = args.map_dir,
+        episode_length       = 91,
+        goal_speed           = args.goal_speed,
+        goal_target_distance = 30.0,   # drive.ini default; Drive() Python default is 10.0
+        termination_mode     = 1,      # drive.ini default; Drive() Python default is None->0
+        resample_frequency   = 910,    # CRITICAL: default 91 triggers auto-resample at every
+                                       # rollout's last step (tick=91), changing maps mid-batch
     )
 
     import pandas as pd
