@@ -18,6 +18,8 @@ Usage (from ~/PufferDrive):
 """
 
 import argparse
+import ast
+import configparser
 import glob
 import math
 import os
@@ -26,6 +28,25 @@ import numpy as np
 import torch
 from pathlib import Path
 from torch.distributions import Categorical
+
+
+def load_drive_config():
+    """Read pufferlib's drive.ini and return a nested dict of parsed values."""
+    import pufferlib
+    puffer_dir = os.path.dirname(pufferlib.__file__)
+    default_ini = os.path.join(puffer_dir, "config", "default.ini")
+    drive_ini   = os.path.join(puffer_dir, "config", "ocean", "drive.ini")
+    p = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    p.read([default_ini, drive_ini])
+
+    def _parse(v):
+        try:
+            return ast.literal_eval(v)
+        except Exception:
+            return v
+
+    return {section: {k: _parse(v) for k, v in p[section].items()}
+            for section in p.sections()}
 
 
 # ===========================================================================
@@ -320,7 +341,7 @@ def parse_args():
     p.add_argument("--role_dim",          type=int,   default=8)
     p.add_argument("--obs_dim",           type=int,   default=1121)
     p.add_argument("--num_agents",        type=int,   default=3072)
-    p.add_argument("--goal_speed",        type=float, default=100.0)
+    # goal/env settings come from drive.ini via load_drive_config()
     p.add_argument("--device",            type=str,   default="cuda")
     p.add_argument("--map_dir",           type=str,   default="resources/drive/binaries/training")
     p.add_argument("--wosac_rollouts",    type=int,   default=32)
@@ -371,17 +392,17 @@ def evaluate(args):
     policy = load_policy(args.checkpoint, args.role_dim, args.obs_dim, device)
 
     from pufferlib.ocean.drive.drive import Drive
-    env = Drive(
-        num_maps             = args.wosac_num_maps,
-        num_agents           = args.num_agents,
-        map_dir              = args.map_dir,
-        episode_length       = 91,
-        goal_speed           = args.goal_speed,
-        goal_target_distance = 30.0,   # drive.ini default; Drive() Python default is 10.0
-        termination_mode     = 1,      # drive.ini default; Drive() Python default is None->0
-        resample_frequency   = 910,    # CRITICAL: default 91 triggers auto-resample at every
-                                       # rollout's last step (tick=91), changing maps mid-batch
-    )
+    ini = load_drive_config()
+    wosac_cfg = dict(ini["env"])
+    wosac_cfg.update({
+        "num_maps":      args.wosac_num_maps,
+        "num_agents":    args.num_agents,
+        "map_dir":       args.map_dir,
+        "control_mode":  ini["eval"]["wosac_control_mode"],
+        "goal_behavior": ini["eval"]["wosac_goal_behavior"],
+        "goal_radius":   ini["eval"]["wosac_goal_radius"],
+    })
+    env = Drive(**wosac_cfg)
 
     import pandas as pd
     from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
@@ -399,7 +420,8 @@ def evaluate(args):
           f"max_batches={args.wosac_max_batches} | num_agents={env.num_agents}\n")
 
     for batch in range(args.wosac_max_batches):
-        env.resample_maps()
+        if batch > 0:
+            env.resample_maps()
         env.reset()
         gt          = env.get_ground_truth_trajectories()
         agent_state = env.get_global_agent_state()

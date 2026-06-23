@@ -29,7 +29,10 @@ automatically if --run_eval is set.
 """
 
 import argparse
+import ast
+import configparser
 import csv
+import os
 import time
 from collections import deque
 from pathlib import Path
@@ -40,6 +43,25 @@ from torch.optim import Adam
 from torch.distributions import Categorical
 from roma_pufferdrive.roma.policy     import RomaPolicy
 from roma_pufferdrive.roma.aux_losses import RomaAuxLoss
+
+
+def load_drive_config():
+    """Read pufferlib's drive.ini and return a nested dict of parsed values."""
+    import pufferlib
+    puffer_dir = os.path.dirname(pufferlib.__file__)
+    default_ini = os.path.join(puffer_dir, "config", "default.ini")
+    drive_ini   = os.path.join(puffer_dir, "config", "ocean", "drive.ini")
+    p = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    p.read([default_ini, drive_ini])
+
+    def _parse(v):
+        try:
+            return ast.literal_eval(v)
+        except Exception:
+            return v
+
+    return {section: {k: _parse(v) for k, v in p[section].items()}
+            for section in p.sections()}
 
 
 # ---------------------------------------------------------------------------
@@ -133,20 +155,7 @@ def parse_args():
                    help="cuda or cpu. Auto-falls back to cpu if cuda unavailable.")
     p.add_argument("--no_amp",        action="store_true",
                    help="Disable bf16 AMP. Use for debugging or on GPUs without bf16 support.")
-    p.add_argument("--reward_vehicle_collision",  type=float, default=-0.5,
-                   help="Penalty per step for vehicle collision. drive.ini default: -0.5.")
-    p.add_argument("--reward_offroad_collision",  type=float, default=-0.5,
-                   help="Penalty per step for going off-road. drive.ini default: -0.5.")
-    p.add_argument("--goal_speed",               type=float, default=100.0,
-                   help="Max target speed m/s toward goal. 100=uncapped (drive.ini default).")
-    p.add_argument("--reward_goal_post_respawn", type=float, default=0.25,
-                   help="Reward for reaching goal after respawn. drive.ini default: 0.25.")
-    p.add_argument("--goal_target_distance",     type=float, default=30.0,
-                   help="Target distance for new goals. drive.ini default: 30.0.")
-    p.add_argument("--resample_frequency",       type=int,   default=910,
-                   help="Steps between map resamples. drive.ini default: 910 (10 episodes).")
-    p.add_argument("--termination_mode",         type=int,   default=1,
-                   help="0=terminate all at episode_length, 1=terminate per agent on reset. drive.ini default: 1.")
+    # Note: reward/goal/resample env settings come from drive.ini via load_drive_config().
 
     # Role
     p.add_argument("--role_dim",      type=int,   default=8,
@@ -227,19 +236,17 @@ def run_evaluation(args, policy, device, wandb_run=None):
     print("=" * 60)
 
     from pufferlib.ocean.drive.drive import Drive
-    env = Drive(
-        num_maps                  = args.wosac_num_maps,
-        num_agents                = args.num_agents,
-        map_dir                   = args.data_dir,
-        episode_length            = 91,
-        reward_vehicle_collision  = args.reward_vehicle_collision,
-        reward_offroad_collision  = args.reward_offroad_collision,
-        goal_speed                = args.goal_speed,
-        reward_goal_post_respawn  = args.reward_goal_post_respawn,
-        goal_target_distance      = args.goal_target_distance,
-        resample_frequency        = args.resample_frequency,
-        termination_mode          = args.termination_mode,
-    )
+    ini = load_drive_config()
+    wosac_cfg = dict(ini["env"])
+    wosac_cfg.update({
+        "num_maps":     args.wosac_num_maps,
+        "num_agents":   args.num_agents,
+        "map_dir":      args.data_dir,
+        "control_mode": ini["eval"]["wosac_control_mode"],
+        "goal_behavior": ini["eval"]["wosac_goal_behavior"],
+        "goal_radius":   ini["eval"]["wosac_goal_radius"],
+    })
+    env = Drive(**wosac_cfg)
     policy.eval()
 
     # --- Environment metrics ---
@@ -335,17 +342,17 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
 
         if own_env:
             from pufferlib.ocean.drive.drive import Drive
-            env = Drive(
-                num_maps                  = num_maps,
-                num_agents                = args.num_agents,
-                map_dir                   = args.data_dir,
-                episode_length            = 91,
-                reward_vehicle_collision  = args.reward_vehicle_collision,
-                reward_offroad_collision  = args.reward_offroad_collision,
-                goal_speed                = args.goal_speed,
-                # control_mode / goal_behavior left at Drive defaults
-                # (control_vehicles, GOAL_RESPAWN) — original 0.613 baseline.
-            )
+            ini = load_drive_config()
+            wosac_cfg = dict(ini["env"])
+            wosac_cfg.update({
+                "num_maps":      num_maps,
+                "num_agents":    args.num_agents,
+                "map_dir":       args.data_dir,
+                "control_mode":  ini["eval"]["wosac_control_mode"],
+                "goal_behavior": ini["eval"]["wosac_goal_behavior"],
+                "goal_radius":   ini["eval"]["wosac_goal_radius"],
+            })
+            env = Drive(**wosac_cfg)
         policy.eval()
 
         wosac_config = {
@@ -362,7 +369,8 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
         R = rollouts
 
         for batch in range(max_batches):
-            env.resample_maps()
+            if batch > 0:
+                env.resample_maps()
             env.reset()
             gt          = env.get_ground_truth_trajectories()
             agent_state = env.get_global_agent_state()
@@ -527,19 +535,14 @@ def train(args):
     wandb_run = init_wandb(args)
 
     from pufferlib.ocean.drive.drive import Drive
-    env = Drive(
-        num_maps                  = args.num_maps,
-        num_agents                = args.num_agents,
-        map_dir                   = args.data_dir,
-        episode_length            = 91,
-        reward_vehicle_collision  = args.reward_vehicle_collision,
-        reward_offroad_collision  = args.reward_offroad_collision,
-        goal_speed                = args.goal_speed,
-        reward_goal_post_respawn  = args.reward_goal_post_respawn,
-        goal_target_distance      = args.goal_target_distance,
-        resample_frequency        = args.resample_frequency,
-        termination_mode          = args.termination_mode,
-    )
+    ini = load_drive_config()
+    env_cfg = dict(ini["env"])
+    env_cfg.update({
+        "num_maps":  args.num_maps,
+        "num_agents": args.num_agents,
+        "map_dir":   args.data_dir,
+    })
+    env = Drive(**env_cfg)
 
     # Auto-detect obs_dim
     obs_probe, _ = env.reset()
