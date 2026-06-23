@@ -344,6 +344,158 @@ def print_progress(agg, batch, max_batches, scenarios):
           f"offroad {agg['likelihood_offroad_indication']:.3f}")
 
 
+def run_role_analysis(policy, env, num_episodes, role_dim, device, out_dir, ckpt_name):
+    """
+    Collect (role_mean, behavioral stats) over N episodes, then save:
+      role_pca_<ckpt>.png         — PCA scatter colored by speed / steering / accel
+      role_correlation_<ckpt>.png — Pearson-r heatmap: role dims × behavioral stats
+    """
+    print("\n" + "=" * 57)
+    print("  ROLE ANALYSIS")
+    print("=" * 57)
+
+    try:
+        from sklearn.decomposition import PCA
+        from scipy.stats import pearsonr
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError as e:
+        print(f"  Skipped (missing library: {e})")
+        print("  Install with: pip install scikit-learn scipy matplotlib")
+        return
+
+    B = env.num_agents
+    all_role_means  = []
+    all_mean_speed  = []
+    all_mean_ang_sp = []
+    all_accel_std   = []
+
+    policy.eval()
+
+    for ep in range(num_episodes):
+        obs_np, _ = env.reset()
+        obs   = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
+        state = policy.initial_state(B, device)
+
+        xs       = np.zeros((91, B), dtype=np.float32)
+        ys       = np.zeros((91, B), dtype=np.float32)
+        headings = np.zeros((91, B), dtype=np.float32)
+        role_acc = np.zeros((B, role_dim), dtype=np.float64)
+
+        for t in range(91):
+            ag = env.get_global_agent_state()
+            xs[t]       = ag["x"]
+            ys[t]       = ag["y"]
+            headings[t] = ag["heading"]
+
+            with torch.no_grad():
+                logits, _, state, role_info = policy(obs, state)
+            role_acc += role_info["role_mean"].float().cpu().numpy()
+
+            action = Categorical(logits=logits).sample()
+            obs_np, _, _, _, _ = env.step(action.cpu().numpy().reshape(B, 1))
+            obs = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
+
+        dx    = np.diff(xs,       axis=0)
+        dy    = np.diff(ys,       axis=0)
+        dh    = np.diff(headings, axis=0)
+        dh    = (dh + np.pi) % (2 * np.pi) - np.pi
+
+        step_speed = np.sqrt(dx**2 + dy**2) * 10   # m/s at 10 Hz
+        ang_speed  = np.abs(dh)
+        accel      = np.diff(step_speed, axis=0)
+
+        all_role_means .append(role_acc / 91.0)
+        all_mean_speed .append(step_speed.mean(axis=0))
+        all_mean_ang_sp.append(ang_speed.mean(axis=0))
+        all_accel_std  .append(accel.std(axis=0))
+
+        last_std = role_info["role_mean"].float().std(dim=0).mean().item()
+        print(f"  episode {ep+1:>3}/{num_episodes}  "
+              f"mean_speed={all_mean_speed[-1].mean():.2f} m/s  "
+              f"role_std={last_std:.4f}")
+
+    role_means  = np.concatenate(all_role_means,  axis=0).astype(np.float32)
+    mean_speed  = np.concatenate(all_mean_speed,  axis=0)
+    mean_ang_sp = np.concatenate(all_mean_ang_sp, axis=0)
+    accel_std   = np.concatenate(all_accel_std,   axis=0)
+    N = role_means.shape[0]
+    print(f"\n  Total data points : {N:,}  (episodes x agents)")
+
+    # PCA
+    pca    = PCA(n_components=2)
+    role2d = pca.fit_transform(role_means)
+    ev     = pca.explained_variance_ratio_
+    print(f"  PCA variance: PC1={ev[0]:.1%}  PC2={ev[1]:.1%}  total={ev.sum():.1%}")
+
+    # Pearson correlation
+    stat_names = ["mean_speed", "angular_speed", "accel_std"]
+    stats_mat  = np.stack([mean_speed, mean_ang_sp, accel_std], axis=1)
+    corr = np.zeros((role_dim, 3), dtype=np.float32)
+    for i in range(role_dim):
+        for j in range(3):
+            r, _ = pearsonr(role_means[:, i], stats_mat[:, j])
+            corr[i, j] = r
+
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    MAX_PTS = 20_000
+    idx = np.random.choice(N, min(N, MAX_PTS), replace=False)
+
+    # PCA scatter — 3 subplots
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    for ax, (stat, label, cmap) in zip(axes, [
+        (mean_speed,  "mean speed (m/s)",          "viridis"),
+        (mean_ang_sp, "angular speed (rad/step)",   "plasma"),
+        (accel_std,   "accel std (m/s2)",           "inferno"),
+    ]):
+        sc = ax.scatter(role2d[idx, 0], role2d[idx, 1],
+                        c=stat[idx], cmap=cmap, alpha=0.25, s=4, rasterized=True)
+        plt.colorbar(sc, ax=ax, label=label, shrink=0.8)
+        ax.set_xlabel(f"PC1 ({ev[0]:.1%})")
+        ax.set_ylabel(f"PC2 ({ev[1]:.1%})")
+        ax.set_title(label)
+    fig.suptitle(f"ROMA role space (PCA) -- {N:,} agent-episodes  [{ckpt_name}]", fontsize=11)
+    plt.tight_layout()
+    pca_out = out_path / f"role_pca_{ckpt_name}.png"
+    plt.savefig(pca_out, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved: {pca_out}")
+
+    # Correlation heatmap
+    fig, ax = plt.subplots(figsize=(5, 1 + role_dim * 0.55))
+    im = ax.imshow(corr, cmap="RdBu_r", vmin=-1, vmax=1, aspect="auto")
+    ax.set_xticks(range(3))
+    ax.set_xticklabels(stat_names, rotation=25, ha="right")
+    ax.set_yticks(range(role_dim))
+    ax.set_yticklabels([f"dim_{i}" for i in range(role_dim)])
+    plt.colorbar(im, ax=ax, label="Pearson r", shrink=0.7)
+    for i in range(role_dim):
+        for j in range(3):
+            ax.text(j, i, f"{corr[i, j]:.2f}", ha="center", va="center",
+                    fontsize=9, color="white" if abs(corr[i, j]) > 0.5 else "black")
+    ax.set_title("Role dim x behavior correlations")
+    plt.tight_layout()
+    corr_out = out_path / f"role_correlation_{ckpt_name}.png"
+    plt.savefig(corr_out, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved: {corr_out}")
+
+    print("\n  Correlation summary (|r| > 0.30 = interpretable):")
+    found = False
+    for i in range(role_dim):
+        for j, name in enumerate(stat_names):
+            if abs(corr[i, j]) > 0.30:
+                print(f"    dim_{i:>2} <-> {name:<18}  r = {corr[i, j]:+.3f}")
+                found = True
+    if not found:
+        print("    (no dim exceeded |r| = 0.30 -- roles may encode non-linear"
+              " structure; try more episodes)")
+    print("=" * 57)
+
+
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint",        type=str,   required=True)
@@ -365,6 +517,9 @@ def parse_args():
                    help="Maps to analyze for the lane-coverage diagnostic. 0 = skip.")
     p.add_argument("--lane_only",         action="store_true",
                    help="Run only the lane diagnostic, then exit (no policy / WOSAC).")
+    # Role analysis
+    p.add_argument("--role_episodes",     type=int,   default=10,
+                   help="Episodes to collect for role PCA + correlation analysis. 0 = skip.")
     return p.parse_args()
 
 
@@ -498,6 +653,18 @@ def evaluate(args):
     csv_path = Path(args.output_dir) / f"wosac_{Path(args.checkpoint).stem}.csv"
     combined.to_csv(csv_path)
     print(f"\n  Results saved -> {csv_path}")
+
+    # --- Part 3: Role analysis ---
+    if args.role_episodes > 0:
+        try:
+            run_role_analysis(
+                policy, env, args.role_episodes, args.role_dim,
+                device, args.output_dir, Path(args.checkpoint).stem,
+            )
+        except Exception as e:
+            print(f"[role analysis skipped: {e}]")
+            import traceback
+            traceback.print_exc()
 
 
 if __name__ == "__main__":
