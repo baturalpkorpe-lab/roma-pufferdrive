@@ -196,6 +196,11 @@ def parse_args():
                    help="Wandb project name. If not set, wandb is disabled.")
     p.add_argument("--wandb_entity",  type=str,   default=None,
                    help="Wandb username or team. Optional.")
+    # Guidance rewards (route waypoint only — speed/heading weights stay 0)
+    p.add_argument("--use_guided_autonomy",    type=int,   default=0,
+                   help="1=enable route guidance reward, 0=off")
+    p.add_argument("--waypoint_reach_threshold", type=float, default=2.0,
+                   help="Metres within which a waypoint counts as hit")
     p.add_argument("--wandb_offline", action="store_true",
                    help="Run wandb in offline mode. Logs saved locally, sync later.")
 
@@ -538,9 +543,15 @@ def train(args):
     ini = load_drive_config()
     env_cfg = dict(ini["env"])
     env_cfg.update({
-        "num_maps":  args.num_maps,
-        "num_agents": args.num_agents,
-        "map_dir":   args.data_dir,
+        "num_maps":               args.num_maps,
+        "num_agents":             args.num_agents,
+        "map_dir":                args.data_dir,
+        "use_guided_autonomy":    args.use_guided_autonomy,
+        "guidance_speed_weight":  0.0,
+        "guidance_heading_weight": 0.0,
+        "waypoint_reach_threshold": args.waypoint_reach_threshold,
+        "use_guidance_observations": 0,
+        "prep_human_data":        False,
     })
     env = Drive(**env_cfg)
 
