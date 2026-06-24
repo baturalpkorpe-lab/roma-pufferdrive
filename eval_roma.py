@@ -347,9 +347,14 @@ def print_progress(agg, batch, max_batches, scenarios):
 def run_role_analysis(policy, env, num_episodes, role_dim, device, out_dir, ckpt_name,
                       wandb_run=None):
     """
-    Collect (role_mean, behavioral stats) over N episodes, then save:
+    Collect role vectors and behavioral stats over N episodes, then save:
       role_pca_<ckpt>.png         — PCA scatter colored by speed / steering / accel
       role_correlation_<ckpt>.png — Pearson-r heatmap: role dims × behavioral stats
+      role_temporal_<ckpt>.png    — mean role dim values across the 91 timesteps
+
+    Temporal metrics (dynamic role design):
+      role/temporal_std        — how much each agent's role shifts within an episode
+      role/mean_step_l2_dist    — mean L2 distance of role vector between consecutive steps
     """
     print("\n" + "=" * 57)
     print("  ROLE ANALYSIS")
@@ -367,10 +372,13 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device, out_dir, ckpt
         return
 
     B = env.num_agents
-    all_role_means  = []
-    all_mean_speed  = []
-    all_mean_ang_sp = []
-    all_accel_std   = []
+    all_role_means   = []
+    all_mean_speed   = []
+    all_mean_ang_sp  = []
+    all_accel_std    = []
+    all_temporal_std = []   # (B,) per episode — role variance over 91 steps per agent
+    all_step_dists   = []   # (B,) per episode — mean L2 dist of role vector per step
+    all_role_seqs    = []   # (91, role_dim) per episode — for temporal plot
 
     policy.eval()
 
@@ -382,7 +390,7 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device, out_dir, ckpt
         xs       = np.zeros((91, B), dtype=np.float32)
         ys       = np.zeros((91, B), dtype=np.float32)
         headings = np.zeros((91, B), dtype=np.float32)
-        role_acc = np.zeros((B, role_dim), dtype=np.float64)
+        role_seq = np.zeros((91, B, role_dim), dtype=np.float32)
 
         for t in range(91):
             ag = env.get_global_agent_state()
@@ -392,7 +400,7 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device, out_dir, ckpt
 
             with torch.no_grad():
                 logits, _, state, role_info = policy(obs, state)
-            role_acc += role_info["role_mean"].float().cpu().numpy()
+            role_seq[t] = role_info["role_mean"].float().cpu().numpy()
 
             action = Categorical(logits=logits.float()).sample()
             obs_np, _, _, _, _ = env.step(action.cpu().numpy().reshape(B, 1))
@@ -407,22 +415,40 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device, out_dir, ckpt
         ang_speed  = np.abs(dh)
         accel      = np.diff(step_speed, axis=0)
 
-        all_role_means .append(role_acc / 91.0)
+        # Time-averaged role (same as before, for PCA / correlation)
+        all_role_means .append(role_seq.mean(axis=0))           # (B, role_dim)
         all_mean_speed .append(step_speed.mean(axis=0))
         all_mean_ang_sp.append(ang_speed.mean(axis=0))
         all_accel_std  .append(accel.std(axis=0))
 
+        # Temporal role dynamics
+        temporal_std = role_seq.std(axis=0).mean(axis=1)        # (B,) — std over time per agent
+        role_diff    = np.diff(role_seq, axis=0)                # (90, B, role_dim)
+        step_dist    = np.linalg.norm(role_diff, axis=2)        # (90, B) — L2 dist each step
+        mean_step_dist = step_dist.mean(axis=0)                 # (B,) — avg L2 per agent
+        all_temporal_std.append(temporal_std)
+        all_step_dists  .append(mean_step_dist)
+        all_role_seqs   .append(role_seq.mean(axis=1))          # (91, role_dim)
+
         last_std = role_info["role_mean"].float().std(dim=0).mean().item()
         print(f"  episode {ep+1:>3}/{num_episodes}  "
               f"mean_speed={all_mean_speed[-1].mean():.2f} m/s  "
-              f"role_std={last_std:.4f}")
+              f"role_std={last_std:.4f}  "
+              f"temporal_std={temporal_std.mean():.4f}  "
+              f"step_dist={mean_step_dist.mean():.4f}")
 
-    role_means  = np.concatenate(all_role_means,  axis=0).astype(np.float32)
-    mean_speed  = np.concatenate(all_mean_speed,  axis=0)
-    mean_ang_sp = np.concatenate(all_mean_ang_sp, axis=0)
-    accel_std   = np.concatenate(all_accel_std,   axis=0)
+    role_means    = np.concatenate(all_role_means,   axis=0).astype(np.float32)
+    mean_speed    = np.concatenate(all_mean_speed,   axis=0)
+    mean_ang_sp   = np.concatenate(all_mean_ang_sp,  axis=0)
+    accel_std     = np.concatenate(all_accel_std,    axis=0)
+    temporal_std   = np.concatenate(all_temporal_std, axis=0)
+    mean_step_dist = np.concatenate(all_step_dists,   axis=0)
+    role_over_time = np.stack(all_role_seqs, axis=0).mean(axis=0)  # (91, role_dim)
+
     N = role_means.shape[0]
-    print(f"\n  Total data points : {N:,}  (episodes x agents)")
+    print(f"\n  Total data points    : {N:,}  (episodes x agents)")
+    print(f"  Temporal role std    : {temporal_std.mean():.4f}  (0=static, >0=dynamic)")
+    print(f"  Mean step L2 dist    : {mean_step_dist.mean():.4f}  (role vector movement per step)")
 
     # PCA
     pca    = PCA(n_components=2)
@@ -484,15 +510,36 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device, out_dir, ckpt
     plt.close()
     print(f"  Saved: {corr_out}")
 
-    # Log images to wandb so they're visible remotely without file transfer
+    # Temporal role plot — mean role dim values across 91 timesteps
+    fig, ax = plt.subplots(figsize=(12, 4))
+    timesteps = np.arange(91)
+    for d in range(role_dim):
+        ax.plot(timesteps, role_over_time[:, d], label=f"dim_{d}", linewidth=1.2)
+    ax.set_xlabel("Timestep")
+    ax.set_ylabel("Mean role value")
+    ax.set_title(f"Role dynamics over episode  [{ckpt_name}]  "
+                 f"(temporal_std={temporal_std.mean():.4f}, "
+                 f"step_dist={mean_step_dist.mean():.4f})")
+    ax.legend(loc="upper right", fontsize=8, ncol=2)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    temporal_out = out_path / f"role_temporal_{ckpt_name}.png"
+    plt.savefig(temporal_out, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved: {temporal_out}")
+
+    # Log images and scalars to wandb
     if wandb_run is not None:
         try:
             import wandb as _wandb
             wandb_run.log({
-                "role/pca_scatter":         _wandb.Image(str(pca_out)),
-                "role/correlation_heatmap": _wandb.Image(str(corr_out)),
+                "role/pca_scatter":          _wandb.Image(str(pca_out)),
+                "role/correlation_heatmap":  _wandb.Image(str(corr_out)),
+                "role/temporal_dynamics":    _wandb.Image(str(temporal_out)),
+                "role/temporal_std":         float(temporal_std.mean()),
+                "role/mean_step_l2_dist":    float(mean_step_dist.mean()),
             })
-            print("  Logged images to wandb")
+            print("  Logged images and scalars to wandb")
         except Exception as e:
             print(f"  wandb image log failed: {e}")
 
