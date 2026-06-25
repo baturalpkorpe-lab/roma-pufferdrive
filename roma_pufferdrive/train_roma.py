@@ -188,8 +188,8 @@ def parse_args():
 
     # Logging / saving
     p.add_argument("--save_dir",      type=str,   default="roma_pufferdrive/checkpoints/roma")
-    p.add_argument("--save_interval", type=int,   default=100_000_000,
-                   help="Save checkpoint every N steps. 100M for 1B run, 1M for CPU test.")
+    p.add_argument("--save_interval", type=int,   default=500_000_000,
+                   help="Save checkpoint every N steps. 500M for 2B run, 1M for CPU test.")
     p.add_argument("--log_interval",  type=int,   default=50_000)
     p.add_argument("--seed",          type=int,   default=0)
 
