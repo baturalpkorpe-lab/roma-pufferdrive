@@ -290,29 +290,26 @@ def run_evaluation(args, policy, device, wandb_run=None):
 
     if not all_scores:
         print("  No episode metrics collected — info dict may not contain score keys.")
-        return
-
-    env_metrics = {
-        "eval/score":           np.mean(all_scores),
-        "eval/collision_rate":  np.mean(all_collisions),
-        "eval/offroad_rate":    np.mean(all_offroads),
-        "eval/completion_rate": np.mean(all_completions),
-        "eval/mean_return":     np.mean(all_returns),
-    }
-    for k, v in env_metrics.items():
-        print(f"  {k.split('/')[-1]:<20}: {v:.4f}")
-
-    log_metrics(wandb_run, env_metrics, step=args.total_steps)
-
-    env_csv = Path(args.save_dir) / "eval_env_metrics.csv"
-    with open(env_csv, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["score", "collision_rate", "offroad_rate",
-                    "completion_rate", "episode_return"])
-        for s, c, o, cp, r in zip(all_scores, all_collisions,
-                                   all_offroads, all_completions, all_returns):
-            w.writerow([s, c, o, cp, r])
-    print(f"  Saved -> {env_csv}")
+    else:
+        env_metrics = {
+            "eval/score":           np.mean(all_scores),
+            "eval/collision_rate":  np.mean(all_collisions),
+            "eval/offroad_rate":    np.mean(all_offroads),
+            "eval/completion_rate": np.mean(all_completions),
+            "eval/mean_return":     np.mean(all_returns),
+        }
+        for k, v in env_metrics.items():
+            print(f"  {k.split('/')[-1]:<20}: {v:.4f}")
+        log_metrics(wandb_run, env_metrics, step=args.total_steps)
+        env_csv = Path(args.save_dir) / "eval_env_metrics.csv"
+        with open(env_csv, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["score", "collision_rate", "offroad_rate",
+                        "completion_rate", "episode_return"])
+            for s, c, o, cp, r in zip(all_scores, all_collisions,
+                                       all_offroads, all_completions, all_returns):
+                w.writerow([s, c, o, cp, r])
+        print(f"  Saved -> {env_csv}")
 
     # --- Role analysis (runs BEFORE WOSAC so time limits don't skip it) ---
     if args.role_episodes > 0:
