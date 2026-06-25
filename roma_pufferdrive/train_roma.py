@@ -210,7 +210,7 @@ def parse_args():
     # Periodic WOSAC evaluation during training (lite settings).
     # Inspired by PufferDrive kj/guidance_reward, which runs WOSAC realism
     # eval every eval_interval epochs during training.
-    p.add_argument("--wosac_interval",      type=int, default=200_000_000,
+    p.add_argument("--wosac_interval",      type=int, default=500_000_000,
                    help="Run a lite WOSAC eval every N training steps. 0 disables.")
     p.add_argument("--wosac_eval_maps",     type=int, default=10000,
                    help="Map pool size for the periodic (lite) WOSAC eval.")
