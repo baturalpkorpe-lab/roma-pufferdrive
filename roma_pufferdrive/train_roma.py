@@ -166,6 +166,8 @@ def parse_args():
     p.add_argument("--mi_weight",     type=float, default=1.0)
     p.add_argument("--div_weight",    type=float, default=0.1,
                    help="Weight on cosine diversity loss. Safe in [-1,+1] range.")
+    p.add_argument("--kl_weight",     type=float, default=0.001,
+                   help="Weight on KL(role||N(0,I)). Keeps all role dims trained.")
 
     # PPO
     p.add_argument("--total_steps",   type=int,   default=1_000_000_000,
@@ -221,7 +223,7 @@ def parse_args():
     # Periodic WOSAC evaluation during training (lite settings).
     # Inspired by PufferDrive kj/guidance_reward, which runs WOSAC realism
     # eval every eval_interval epochs during training.
-    p.add_argument("--wosac_interval",      type=int, default=200_000_000,
+    p.add_argument("--wosac_interval",      type=int, default=500_000_000,
                    help="Run a lite WOSAC eval every N training steps. 0 disables.")
     p.add_argument("--wosac_eval_maps",     type=int, default=10000,
                    help="Map pool size for the periodic (lite) WOSAC eval.")
@@ -583,6 +585,7 @@ def train(args):
         emb_dim    = policy.env_embed_dim,
         mi_weight  = args.mi_weight,
         div_weight = args.div_weight,
+        kl_weight  = args.kl_weight,
     ).to(device)
 
     optimizer = Adam(
@@ -596,7 +599,7 @@ def train(args):
     with open(log_csv, "w", newline="") as f:
         csv.writer(f).writerow([
             "step", "sps", "policy_loss", "value_loss",
-            "mi_loss", "div_loss", "score", "mean_return",
+            "mi_loss", "div_loss", "kl_loss", "score", "mean_return",
             "ego_enc_delta", "partner_enc_delta", "road_enc_delta",
             "role_std", "role_norm",
         ])
@@ -750,7 +753,7 @@ def train(args):
         mb_size = max(1, ptr // args.num_minibatch)
 
         pl  = vl  = torch.tensor(0.0)
-        aux = {"mi_loss": torch.tensor(0.0), "div_loss": torch.tensor(0.0)}
+        aux = {"mi_loss": torch.tensor(0.0), "div_loss": torch.tensor(0.0), "kl_loss": torch.tensor(0.0)}
 
         for _ in range(args.ppo_epochs):
             for start in range(0, ptr, mb_size):
@@ -808,6 +811,7 @@ def train(args):
                   f"value_loss={vl.item():.4f}  "
                   f"mi_loss={aux['mi_loss'].item():.4f}  "
                   f"div_loss={aux['div_loss'].item():.4f}  "
+                  f"kl_loss={aux['kl_loss'].item():.4f}  "
                   f"score={score:.3f}  return={ret:.3f}  "
                   f"role_std={role_std_all:.4f}  role_norm={role_norm_all:.4f}  "
                   f"enc_delta ego={enc_deltas['ego']:.4f} "
@@ -821,6 +825,7 @@ def train(args):
                     round(pl.item(), 6), round(vl.item(), 6),
                     round(aux["mi_loss"].item(), 6),
                     round(aux["div_loss"].item(), 6),
+                    round(aux["kl_loss"].item(), 6),
                     round(score, 4), round(ret, 4),
                     round(enc_deltas["ego"],     6),
                     round(enc_deltas["partner"], 6),
@@ -835,6 +840,7 @@ def train(args):
                 "train/value_loss":       vl.item(),
                 "train/mi_loss":          aux["mi_loss"].item(),
                 "train/div_loss":         aux["div_loss"].item(),
+                "train/kl_loss":          aux["kl_loss"].item(),
                 "train/score":            score,
                 "train/mean_return":      ret,
                 "train/sps":              sps,

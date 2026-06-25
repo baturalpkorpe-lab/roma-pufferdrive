@@ -114,7 +114,7 @@ class MIDecoder(nn.Module):
 
 class RomaAuxLoss(nn.Module):
     """
-    Combined ROMA auxiliary loss: MI loss + diversity loss.
+    Combined ROMA auxiliary loss: MI loss + diversity loss + KL loss.
 
     Args:
         role_dim      : dimension of the role vector
@@ -124,13 +124,15 @@ class RomaAuxLoss(nn.Module):
         window        : number of past env embeddings for behaviour extraction
         mi_weight     : weight on the MI loss (default 1.0, from ROMA paper)
         div_weight    : weight on the diversity loss (default 0.1)
+        kl_weight     : weight on KL(role || N(0,I)) — keeps all dims trained
     """
     def __init__(self, role_dim, emb_dim, behaviour_dim=32, hidden_dim=64,
-                 window=8, mi_weight=1.0, div_weight=0.1):
+                 window=8, mi_weight=1.0, div_weight=0.1, kl_weight=0.001):
         super().__init__()
         self.role_dim   = role_dim
         self.mi_weight  = mi_weight
         self.div_weight = div_weight
+        self.kl_weight  = kl_weight
         self.behaviour_extractor = BehaviourExtractor(emb_dim, behaviour_dim, window)
         self.mi_decoder          = MIDecoder(role_dim, behaviour_dim, hidden_dim)
 
@@ -192,6 +194,16 @@ class RomaAuxLoss(nn.Module):
             total  = (s * s).sum() - B                   # sum of off-diagonal sims
             return total / (B * (B - 1))
 
+    def kl_loss(self, role_mean, role_log_var):
+        """
+        KL(q(z|obs) || N(0,I)) — standard VAE regularizer.
+        Gives a gradient to every role dimension independently, preventing
+        unused dims from staying near their random initialization.
+        Always >= 0 (Gibbs inequality). Safe: role_encoder var_floor
+        guarantees log_var never reaches -inf.
+        """
+        return -0.5 * torch.mean(1 + role_log_var - role_mean.pow(2) - role_log_var.exp())
+
     def forward(self, role_z, role_mean, role_log_var, emb_window):
         """
         Args:
@@ -201,10 +213,11 @@ class RomaAuxLoss(nn.Module):
             emb_window   : last 8 env embeddings (B, 8, emb_dim)
 
         Returns:
-            dict with mi_loss, div_loss, aux_loss
+            dict with mi_loss, div_loss, kl_loss, aux_loss
         """
         l_mi  = self.mi_loss(role_z, emb_window)
         l_div = self.diversity_loss(role_mean)
-        aux   = self.mi_weight * l_mi + self.div_weight * l_div
+        l_kl  = self.kl_loss(role_mean, role_log_var)
+        aux   = self.mi_weight * l_mi + self.div_weight * l_div + self.kl_weight * l_kl
 
-        return {"mi_loss": l_mi, "div_loss": l_div, "aux_loss": aux}
+        return {"mi_loss": l_mi, "div_loss": l_div, "kl_loss": l_kl, "aux_loss": aux}
