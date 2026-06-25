@@ -813,7 +813,7 @@ def train(args):
                   f"value_loss={vl.item():.4f}  "
                   f"mi_loss={aux['mi_loss'].item():.4f}  "
                   f"div_loss={aux['div_loss'].item():.4f}  "
-                  f"kl_loss={aux['kl_loss'].item():.4f}  "
+                  f"kl_loss=0.0000 (disabled)  "
                   f"score={score:.3f}  return={ret:.3f}  "
                   f"role_std={role_std_all:.4f}  role_norm={role_norm_all:.4f}  "
                   f"enc_delta ego={enc_deltas['ego']:.4f} "
@@ -827,7 +827,7 @@ def train(args):
                     round(pl.item(), 6), round(vl.item(), 6),
                     round(aux["mi_loss"].item(), 6),
                     round(aux["div_loss"].item(), 6),
-                    round(aux["kl_loss"].item(), 6),
+                    0.0,  # kl disabled in baseline
                     round(score, 4), round(ret, 4),
                     round(enc_deltas["ego"],     6),
                     round(enc_deltas["partner"], 6),
@@ -842,7 +842,7 @@ def train(args):
                 "train/value_loss":       vl.item(),
                 "train/mi_loss":          aux["mi_loss"].item(),
                 "train/div_loss":         aux["div_loss"].item(),
-                "train/kl_loss":          aux["kl_loss"].item(),
+                "train/kl_loss":          0.0,  # kl disabled in baseline
                 "train/score":            score,
                 "train/mean_return":      ret,
                 "train/sps":              sps,
