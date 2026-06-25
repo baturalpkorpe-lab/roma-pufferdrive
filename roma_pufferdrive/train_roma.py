@@ -29,7 +29,10 @@ automatically if --run_eval is set.
 """
 
 import argparse
+import ast
+import configparser
 import csv
+import os
 import time
 from collections import deque
 from pathlib import Path
@@ -40,6 +43,25 @@ from torch.optim import Adam
 from torch.distributions import Categorical
 from roma_pufferdrive.roma.policy     import RomaPolicy
 from roma_pufferdrive.roma.aux_losses import RomaAuxLoss
+
+
+def load_drive_config():
+    """Read pufferlib's drive.ini and return a nested dict of parsed values."""
+    import pufferlib
+    puffer_dir = os.path.dirname(pufferlib.__file__)
+    default_ini = os.path.join(puffer_dir, "config", "default.ini")
+    drive_ini   = os.path.join(puffer_dir, "config", "ocean", "drive.ini")
+    p = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    p.read([default_ini, drive_ini])
+
+    def _parse(v):
+        try:
+            return ast.literal_eval(v)
+        except Exception:
+            return v
+
+    return {section: {k: _parse(v) for k, v in p[section].items()}
+            for section in p.sections()}
 
 
 # ---------------------------------------------------------------------------
@@ -133,20 +155,7 @@ def parse_args():
                    help="cuda or cpu. Auto-falls back to cpu if cuda unavailable.")
     p.add_argument("--no_amp",        action="store_true",
                    help="Disable bf16 AMP. Use for debugging or on GPUs without bf16 support.")
-    p.add_argument("--reward_vehicle_collision",  type=float, default=-0.5,
-                   help="Penalty per step for vehicle collision. drive.ini default: -0.5.")
-    p.add_argument("--reward_offroad_collision",  type=float, default=-0.5,
-                   help="Penalty per step for going off-road. drive.ini default: -0.5.")
-    p.add_argument("--goal_speed",               type=float, default=100.0,
-                   help="Max target speed m/s toward goal. 100=uncapped (drive.ini default).")
-    p.add_argument("--reward_goal_post_respawn", type=float, default=0.25,
-                   help="Reward for reaching goal after respawn. drive.ini default: 0.25.")
-    p.add_argument("--goal_target_distance",     type=float, default=30.0,
-                   help="Target distance for new goals. drive.ini default: 30.0.")
-    p.add_argument("--resample_frequency",       type=int,   default=910,
-                   help="Steps between map resamples. drive.ini default: 910 (10 episodes).")
-    p.add_argument("--termination_mode",         type=int,   default=1,
-                   help="0=terminate all at episode_length, 1=terminate per agent on reset. drive.ini default: 1.")
+    # Note: reward/goal/resample env settings come from drive.ini via load_drive_config().
 
     # Role
     p.add_argument("--role_dim",      type=int,   default=8,
@@ -177,8 +186,8 @@ def parse_args():
 
     # Logging / saving
     p.add_argument("--save_dir",      type=str,   default="roma_pufferdrive/checkpoints/roma")
-    p.add_argument("--save_interval", type=int,   default=100_000_000,
-                   help="Save checkpoint every N steps. 100M for 1B run, 1M for CPU test.")
+    p.add_argument("--save_interval", type=int,   default=500_000_000,
+                   help="Save checkpoint every N steps. 500M for 2B run, 1M for CPU test.")
     p.add_argument("--log_interval",  type=int,   default=50_000)
     p.add_argument("--seed",          type=int,   default=0)
 
@@ -196,7 +205,7 @@ def parse_args():
     p.add_argument("--eval_episodes",     type=int,   default=30)
     p.add_argument("--wosac_rollouts",    type=int,   default=32)
     p.add_argument("--wosac_num_maps",    type=int,   default=10000)
-    p.add_argument("--wosac_max_batches", type=int,   default=500)
+    p.add_argument("--wosac_max_batches", type=int,   default=100)
 
     # Periodic WOSAC evaluation during training (lite settings).
     # Inspired by PufferDrive kj/guidance_reward, which runs WOSAC realism
@@ -227,19 +236,17 @@ def run_evaluation(args, policy, device, wandb_run=None):
     print("=" * 60)
 
     from pufferlib.ocean.drive.drive import Drive
-    env = Drive(
-        num_maps                  = args.wosac_num_maps,
-        num_agents                = args.num_agents,
-        map_dir                   = args.data_dir,
-        episode_length            = 91,
-        reward_vehicle_collision  = args.reward_vehicle_collision,
-        reward_offroad_collision  = args.reward_offroad_collision,
-        goal_speed                = args.goal_speed,
-        reward_goal_post_respawn  = args.reward_goal_post_respawn,
-        goal_target_distance      = args.goal_target_distance,
-        resample_frequency        = args.resample_frequency,
-        termination_mode          = args.termination_mode,
-    )
+    ini = load_drive_config()
+    wosac_cfg = dict(ini["env"])
+    wosac_cfg.update({
+        "num_maps":     args.wosac_num_maps,
+        "num_agents":   args.num_agents,
+        "map_dir":      args.data_dir,
+        "control_mode": ini["eval"]["wosac_control_mode"],
+        "goal_behavior": ini["eval"]["wosac_goal_behavior"],
+        "goal_radius":   ini["eval"]["wosac_goal_radius"],
+    })
+    env = Drive(**wosac_cfg)
     policy.eval()
 
     # --- Environment metrics ---
@@ -278,6 +285,10 @@ def run_evaluation(args, policy, device, wandb_run=None):
                 all_offroads.append(float(np.mean(info["offroad_rate"])))
                 all_completions.append(float(np.mean(info["completion_rate"])))
                 all_returns.append(float(np.mean(info["episode_return"])))
+
+    if not all_scores:
+        print("  No episode metrics collected — info dict may not contain score keys.")
+        return
 
     env_metrics = {
         "eval/score":           np.mean(all_scores),
@@ -335,17 +346,17 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
 
         if own_env:
             from pufferlib.ocean.drive.drive import Drive
-            env = Drive(
-                num_maps                  = num_maps,
-                num_agents                = args.num_agents,
-                map_dir                   = args.data_dir,
-                episode_length            = 91,
-                reward_vehicle_collision  = args.reward_vehicle_collision,
-                reward_offroad_collision  = args.reward_offroad_collision,
-                goal_speed                = args.goal_speed,
-                # control_mode / goal_behavior left at Drive defaults
-                # (control_vehicles, GOAL_RESPAWN) — original 0.613 baseline.
-            )
+            ini = load_drive_config()
+            wosac_cfg = dict(ini["env"])
+            wosac_cfg.update({
+                "num_maps":      num_maps,
+                "num_agents":    args.num_agents,
+                "map_dir":       args.data_dir,
+                "control_mode":  ini["eval"]["wosac_control_mode"],
+                "goal_behavior": ini["eval"]["wosac_goal_behavior"],
+                "goal_radius":   ini["eval"]["wosac_goal_radius"],
+            })
+            env = Drive(**wosac_cfg)
         policy.eval()
 
         wosac_config = {
@@ -362,7 +373,8 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
         R = rollouts
 
         for batch in range(max_batches):
-            env.resample_maps()
+            if batch > 0:
+                env.resample_maps()
             env.reset()
             gt          = env.get_ground_truth_trajectories()
             agent_state = env.get_global_agent_state()
@@ -378,9 +390,11 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
                 state = policy.initial_state(B, device)
                 for t in range(91):
                     ag = env.get_global_agent_state()
-                    for k in ["x", "y", "z", "heading"]:
-                        sim[k][:, r, t] = ag[k]
-                    sim["id"][:, r, t] = ag["id"]
+                    sim["x"]      [:, r, t] = ag["x"]
+                    sim["y"]      [:, r, t] = ag["y"]
+                    sim["z"]      [:, r, t] = ag.get("z", np.zeros(B))
+                    sim["heading"][:, r, t] = ag["heading"]
+                    sim["id"]     [:, r, t] = ag["id"]
                     with torch.no_grad():
                         logits, _, state, _ = policy(obs, state)
                     action = Cat(logits=logits).sample()
@@ -527,19 +541,14 @@ def train(args):
     wandb_run = init_wandb(args)
 
     from pufferlib.ocean.drive.drive import Drive
-    env = Drive(
-        num_maps                  = args.num_maps,
-        num_agents                = args.num_agents,
-        map_dir                   = args.data_dir,
-        episode_length            = 91,
-        reward_vehicle_collision  = args.reward_vehicle_collision,
-        reward_offroad_collision  = args.reward_offroad_collision,
-        goal_speed                = args.goal_speed,
-        reward_goal_post_respawn  = args.reward_goal_post_respawn,
-        goal_target_distance      = args.goal_target_distance,
-        resample_frequency        = args.resample_frequency,
-        termination_mode          = args.termination_mode,
-    )
+    ini = load_drive_config()
+    env_cfg = dict(ini["env"])
+    env_cfg.update({
+        "num_maps":   args.num_maps,
+        "num_agents": args.num_agents,
+        "map_dir":    args.data_dir,
+    })
+    env = Drive(**env_cfg)
 
     # Auto-detect obs_dim
     obs_probe, _ = env.reset()
@@ -578,6 +587,7 @@ def train(args):
             "step", "sps", "policy_loss", "value_loss",
             "mi_loss", "div_loss", "score", "mean_return",
             "ego_enc_delta", "partner_enc_delta", "road_enc_delta",
+            "role_std", "role_norm",
         ])
     print(f"[ROMA] CSV log       : {log_csv}")
 
@@ -696,6 +706,10 @@ def train(args):
                     if "episode_return" in info:
                         ep_returns.append(float(np.mean(info["episode_return"])))
 
+        # Role health: std across agents (>0 = diverse roles), norm (grows as roles sharpen)
+        role_std_all  = role_info["role_mean"].float().std(dim=0).mean().item()
+        role_norm_all = role_info["role_mean"].float().norm(dim=-1).mean().item()
+
         # ---- GAE ----
         with torch.no_grad():
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
@@ -784,6 +798,7 @@ def train(args):
                   f"mi_loss={aux['mi_loss'].item():.4f}  "
                   f"div_loss={aux['div_loss'].item():.4f}  "
                   f"score={score:.3f}  return={ret:.3f}  "
+                  f"role_std={role_std_all:.4f}  role_norm={role_norm_all:.4f}  "
                   f"enc_delta ego={enc_deltas['ego']:.4f} "
                   f"partner={enc_deltas['partner']:.4f} "
                   f"road={enc_deltas['road']:.4f}")
@@ -799,6 +814,8 @@ def train(args):
                     round(enc_deltas["ego"],     6),
                     round(enc_deltas["partner"], 6),
                     round(enc_deltas["road"],    6),
+                    round(role_std_all,          6),
+                    round(role_norm_all,         6),
                 ])
 
             # Wandb log
@@ -813,6 +830,8 @@ def train(args):
                 "encoders/ego_delta":     enc_deltas["ego"],
                 "encoders/partner_delta": enc_deltas["partner"],
                 "encoders/road_delta":    enc_deltas["road"],
+                "role/role_std":          role_std_all,
+                "role/role_norm":         role_norm_all,
             }, step=global_step)
 
         # ---- Checkpoint ----
