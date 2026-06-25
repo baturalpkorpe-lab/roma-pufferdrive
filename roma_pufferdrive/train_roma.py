@@ -299,6 +299,10 @@ def run_evaluation(args, policy, device, wandb_run=None):
                 all_completions.append(float(np.mean(info["completion_rate"])))
                 all_returns.append(float(np.mean(info["episode_return"])))
 
+    if not all_scores:
+        print("  No episode metrics collected — info dict may not contain score keys.")
+        return
+
     env_metrics = {
         "eval/score":           np.mean(all_scores),
         "eval/collision_rate":  np.mean(all_collisions),
@@ -399,9 +403,11 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
                 state = policy.initial_state(B, device)
                 for t in range(91):
                     ag = env.get_global_agent_state()
-                    for k in ["x", "y", "z", "heading"]:
-                        sim[k][:, r, t] = ag[k]
-                    sim["id"][:, r, t] = ag["id"]
+                    sim["x"]      [:, r, t] = ag["x"]
+                    sim["y"]      [:, r, t] = ag["y"]
+                    sim["z"]      [:, r, t] = ag.get("z", np.zeros(B))
+                    sim["heading"][:, r, t] = ag["heading"]
+                    sim["id"]     [:, r, t] = ag["id"]
                     with torch.no_grad():
                         logits, _, state, _ = policy(obs, state)
                     action = Cat(logits=logits).sample()

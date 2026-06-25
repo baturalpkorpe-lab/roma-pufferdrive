@@ -478,7 +478,8 @@ def evaluate(args):
     print(f"  Interactive metrics       : {agg['interactive_metrics']:.4f}")
     print(f"  Map-based metrics         : {agg['map_based_metrics']:.4f}")
     print()
-    print(f"  ADE                       : {agg['ade']:.4f} m")
+    if "ade" in agg:
+        print(f"  ADE                       : {agg['ade']:.4f} m")
     print(f"  minADE                    : {agg['min_ade']:.4f} m")
     print()
     print(f"  likelihood_linear_speed   : {agg['likelihood_linear_speed']:.4f}")
