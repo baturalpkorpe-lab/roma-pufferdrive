@@ -218,7 +218,7 @@ def parse_args():
     p.add_argument("--eval_episodes",     type=int,   default=30)
     p.add_argument("--wosac_rollouts",    type=int,   default=32)
     p.add_argument("--wosac_num_maps",    type=int,   default=10000)
-    p.add_argument("--wosac_max_batches", type=int,   default=500)
+    p.add_argument("--wosac_max_batches", type=int,   default=100)
 
     # Periodic WOSAC evaluation during training (lite settings).
     # Inspired by PufferDrive kj/guidance_reward, which runs WOSAC realism
