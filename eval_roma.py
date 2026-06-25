@@ -1,10 +1,8 @@
 """
 eval_roma.py — WOSAC realism evaluation for ROMA checkpoints.
 
-Runs two things in one go:
-  1. Lane-coverage diagnostic — parses the map binaries and reports whether the
-     maps have lane centerlines through intersections/turns (decides whether a
-     lane-centering reward would have guidance through junctions).
+Runs two things in order:
+  1. Role diversity analysis — PCA, correlation heatmap, and temporal dynamics.
   2. WOSAC realism metrics — realism meta-score + all 9 sub-metrics.
 
 Usage (from ~/PufferDrive):
@@ -12,18 +10,12 @@ Usage (from ~/PufferDrive):
         --checkpoint roma_main/checkpoints/roma_dim8/roma_dim8_final.pt \
         --wosac_rollouts 32 --wosac_num_maps 10000 --wosac_max_batches 500 \
         --wandb
-
-    # only run the lane diagnostic (no policy / WOSAC):
-    python3 eval_roma.py --checkpoint x --lane_only
 """
 
 import argparse
 import ast
 import configparser
-import glob
-import math
 import os
-import struct
 import numpy as np
 import torch
 from pathlib import Path
@@ -48,207 +40,6 @@ def load_drive_config():
     return {section: {k: _parse(v) for k, v in p[section].items()}
             for section in p.sections()}
 
-
-# ===========================================================================
-# Lane-coverage diagnostic — parses map binaries directly (no pufferlib).
-# Answers: do the maps have lane centerlines through intersections/turns?
-# ===========================================================================
-
-VEHICLE, PEDESTRIAN, CYCLIST = 1, 2, 3
-ROAD_LANE, ROAD_LINE, ROAD_EDGE = 4, 5, 6
-_OBJECT_TYPES = {VEHICLE, PEDESTRIAN, CYCLIST}
-_LANE_THRESHOLD = 4.0  # drive.h: agents > 4 m from any lane are "not aligned"
-
-
-class _MapReader:
-    """Cursor over a map binary (little-endian), matching drive.h load_map_binary."""
-    def __init__(self, buf):
-        self.buf = buf
-        self.pos = 0
-
-    def i32(self):
-        v = struct.unpack_from("<i", self.buf, self.pos)[0]
-        self.pos += 4
-        return v
-
-    def f32(self, n):
-        a = np.frombuffer(self.buf, dtype="<f4", count=n, offset=self.pos)
-        self.pos += 4 * n
-        return a
-
-    def skip(self, nbytes):
-        self.pos += nbytes
-
-
-def _parse_map(path):
-    """Return (lanes, vehicles): lanes=[(x,y)], vehicles=[(x,y,valid)]."""
-    with open(path, "rb") as f:
-        r = _MapReader(f.read())
-    r.i32()                                  # sdc_track_index
-    n_ttp = r.i32()
-    r.skip(4 * n_ttp)                        # tracks_to_predict_indices
-    num_objects = r.i32()
-    num_roads = r.i32()
-
-    lanes, vehicles = [], []
-    for _ in range(num_objects + num_roads):
-        r.i32()                             # scenario_id
-        etype = r.i32()
-        r.i32()                             # id
-        size = r.i32()
-        x = r.f32(size).copy()
-        y = r.f32(size).copy()
-        r.skip(4 * size)                    # z
-        if etype in _OBJECT_TYPES:
-            r.skip(4 * size * 4)            # vx, vy, vz, heading
-            valid = np.frombuffer(r.f32(size).tobytes(), dtype="<i4").copy()
-        else:
-            valid = None
-        r.skip(4 * 6)                       # width,length,height,goalx,goaly,goalz
-        r.skip(4)                           # mark_as_expert
-        if etype == ROAD_LANE:
-            lanes.append((x, y))
-        elif etype == VEHICLE:
-            vehicles.append((x, y, valid))
-    return lanes, vehicles
-
-
-def _total_heading_change(x, y):
-    if len(x) < 3:
-        return 0.0
-    h = np.arctan2(np.diff(y), np.diff(x))
-    dh = (np.diff(h) + np.pi) % (2 * np.pi) - np.pi
-    return float(np.sum(np.abs(dh)))
-
-
-def _build_segments(lanes):
-    starts, ends = [], []
-    for x, y in lanes:
-        if len(x) < 2:
-            continue
-        pts = np.stack([x, y], axis=1)
-        starts.append(pts[:-1])
-        ends.append(pts[1:])
-    if not starts:
-        return None, None
-    return np.concatenate(starts, 0), np.concatenate(ends, 0)
-
-
-def _min_dist_points_to_segments(P, A, B, chunk=512):
-    out = np.empty(len(P), dtype=np.float32)
-    AB = B - A
-    denom = np.einsum("md,md->m", AB, AB) + 1e-9
-    for i in range(0, len(P), chunk):
-        p = P[i:i + chunk]
-        ap = p[:, None, :] - A[None, :, :]
-        t = np.clip(np.einsum("cmd,md->cm", ap, AB) / denom, 0.0, 1.0)
-        proj = A[None, :, :] + t[:, :, None] * AB[None, :, :]
-        out[i:i + chunk] = np.linalg.norm(p[:, None, :] - proj, axis=2).min(axis=1)
-    return out
-
-
-def run_lane_diagnostic(map_dir, num_maps=30, curve_deg=30.0, turn_deg_per_step=3.0):
-    """Print lane-centerline coverage report (entity counts, turn connectors,
-    and how far human trajectories are from lanes split by straight/turning)."""
-    files = sorted(glob.glob(os.path.join(map_dir, "*.bin")))[:num_maps]
-    print("\n" + "=" * 57)
-    print("  LANE-COVERAGE DIAGNOSTIC")
-    print("=" * 57)
-    if not files:
-        print(f"  No .bin files in {map_dir}")
-        return {}
-
-    curve_thr = math.radians(curve_deg)
-    turn_thr = math.radians(turn_deg_per_step)
-    n_lanes_total = n_veh_total = 0
-    lane_curv, lane_len = [], []
-    d_straight, d_turn = [], []
-
-    n_parse_errors = 0
-    for path in files:
-        try:
-            lanes, vehicles = _parse_map(path)
-        except Exception as e:
-            n_parse_errors += 1
-            if n_parse_errors <= 3:
-                print(f"  WARNING: failed to parse {os.path.basename(path)}: {e}")
-            continue
-        n_lanes_total += len(lanes)
-        n_veh_total += len(vehicles)
-        for x, y in lanes:
-            lane_curv.append(_total_heading_change(x, y))
-            lane_len.append(float(np.sum(np.hypot(np.diff(x), np.diff(y)))))
-
-        A, B = _build_segments(lanes)
-        if A is None:
-            continue
-        pts, turning = [], []
-        for x, y, valid in vehicles:
-            if valid is None or valid.astype(bool).sum() < 3:
-                continue
-            v = valid.astype(bool)
-            xy = np.stack([x, y], axis=1)
-            h = np.arctan2(np.diff(y), np.diff(x))
-            dh = np.abs((np.diff(h) + np.pi) % (2 * np.pi) - np.pi)
-            for k in range(1, len(x) - 1):
-                if v[k] and v[k - 1] and v[k + 1]:
-                    pts.append(xy[k])
-                    turning.append(dh[k - 1] > turn_thr)
-        if not pts:
-            continue
-        d = _min_dist_points_to_segments(np.asarray(pts, dtype=np.float32), A, B)
-        turning = np.asarray(turning, dtype=bool)
-        d_straight.append(d[~turning])
-        d_turn.append(d[turning])
-
-    m = {}  # metrics dict (returned for wandb logging)
-    n_ok = len(files) - n_parse_errors
-    m["lane/lanes_per_map"]    = n_lanes_total / max(n_ok, 1)
-    m["lane/vehicles_per_map"] = n_veh_total   / max(n_ok, 1)
-    print(f"  map_dir     : {map_dir}")
-    print(f"  maps found  : {len(files)}  (parsed ok: {n_ok}, errors: {n_parse_errors})")
-    if n_parse_errors == len(files):
-        print("  ERROR: all maps failed to parse — check map_dir path and binary format")
-        return m
-    print(f"  ROAD_LANE   : {n_lanes_total} ({m['lane/lanes_per_map']:.0f}/map)")
-    print(f"  VEHICLE     : {n_veh_total} ({m['lane/vehicles_per_map']:.0f}/map)")
-
-    if lane_curv:
-        lc, ll = np.array(lane_curv), np.array(lane_len)
-        n_curved = int(np.sum(lc > curve_thr))
-        m["lane/turn_connector_pct"] = 100 * n_curved / len(lc)
-        m["lane/bend_median_deg"]    = math.degrees(np.median(lc))
-        m["lane/bend_max_deg"]       = math.degrees(lc.max())
-        m["lane/length_median_m"]    = float(np.median(ll))
-        print(f"\n  turn connectors (>{curve_deg:.0f}deg bend): {n_curved} "
-              f"({m['lane/turn_connector_pct']:.1f}% of lanes)")
-        print(f"  lane bend: median {m['lane/bend_median_deg']:.1f}deg | "
-              f"max {m['lane/bend_max_deg']:.1f}deg")
-        print(f"  lane length: median {m['lane/length_median_m']:.1f}m")
-
-    ds = np.concatenate(d_straight) if d_straight else np.array([])
-    dt = np.concatenate(d_turn) if d_turn else np.array([])
-    print("\n  human distance to nearest lane centerline:")
-    for label, key, d in (("straight", "straight", ds), ("turning ", "turning", dt)):
-        if len(d) == 0:
-            print(f"    {label}: (none)")
-            continue
-        m[f"lane/{key}_dist_median_m"] = float(np.median(d))
-        m[f"lane/{key}_dist_90pct_m"]  = float(np.percentile(d, 90))
-        m[f"lane/{key}_pct_over_4m"]   = 100 * float(np.mean(d > _LANE_THRESHOLD))
-        print(f"    {label}: n={len(d):>7} | median {m[f'lane/{key}_dist_median_m']:.2f}m | "
-              f"90pct {m[f'lane/{key}_dist_90pct_m']:.2f}m | "
-              f">{_LANE_THRESHOLD:.0f}m: {m[f'lane/{key}_pct_over_4m']:.1f}%")
-    if len(dt):
-        far = float(np.mean(dt > _LANE_THRESHOLD))
-        m["lane/turns_covered"] = 1.0 if far < 0.15 else 0.0
-        verdict = ("turns ARE covered - lane-centering reward works through junctions"
-                   if far < 0.15 else
-                   "turns POORLY covered - reward gives 0 through many turns")
-        print(f"\n  => {100*far:.1f}% of human TURNING points are >4m from any lane")
-        print(f"     {verdict}")
-    print("=" * 57)
-    return m
 
 
 class WOSACPolicyAdapter:
@@ -462,8 +253,11 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device, out_dir, ckpt
     corr = np.zeros((role_dim, 3), dtype=np.float32)
     for i in range(role_dim):
         for j in range(3):
-            r, _ = pearsonr(role_means[:, i], stats_mat[:, j])
-            corr[i, j] = r
+            if role_means[:, i].std() == 0 or stats_mat[:, j].std() == 0:
+                corr[i, j] = float("nan")
+            else:
+                r, _ = pearsonr(role_means[:, i], stats_mat[:, j])
+                corr[i, j] = r
 
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -501,8 +295,10 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device, out_dir, ckpt
     plt.colorbar(im, ax=ax, label="Pearson r", shrink=0.7)
     for i in range(role_dim):
         for j in range(3):
-            ax.text(j, i, f"{corr[i, j]:.2f}", ha="center", va="center",
-                    fontsize=9, color="white" if abs(corr[i, j]) > 0.5 else "black")
+            val = corr[i, j]
+            label = "N/A" if np.isnan(val) else f"{val:.2f}"
+            ax.text(j, i, label, ha="center", va="center",
+                    fontsize=9, color="white" if abs(val) > 0.5 else "black")
     ax.set_title("Role dim x behavior correlations")
     plt.tight_layout()
     corr_out = out_path / f"role_correlation_{ckpt_name}.png"
@@ -572,19 +368,12 @@ def parse_args():
     p.add_argument("--wandb",             action="store_true")
     p.add_argument("--wandb_project",     type=str,   default="roma-pufferdrive")
     p.add_argument("--wandb_run_name",    type=str,   default=None)
-    # Lane-coverage diagnostic
-    p.add_argument("--lane_maps",         type=int,   default=30,
-                   help="Maps to analyze for the lane-coverage diagnostic. 0 = skip.")
-    p.add_argument("--lane_only",         action="store_true",
-                   help="Run only the lane diagnostic, then exit (no policy / WOSAC).")
-    # Role analysis
     p.add_argument("--role_episodes",     type=int,   default=10,
                    help="Episodes to collect for role PCA + correlation analysis. 0 = skip.")
     return p.parse_args()
 
 
 def evaluate(args):
-    # wandb is initialized first so the lane diagnostic can log to it too.
     wandb_run = None
     if args.wandb:
         import wandb
@@ -593,21 +382,6 @@ def evaluate(args):
         wandb_run.define_metric("wosac/batch")
         wandb_run.define_metric("wosac/*", step_metric="wosac/batch")
 
-    # --- Part 1: lane-coverage diagnostic (no policy / env needed) ---
-    # Non-fatal: a diagnostic failure must never block the WOSAC eval.
-    if args.lane_maps > 0:
-        try:
-            lane_metrics = run_lane_diagnostic(args.map_dir, args.lane_maps)
-            if wandb_run and lane_metrics:
-                wandb_run.log(lane_metrics)
-        except Exception as e:
-            print(f"[lane diagnostic skipped: {e}]")
-    if args.lane_only:
-        if wandb_run:
-            wandb_run.finish()
-        return
-
-    # --- Part 2: WOSAC realism metrics ---
     if args.device == "cuda" and not torch.cuda.is_available():
         args.device = "cpu"
     device = torch.device(args.device)
@@ -628,6 +402,20 @@ def evaluate(args):
     })
     env = Drive(**wosac_cfg)
 
+    # --- Part 1: Role diversity analysis ---
+    if args.role_episodes > 0:
+        try:
+            run_role_analysis(
+                policy, env, args.role_episodes, args.role_dim,
+                device, args.output_dir, Path(args.checkpoint).stem,
+                wandb_run=wandb_run,
+            )
+        except Exception as e:
+            print(f"[role analysis skipped: {e}]")
+            import traceback
+            traceback.print_exc()
+
+    # --- Part 2: WOSAC realism metrics ---
     import pandas as pd
     from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
 
@@ -714,18 +502,8 @@ def evaluate(args):
     combined.to_csv(csv_path)
     print(f"\n  Results saved -> {csv_path}")
 
-    # --- Part 3: Role analysis ---
-    if args.role_episodes > 0:
-        try:
-            run_role_analysis(
-                policy, env, args.role_episodes, args.role_dim,
-                device, args.output_dir, Path(args.checkpoint).stem,
-                wandb_run=wandb_run,
-            )
-        except Exception as e:
-            print(f"[role analysis skipped: {e}]")
-            import traceback
-            traceback.print_exc()
+    if wandb_run:
+        wandb_run.finish()
 
 
 if __name__ == "__main__":
