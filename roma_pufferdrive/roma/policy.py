@@ -138,10 +138,12 @@ class RomaPolicy(nn.Module):
         r = self.road_enc(roads)
         return torch.cat([e, p, r], dim=-1)
 
-    def forward(self, obs, state):
+    def forward(self, obs, state, forced_role=None):
         role_h, policy_h, emb_win = state
         env_emb  = self._env_embed(obs)
         role_z, role_mean, role_log_var, new_role_h = self.role_encoder(env_emb, role_h)
+        if forced_role is not None:
+            role_z = forced_role
         policy_input = torch.cat([env_emb, role_z], dim=-1)
         new_policy_h = self.policy_gru(policy_input, policy_h)
         logits   = self.actor(new_policy_h)

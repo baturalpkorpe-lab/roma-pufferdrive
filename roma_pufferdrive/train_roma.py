@@ -219,6 +219,8 @@ def parse_args():
     p.add_argument("--wosac_rollouts",    type=int,   default=32)
     p.add_argument("--wosac_num_maps",    type=int,   default=10000)
     p.add_argument("--wosac_max_batches", type=int,   default=100)
+    p.add_argument("--role_episodes",     type=int,   default=10,
+                   help="Episodes for role analysis before WOSAC. 0 = skip.")
 
     # Periodic WOSAC evaluation during training (lite settings).
     # Inspired by PufferDrive kj/guidance_reward, which runs WOSAC realism
@@ -324,6 +326,21 @@ def run_evaluation(args, policy, device, wandb_run=None):
                                    all_offroads, all_completions, all_returns):
             w.writerow([s, c, o, cp, r])
     print(f"  Saved -> {env_csv}")
+
+    # --- Role analysis (runs BEFORE WOSAC so time limits don't skip it) ---
+    if args.role_episodes > 0:
+        try:
+            import sys
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from eval_roma import run_role_analysis
+            ckpt_name = f"roma_dim{args.role_dim}_final"
+            run_role_analysis(
+                policy, env, args.role_episodes, args.role_dim,
+                device, args.save_dir, ckpt_name, wandb_run=wandb_run,
+            )
+        except Exception as e:
+            print(f"[ROMA] Role analysis failed: {e}")
+            import traceback; traceback.print_exc()
 
     # --- WOSAC metrics ---
     run_wosac_eval(args, policy, device, wandb_run,
