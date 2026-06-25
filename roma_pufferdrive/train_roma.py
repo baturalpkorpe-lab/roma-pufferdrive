@@ -241,13 +241,12 @@ def run_evaluation(args, policy, device, wandb_run=None):
     ini = load_drive_config()
     wosac_cfg = dict(ini["env"])
     wosac_cfg.update({
-        "num_maps":        args.wosac_num_maps,
-        "num_agents":      args.num_agents,
-        "map_dir":         args.data_dir,
-        "control_mode":    ini["eval"]["wosac_control_mode"],
-        "goal_behavior":   2,
-        "goal_radius":     ini["eval"]["wosac_goal_radius"],
-        "prep_human_data": False,
+        "num_maps":      args.wosac_num_maps,
+        "num_agents":    args.num_agents,
+        "map_dir":       args.data_dir,
+        "control_mode":  ini["eval"]["wosac_control_mode"],
+        "goal_behavior": 2,
+        "goal_radius":   ini["eval"]["wosac_goal_radius"],
     })
     env = Drive(**wosac_cfg)
     policy.eval()
@@ -364,13 +363,12 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
             ini = load_drive_config()
             wosac_cfg = dict(ini["env"])
             wosac_cfg.update({
-                "num_maps":        num_maps,
-                "num_agents":      args.num_agents,
-                "map_dir":         args.data_dir,
-                "control_mode":    ini["eval"]["wosac_control_mode"],
-                "goal_behavior":   2,
-                "goal_radius":     ini["eval"]["wosac_goal_radius"],
-                "prep_human_data": False,
+                "num_maps":      num_maps,
+                "num_agents":    args.num_agents,
+                "map_dir":       args.data_dir,
+                "control_mode":  ini["eval"]["wosac_control_mode"],
+                "goal_behavior": 2,
+                "goal_radius":   ini["eval"]["wosac_goal_radius"],
             })
             env = Drive(**wosac_cfg)
         policy.eval()
