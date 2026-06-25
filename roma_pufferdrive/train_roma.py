@@ -206,6 +206,8 @@ def parse_args():
     p.add_argument("--wosac_rollouts",    type=int,   default=32)
     p.add_argument("--wosac_num_maps",    type=int,   default=10000)
     p.add_argument("--wosac_max_batches", type=int,   default=100)
+    p.add_argument("--role_episodes",     type=int,   default=10,
+                   help="Episodes for role analysis before WOSAC. 0 = skip.")
 
     # Periodic WOSAC evaluation during training (lite settings).
     # Inspired by PufferDrive kj/guidance_reward, which runs WOSAC realism
@@ -311,6 +313,21 @@ def run_evaluation(args, policy, device, wandb_run=None):
                                    all_offroads, all_completions, all_returns):
             w.writerow([s, c, o, cp, r])
     print(f"  Saved -> {env_csv}")
+
+    # --- Role analysis (runs BEFORE WOSAC so time limits don't skip it) ---
+    if args.role_episodes > 0:
+        try:
+            import sys
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from eval_roma import run_role_analysis
+            ckpt_name = f"roma_dim{args.role_dim}_final"
+            run_role_analysis(
+                policy, env, args.role_episodes, args.role_dim,
+                device, args.save_dir, ckpt_name, wandb_run=wandb_run,
+            )
+        except Exception as e:
+            print(f"[ROMA] Role analysis failed: {e}")
+            import traceback; traceback.print_exc()
 
     # --- WOSAC metrics ---
     run_wosac_eval(args, policy, device, wandb_run,
@@ -544,9 +561,10 @@ def train(args):
     ini = load_drive_config()
     env_cfg = dict(ini["env"])
     env_cfg.update({
-        "num_maps":   args.num_maps,
-        "num_agents": args.num_agents,
-        "map_dir":    args.data_dir,
+        "num_maps":        args.num_maps,
+        "num_agents":      args.num_agents,
+        "map_dir":         args.data_dir,
+        "prep_human_data": False,
     })
     env = Drive(**env_cfg)
 
@@ -572,6 +590,7 @@ def train(args):
         emb_dim    = policy.env_embed_dim,
         mi_weight  = args.mi_weight,
         div_weight = args.div_weight,
+        kl_weight  = 0.0,   # baseline: no KL regularizer
     ).to(device)
 
     optimizer = Adam(
@@ -585,7 +604,7 @@ def train(args):
     with open(log_csv, "w", newline="") as f:
         csv.writer(f).writerow([
             "step", "sps", "policy_loss", "value_loss",
-            "mi_loss", "div_loss", "score", "mean_return",
+            "mi_loss", "div_loss", "kl_loss", "score", "mean_return",
             "ego_enc_delta", "partner_enc_delta", "road_enc_delta",
             "role_std", "role_norm",
         ])
@@ -739,7 +758,7 @@ def train(args):
         mb_size = max(1, ptr // args.num_minibatch)
 
         pl  = vl  = torch.tensor(0.0)
-        aux = {"mi_loss": torch.tensor(0.0), "div_loss": torch.tensor(0.0)}
+        aux = {"mi_loss": torch.tensor(0.0), "div_loss": torch.tensor(0.0), "kl_loss": torch.tensor(0.0)}
 
         for _ in range(args.ppo_epochs):
             for start in range(0, ptr, mb_size):
@@ -797,6 +816,7 @@ def train(args):
                   f"value_loss={vl.item():.4f}  "
                   f"mi_loss={aux['mi_loss'].item():.4f}  "
                   f"div_loss={aux['div_loss'].item():.4f}  "
+                  f"kl_loss={aux['kl_loss'].item():.4f}  "
                   f"score={score:.3f}  return={ret:.3f}  "
                   f"role_std={role_std_all:.4f}  role_norm={role_norm_all:.4f}  "
                   f"enc_delta ego={enc_deltas['ego']:.4f} "
@@ -810,6 +830,7 @@ def train(args):
                     round(pl.item(), 6), round(vl.item(), 6),
                     round(aux["mi_loss"].item(), 6),
                     round(aux["div_loss"].item(), 6),
+                    round(aux["kl_loss"].item(), 6),
                     round(score, 4), round(ret, 4),
                     round(enc_deltas["ego"],     6),
                     round(enc_deltas["partner"], 6),
@@ -824,6 +845,7 @@ def train(args):
                 "train/value_loss":       vl.item(),
                 "train/mi_loss":          aux["mi_loss"].item(),
                 "train/div_loss":         aux["div_loss"].item(),
+                "train/kl_loss":          aux["kl_loss"].item(),
                 "train/score":            score,
                 "train/mean_return":      ret,
                 "train/sps":              sps,
