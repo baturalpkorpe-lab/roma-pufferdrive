@@ -786,7 +786,7 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device,
         ax_c.set_xticklabels(stat_names, rotation=25, ha="right")
         ax_c.set_yticks(range(role_dim))
         ax_c.set_yticklabels([f"dim_{i}" for i in range(role_dim)])
-        plt.colorbar(im, ax_c, label="Pearson r", shrink=0.7)
+        fig_corr.colorbar(im, ax=ax_c, label="Pearson r", shrink=0.7)
         for i in range(role_dim):
             for j in range(3):
                 val   = corr_beh[i, j]
