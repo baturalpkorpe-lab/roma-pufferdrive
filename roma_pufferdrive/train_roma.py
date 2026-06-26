@@ -238,6 +238,191 @@ def parse_args():
 
 
 # ---------------------------------------------------------------------------
+# Render rollouts
+# ---------------------------------------------------------------------------
+
+def run_render_rollouts(args, policy, device, wandb_run=None):
+    """
+    Renders 4 maps × 2 runs (free + forced role sweep) → 8 MP4 videos.
+    Also produces role heatmaps (role_dim × 91 timesteps × 32 agents) per run.
+    Everything uploaded to wandb under render/map{i}/{free|forced}_{run|role_plot}.
+
+    Wandb image fix: wandb.Image(fig) is logged BEFORE fig.savefig() and
+    plt.close(), passing the Figure object directly to avoid 'no matching media'.
+
+    Forced sweep layout (32 agents, role_dim=8, 4 agents per dimension):
+      Group d → agents [d*4, d*4+1] sweep role[d] from -1 → +1
+               agents [d*4+2, d*4+3] sweep role[d] from +1 → -1
+      All other dims = 0. Agents cross at 0 at the episode midpoint.
+    """
+    import gc, os, shutil
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from pathlib import Path
+    from torch.distributions import Categorical
+    from pufferlib.ocean.drive.drive import Drive, RenderView
+
+    N_MAPS   = 4
+    T        = 91
+    B        = 32
+    out_dir  = Path(args.save_dir) / "render_rollouts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    orig_dir = os.getcwd()
+
+    print("\n" + "=" * 60)
+    print("  RENDER ROLLOUTS")
+    print("=" * 60)
+
+    def _log_image(fig, key):
+        if wandb_run is None:
+            return
+        try:
+            import wandb as _w
+            wandb_run.log({key: _w.Image(fig)})
+        except Exception as e:
+            print(f"  [wandb/{key}] {e}")
+
+    def _log_video(path, key):
+        if wandb_run is None:
+            return
+        try:
+            import wandb as _w
+            wandb_run.log({key: _w.Video(str(path), fps=10, format="mp4")})
+        except Exception as e:
+            print(f"  [wandb/{key}] {e}")
+
+    def _make_env(seed):
+        return Drive(
+            num_maps      = 1,
+            num_agents    = B,
+            map_dir       = args.data_dir,
+            episode_length= T,
+            render_mode   = RenderView.FULL_SIM_STATE,
+            seed          = seed,
+        )
+
+    def _sweep_roles(t):
+        """(B, role_dim) tensor: group d sweeps dim d, -1→+1 / +1→-1."""
+        roles = torch.zeros(B, args.role_dim)
+        alpha = -1.0 + 2.0 * t / (T - 1)
+        for d in range(args.role_dim):
+            base = d * 4
+            if base + 3 >= B:
+                break
+            roles[base,     d] =  alpha   # subgroup A: -1 → +1
+            roles[base + 1, d] =  alpha
+            roles[base + 2, d] = -alpha   # subgroup B: +1 → -1
+            roles[base + 3, d] = -alpha
+        return roles.to(device)
+
+    def _run_episode(env, forced_fn=None):
+        """Run one episode, return role_vecs (T, B, role_dim)."""
+        obs_np, _ = env.reset()
+        obs   = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
+        state = policy.initial_state(B, device)
+        role_vecs = np.zeros((T, B, args.role_dim), dtype=np.float32)
+
+        for t in range(T):
+            env.render()
+            forced = forced_fn(t) if forced_fn is not None else None
+            with torch.no_grad():
+                logits, _, state, role_info = policy(obs, state, forced_role=forced)
+            role_vecs[t] = role_info["role_z"].cpu().numpy()
+            action = Categorical(logits=logits.float()).sample()
+            obs_np, _, _, _, _ = env.step(action.cpu().numpy().reshape(B, 1))
+            obs = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
+
+        return role_vecs
+
+    def _make_role_plot(role_vecs, title):
+        """
+        role_vecs: (T, B, role_dim) → Figure with role_dim subplots.
+        squeeze=False ensures axes is always a 2-D ndarray (safe for any role_dim).
+        Logged via wandb.Image(fig) BEFORE savefig to avoid 'no matching media'.
+        """
+        n_dims = args.role_dim
+        ncols  = min(n_dims, 4)
+        nrows  = (n_dims + ncols - 1) // ncols
+        fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows),
+                                 squeeze=False)
+        fig.patch.set_facecolor("#0f0f1a")
+        fig.suptitle(title, color="#e8e8f0", fontsize=13, fontweight="bold")
+        axes = axes.flatten()
+
+        data = role_vecs.transpose(1, 0, 2)   # (B, T, role_dim)
+        vmax = max(float(np.abs(data).max()), 0.5)
+
+        for d in range(n_dims):
+            ax = axes[d]
+            ax.set_facecolor("#1a1a2e")
+            im = ax.imshow(
+                data[:, :, d],
+                aspect="auto", cmap="coolwarm",
+                vmin=-vmax, vmax=vmax, interpolation="nearest",
+            )
+            ax.set_title(f"dim {d}", color="#e8e8f0", fontsize=10)
+            ax.set_xlabel("timestep", color="#e8e8f0", fontsize=8)
+            ax.set_ylabel("agent",    color="#e8e8f0", fontsize=8)
+            ax.tick_params(colors="#e8e8f0", labelsize=7)
+            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+        for d in range(n_dims, len(axes)):
+            axes[d].set_visible(False)
+
+        fig.tight_layout()
+        return fig
+
+    def _collect_mp4(tmp_dir, dest_path):
+        """Move the first .mp4 found in tmp_dir to dest_path. Returns path or None."""
+        mp4s = list(Path(tmp_dir).glob("*.mp4"))
+        if not mp4s:
+            return None
+        shutil.move(str(mp4s[0]), str(dest_path))
+        return dest_path
+
+    for i in range(N_MAPS):
+        seed = 100 + i
+        print(f"\n  Map {i+1}/{N_MAPS}  (seed={seed})")
+
+        for run_type, forced_fn in [("free", None), ("forced", _sweep_roles)]:
+            tmp_dir = out_dir / f"map{i}_{run_type}_tmp"
+            tmp_dir.mkdir(exist_ok=True)
+            try:
+                os.chdir(tmp_dir)
+                env = _make_env(seed)
+                role_vecs = _run_episode(env, forced_fn)
+                env.close()   # closes ffmpeg pipe so MP4 is finalized
+                del env
+                gc.collect()  # ensure C-level cleanup before we read the file
+            finally:
+                os.chdir(orig_dir)
+
+            # Role heatmap — log to wandb BEFORE savefig
+            label     = "Free Role Vectors" if run_type == "free" else "Forced Sweep"
+            plot_title= f"{label} — Map {i+1} (seed {seed})"
+            fig = _make_role_plot(role_vecs, plot_title)
+            _log_image(fig, f"render/map{i+1}/{run_type}_role_plot")
+            plot_path = out_dir / f"map{i}_{run_type}_roles.png"
+            fig.savefig(plot_path, dpi=120, bbox_inches="tight", facecolor="#0f0f1a")
+            plt.close(fig)
+            print(f"  Saved: {plot_path}")
+
+            # Video — MP4 is finalized after env.close() + gc.collect() above
+            vid_path = out_dir / f"map{i}_{run_type}.mp4"
+            found    = _collect_mp4(tmp_dir, vid_path)
+            if found:
+                _log_video(found, f"render/map{i+1}/{run_type}_run")
+                print(f"  Saved: {found}")
+            else:
+                print(f"  [render] No MP4 found for map{i+1} {run_type} — render may need a display")
+
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    print(f"\n  Render rollouts done → {out_dir}")
+
+
+# ---------------------------------------------------------------------------
 # Post-training evaluation
 # ---------------------------------------------------------------------------
 
@@ -339,6 +524,13 @@ def run_evaluation(args, policy, device, wandb_run=None):
         except Exception as e:
             print(f"[ROMA] Role analysis failed: {e}")
             import traceback; traceback.print_exc()
+
+    # --- Render rollouts (before WOSAC — failure must not block WOSAC) ---
+    try:
+        run_render_rollouts(args, policy, device, wandb_run)
+    except Exception as e:
+        print(f"[ROMA] Render rollouts failed: {e}")
+        import traceback; traceback.print_exc()
 
     # --- WOSAC metrics ---
     run_wosac_eval(args, policy, device, wandb_run,
