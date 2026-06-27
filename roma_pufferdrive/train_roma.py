@@ -445,7 +445,6 @@ def run_evaluation(args, policy, device, wandb_run=None):
         "control_mode":    ini["eval"]["wosac_control_mode"],
         "goal_behavior":   2,
         "goal_radius":     ini["eval"]["wosac_goal_radius"],
-        "prep_human_data": False,
     })
     env = Drive(**wosac_cfg)
     policy.eval()
@@ -575,7 +574,6 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
                 "control_mode":    ini["eval"]["wosac_control_mode"],
                 "goal_behavior":   2,
                 "goal_radius":     ini["eval"]["wosac_goal_radius"],
-                "prep_human_data": False,
             })
             env = Drive(**wosac_cfg)
         policy.eval()
