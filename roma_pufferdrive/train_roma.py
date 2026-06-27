@@ -630,8 +630,11 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
                 if new:
                     all_results.append(df[df.index.isin(new)])
                     unique_scenarios.update(new)
-            except Exception:
-                pass
+            except Exception as e:
+                if batch == 0:
+                    import traceback
+                    print(f"  [WOSAC] compute_metrics error (batch {batch}): {e}")
+                    traceback.print_exc()
 
             if (batch + 1) % 10 == 0:
                 score = pd.concat(all_results)["realism_meta_score"].mean() \
