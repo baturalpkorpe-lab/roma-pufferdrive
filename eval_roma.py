@@ -655,17 +655,22 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device,
     K = 5   # clusters — covers main driving archetypes
 
     def _save_log(fig, name):
-        """Log to wandb via Figure object (no file path), then save to disk."""
-        if wandb_run is not None:
-            try:
-                import wandb as _wandb
-                wandb_run.log({f"role/{name}": _wandb.Image(fig)})
-            except Exception as e:
-                print(f"  [wandb/{name}] {e}")
+        """Save the figure to disk first, then log the saved PNG *file* to wandb.
+
+        Logging the file path (not the live matplotlib Figure) avoids the
+        "No matching media" panels that appear when wandb can't resolve a
+        figure object after it's been closed.
+        """
         path = out_path / f"role_{name}_{ckpt_name}.png"
         fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"  Saved: {path}")
+        if wandb_run is not None:
+            try:
+                import wandb as _wandb
+                wandb_run.log({f"role/{name}": _wandb.Image(str(path))})
+            except Exception as e:
+                print(f"  [wandb/{name}] {e}")
 
     # ── 1. Collect data ───────────────────────────────────────────────────────
     print(f"\n  Collecting {num_episodes} episodes...")
@@ -676,6 +681,23 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device,
 
     # ── 2. Behavioral stats ───────────────────────────────────────────────────
     stats = _behavioral_stats(data["xs"], data["ys"], data["headings"])
+
+    # ── 2b. Drop non-active / artifact agents before clustering ───────────────
+    # Inactive padding slots (not real vehicles in the scene) carry placeholder
+    # positions that np.diff turns into impossible speeds (hundreds of m/s),
+    # forming a junk cluster. Keep only physically-plausible agents so roles are
+    # clustered over meaningful driving behaviour.
+    SPEED_CAP = 45.0   # m/s (~162 km/h) — above any real vehicle on these maps
+    valid  = np.isfinite(stats["max_speed"]) & (stats["max_speed"] <= SPEED_CAP)
+    n_drop = int((~valid).sum())
+    if valid.sum() >= K:
+        role_means = role_means[valid]
+        stats      = {k: v[valid] for k, v in stats.items()}
+        N          = len(role_means)
+        print(f"  Dropped {n_drop:,} non-active/artifact agents "
+              f"(max speed > {SPEED_CAP:.0f} m/s) -> {N:,} valid agents clustered")
+    else:
+        print(f"  [warn] only {int(valid.sum())} valid agents; skipping artifact filter")
 
     # ── 3. k-means: K representative real roles ───────────────────────────────
     print(f"\n  k-means (k={K})...")

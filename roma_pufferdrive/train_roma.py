@@ -763,7 +763,6 @@ def train(args):
         "num_maps":        args.num_maps,
         "num_agents":      args.num_agents,
         "map_dir":         args.data_dir,
-        "prep_human_data": False,
     })
     env = Drive(**env_cfg)
 
@@ -789,7 +788,6 @@ def train(args):
         emb_dim    = policy.env_embed_dim,
         mi_weight  = args.mi_weight,
         div_weight = args.div_weight,
-        kl_weight  = 0.0,   # baseline: no KL regularizer
     ).to(device)
 
     optimizer = Adam(
