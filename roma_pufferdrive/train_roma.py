@@ -413,7 +413,7 @@ def run_render_rollouts(args, policy, device, wandb_run=None):
 # Post-training evaluation
 # ---------------------------------------------------------------------------
 
-def run_evaluation(args, policy, device, wandb_run=None):
+def run_evaluation(args, policy, device, wandb_run=None, global_step=None):
     """
     Run environment metrics + WOSAC evaluation after training.
     Results saved to CSV. If wandb_run is provided, logs there too.
@@ -421,6 +421,13 @@ def run_evaluation(args, policy, device, wandb_run=None):
     print("\n" + "=" * 60)
     print("  POST-TRAINING EVALUATION")
     print("=" * 60)
+
+    # Post-training logs must land at a step >= wandb's current counter.
+    # global_step overshoots args.total_steps (it increments by num_agents),
+    # so logging at args.total_steps is BEHIND the counter and wandb silently
+    # drops it ("step must be monotonically increasing"), losing every eval
+    # metric AND the role/render images that are logged right after.
+    eval_step = global_step if global_step is not None else args.total_steps
 
     from pufferlib.ocean.drive.drive import Drive
     ini = load_drive_config()
@@ -485,7 +492,7 @@ def run_evaluation(args, policy, device, wandb_run=None):
         }
         for k, v in env_metrics.items():
             print(f"  {k.split('/')[-1]:<20}: {v:.4f}")
-        log_metrics(wandb_run, env_metrics, step=args.total_steps)
+        log_metrics(wandb_run, env_metrics, step=eval_step)
         env_csv = Path(args.save_dir) / "eval_env_metrics.csv"
         with open(env_csv, "w", newline="") as f:
             w = csv.writer(f)
@@ -520,7 +527,7 @@ def run_evaluation(args, policy, device, wandb_run=None):
 
     # --- WOSAC metrics ---
     run_wosac_eval(args, policy, device, wandb_run,
-                   global_step=args.total_steps, env=env, save_csv=True)
+                   global_step=eval_step, env=env, save_csv=True)
 
 
 def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
@@ -1084,7 +1091,7 @@ def train(args):
 
     # ---- Post-training evaluation ----
     if args.run_eval:
-        run_evaluation(args, policy, device, wandb_run)
+        run_evaluation(args, policy, device, wandb_run, global_step=global_step)
 
     if wandb_run is not None:
         wandb_run.finish()
