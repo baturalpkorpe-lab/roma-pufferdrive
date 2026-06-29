@@ -456,6 +456,13 @@ def run_evaluation(args, policy, device, wandb_run=None, global_step=None):
         "control_mode":    ini["eval"]["wosac_control_mode"],
         "goal_behavior":   2,
         "goal_radius":     ini["eval"]["wosac_goal_radius"],
+        # Route-guidance must match training, else a guidance-trained policy
+        # is evaluated under goal/route conditions it never saw.
+        "use_guided_autonomy":       args.use_guided_autonomy,
+        "guidance_speed_weight":     args.guidance_speed_weight,
+        "guidance_heading_weight":   args.guidance_heading_weight,
+        "waypoint_reach_threshold":  args.waypoint_reach_threshold,
+        "use_guidance_observations": args.use_guidance_observations,
     })
     env = Drive(**wosac_cfg)
     policy.eval()
@@ -585,6 +592,12 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
                 "control_mode":    ini["eval"]["wosac_control_mode"],
                 "goal_behavior":   2,
                 "goal_radius":     ini["eval"]["wosac_goal_radius"],
+                # Route-guidance must match training (see eval_roma.py).
+                "use_guided_autonomy":       args.use_guided_autonomy,
+                "guidance_speed_weight":     args.guidance_speed_weight,
+                "guidance_heading_weight":   args.guidance_heading_weight,
+                "waypoint_reach_threshold":  args.waypoint_reach_threshold,
+                "use_guidance_observations": args.use_guidance_observations,
             })
             env = Drive(**wosac_cfg)
         policy.eval()

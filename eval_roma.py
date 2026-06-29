@@ -655,16 +655,21 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device,
     K = 5   # clusters — covers main driving archetypes
 
     def _save_log(fig, name):
-        """Log to wandb via Figure object (no file path), then save to disk."""
-        if wandb_run is not None:
-            try:
-                import wandb as _wandb
-                wandb_run.log({f"role/{name}": _wandb.Image(fig)})
-            except Exception as e:
-                print(f"  [wandb/{name}] {e}")
+        """Save the figure to disk first, then log the saved PNG *file* to wandb.
+
+        Logging the file path (not the live matplotlib Figure) avoids the
+        "No matching media" panels that appear when wandb can't resolve a
+        figure object after it's been closed.
+        """
         path = out_path / f"role_{name}_{ckpt_name}.png"
         fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
+        if wandb_run is not None:
+            try:
+                import wandb as _wandb
+                wandb_run.log({f"role/{name}": _wandb.Image(str(path))})
+            except Exception as e:
+                print(f"  [wandb/{name}] {e}")
         print(f"  Saved: {path}")
 
     # ── 1. Collect data ───────────────────────────────────────────────────────
@@ -860,6 +865,15 @@ def parse_args():
     p.add_argument("--wandb_run_name",    type=str,   default=None)
     p.add_argument("--role_episodes",     type=int,   default=10,
                    help="Episodes for role analysis. 0 = skip.")
+    # Route guidance — MUST match the values used in training so the eval env
+    # reproduces the goal/route regime the policy was trained under.
+    p.add_argument("--use_guided_autonomy",       type=int,   default=0,
+                   help="1=route-guidance env (waypoint goals), 0=off. Match training.")
+    p.add_argument("--waypoint_reach_threshold",  type=float, default=2.0)
+    p.add_argument("--guidance_speed_weight",     type=float, default=0.0)
+    p.add_argument("--guidance_heading_weight",   type=float, default=0.0)
+    p.add_argument("--use_guidance_observations", type=int,   default=0,
+                   help="1=add 182 waypoint coords to obs. Match training (you used 0).")
     return p.parse_args()
 
 
@@ -878,7 +892,6 @@ def evaluate(args):
     device = torch.device(args.device)
 
     print(f"Checkpoint : {args.checkpoint}")
-    policy = load_policy(args.checkpoint, args.role_dim, args.obs_dim, device)
 
     from pufferlib.ocean.drive.drive import Drive
     ini       = load_drive_config()
@@ -890,8 +903,24 @@ def evaluate(args):
         "control_mode":  ini["eval"]["wosac_control_mode"],
         "goal_behavior": ini["eval"]["wosac_goal_behavior"],
         "goal_radius":   ini["eval"]["wosac_goal_radius"],
+        # Route-guidance: the eval env MUST match training, otherwise a
+        # guidance-trained policy is rolled out under goal/route conditions it
+        # never saw, corrupting WOSAC.
+        "use_guided_autonomy":       args.use_guided_autonomy,
+        "guidance_speed_weight":     args.guidance_speed_weight,
+        "guidance_heading_weight":   args.guidance_heading_weight,
+        "waypoint_reach_threshold":  args.waypoint_reach_threshold,
+        "use_guidance_observations": args.use_guidance_observations,
     })
     env = Drive(**wosac_cfg)
+
+    # Auto-detect obs_dim from the env (so use_guidance_observations on/off can
+    # never mismatch a hardcoded width), then load the policy at that width.
+    obs_probe, _ = env.reset()
+    obs_dim      = obs_probe.shape[-1]
+    if obs_dim != args.obs_dim:
+        print(f"obs_dim auto-detected as {obs_dim} (overriding --obs_dim {args.obs_dim})")
+    policy = load_policy(args.checkpoint, args.role_dim, obs_dim, device)
 
     # ── Role analysis FIRST — guaranteed even if WOSAC times out ─────────────
     if args.role_episodes > 0:
