@@ -578,7 +578,8 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
 
         wosac_config = {
             "eval": {
-                "wosac_init_steps":   0,  # original 0.613 baseline (no GT warm-up)
+                "wosac_init_steps":   10, 
+            
                 "wosac_num_rollouts": rollouts,
             },
             "train": {"device": str(device)},
