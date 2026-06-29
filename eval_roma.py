@@ -939,7 +939,7 @@ def evaluate(args):
     from pufferlib.ocean.benchmark.evaluator import WOSACEvaluator
 
     wosac_config = {
-        "eval":  {"wosac_init_steps": 0, "wosac_num_rollouts": args.wosac_rollouts},
+        "eval":  {"wosac_init_steps": 10, "wosac_num_rollouts": args.wosac_rollouts},
         "train": {"device": str(device)},
     }
     evaluator        = WOSACEvaluator(wosac_config)
