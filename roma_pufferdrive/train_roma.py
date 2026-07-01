@@ -626,11 +626,13 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
             sim = {k: np.zeros((B, R, 91), dtype=np.float32)
                    for k in ["x", "y", "z", "heading"]}
             sim["id"] = np.zeros((B, R, 91), dtype=np.int32)
+            sim["dones"] = np.zeros((B, R, 91), dtype=np.bool_)
 
             for r in range(R):
                 obs_np, _ = env.reset()
                 obs   = torch.tensor(obs_np, dtype=torch.float32, device=device)
                 state = policy.initial_state(B, device)
+                truncations = np.zeros(B, dtype=bool)
                 for t in range(91):
                     ag = env.get_global_agent_state()
                     sim["x"]      [:, r, t] = ag["x"]
@@ -638,11 +640,13 @@ def run_wosac_eval(args, policy, device, wandb_run=None, global_step=None,
                     sim["z"]      [:, r, t] = ag.get("z", np.zeros(B))
                     sim["heading"][:, r, t] = ag["heading"]
                     sim["id"]     [:, r, t] = ag["id"]
+                    sim["dones"]  [:, r, t] = truncations
                     with torch.no_grad():
                         logits, _, state, _ = policy(obs, state)
                     action = Cat(logits=logits).sample()
-                    obs_np, _, _, _, _ = env.step(
+                    obs_np, _, _, truncations, _ = env.step(
                         action.cpu().numpy().reshape(B, 1))
+                    truncations = np.asarray(truncations).reshape(B)
                     obs = torch.tensor(obs_np, dtype=torch.float32, device=device)
 
             try:

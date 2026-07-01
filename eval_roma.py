@@ -77,12 +77,14 @@ def collect_wosac_trajectories(env, adapter, num_rollouts, num_steps=91):
         "z":       np.zeros((num_agents, num_rollouts, num_steps), dtype=np.float32),
         "heading": np.zeros((num_agents, num_rollouts, num_steps), dtype=np.float32),
         "id":      np.zeros((num_agents, num_rollouts, num_steps), dtype=np.int32),
+        "dones":   np.zeros((num_agents, num_rollouts, num_steps), dtype=np.bool_),
     }
     for r in range(num_rollouts):
         print(f"\r  rollout {r+1}/{num_rollouts}", end="", flush=True)
         obs_np, _ = env.reset()
         adapter.reset_state()
         obs = torch.as_tensor(obs_np, dtype=torch.float32).to(adapter.device)
+        truncations = np.zeros(num_agents, dtype=bool)
         for t in range(num_steps):
             ag = env.get_global_agent_state()
             traj["x"]      [:, r, t] = ag["x"]
@@ -90,8 +92,10 @@ def collect_wosac_trajectories(env, adapter, num_rollouts, num_steps=91):
             traj["z"]      [:, r, t] = ag.get("z", np.zeros(num_agents))
             traj["heading"][:, r, t] = ag["heading"]
             traj["id"]     [:, r, t] = ag["id"]
+            traj["dones"]  [:, r, t] = truncations
             action = Categorical(logits=adapter.forward_eval(obs)).sample()
-            obs_np, _, _, _, _ = env.step(action.cpu().numpy().reshape(num_agents, 1))
+            obs_np, _, _, truncations, _ = env.step(action.cpu().numpy().reshape(num_agents, 1))
+            truncations = np.asarray(truncations).reshape(num_agents)
             obs = torch.as_tensor(obs_np, dtype=torch.float32).to(adapter.device)
     print()
     return traj
@@ -967,8 +971,10 @@ def evaluate(args):
             if new:
                 all_results.append(df[df.index.isin(new)])
                 unique_scenarios.update(new)
-        except Exception:
-            pass
+        except Exception as e:
+            import traceback
+            print(f"[WOSAC ERROR batch {batch+1}: {type(e).__name__}: {e}]", flush=True)
+            traceback.print_exc()
 
         if (batch + 1) % 10 == 0 and all_results:
             agg = pd.concat(all_results).mean()
