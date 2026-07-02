@@ -536,11 +536,20 @@ def _plot_role_intervention(policy, env, rep_roles, device, ckpt_name,
             dh = np.diff(ep_h, axis=0)
             dh = (dh + np.pi) % (2 * np.pi) - np.pi
 
-            ki_speeds.append(np.sqrt(dx**2 + dy**2).mean(axis=1))   # (T-1,)
-            ki_steerings.append(np.abs(dh).mean(axis=1))
+            spd    = np.sqrt(dx**2 + dy**2)                 # (T-1, B)
+            ok     = spd <= 45.0                            # mask respawn teleports
+            spd_m  = np.where(ok, spd, np.nan)
+            moving = np.nanmax(spd_m, axis=0) > 1.0         # agents that actually drive
+            if not moving.any():
+                moving = np.ones(spd_m.shape[1], dtype=bool)
+            ki_speeds.append(np.nanmean(spd_m[:, moving], axis=1))   # (T-1,)
+            dh_m = np.where(ok, np.abs(dh), np.nan)
+            ki_steerings.append(np.nanmean(dh_m[:, moving], axis=1))
+            disp = np.nansum(np.where(ok, spd, 0.0), axis=0)  # distance driven per agent
+            top  = np.argsort(disp)[::-1][:show_agents]       # most-active agents
             ki_trajs.append(
-                np.stack([ep_x[:, :show_agents],
-                          ep_y[:, :show_agents]], axis=-1)           # (T, show_agents, 2)
+                np.stack([ep_x[:, top],
+                          ep_y[:, top]], axis=-1)             # (T, show_agents, 2)
             )
             print(f"    role {ki+1}/{K}  rollout {r+1}/{n_rollouts}", end="\r", flush=True)
 
@@ -621,7 +630,6 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device,
     intervention_profiles  Idea 2 — speed & steering under injected real roles
     intervention_trajs     Idea 2 — 2-D trajectory comparison per role
     pca_scatter            Legacy — mean_speed / ang_speed / accel_std PCA
-    correlation            Legacy — Pearson-r role-dim × behavioural stats
     temporal               Legacy — mean role dim values over 91 timesteps
 
     Wandb fix
@@ -687,15 +695,18 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device,
     # positions that np.diff turns into impossible speeds (hundreds of m/s),
     # forming a junk cluster. Keep only physically-plausible agents so roles are
     # clustered over meaningful driving behaviour.
-    SPEED_CAP = 45.0   # m/s (~162 km/h) — above any real vehicle on these maps
-    valid  = np.isfinite(stats["max_speed"]) & (stats["max_speed"] <= SPEED_CAP)
+    SPEED_CAP  = 45.0   # m/s -- above any real vehicle: teleport/respawn artifact
+    MIN_MOTION = 1.0    # m/s -- below this the agent never really moved
+    valid  = (np.isfinite(stats["max_speed"])
+              & (stats["max_speed"] <= SPEED_CAP)
+              & (stats["max_speed"] >  MIN_MOTION))
     n_drop = int((~valid).sum())
     if valid.sum() >= K:
         role_means = role_means[valid]
         stats      = {k: v[valid] for k, v in stats.items()}
         N          = len(role_means)
-        print(f"  Dropped {n_drop:,} non-active/artifact agents "
-              f"(max speed > {SPEED_CAP:.0f} m/s) -> {N:,} valid agents clustered")
+        print(f"  Dropped {n_drop:,} parked/padding/artifact agents "
+              f"-> {N:,} moving agents analysed")
     else:
         print(f"  [warn] only {int(valid.sum())} valid agents; skipping artifact filter")
 
@@ -785,41 +796,6 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device,
         _save_log(fig_leg, "pca_scatter")
     except Exception as e:
         print(f"  [Legacy PCA skipped: {e}]")
-
-    # ── 11. Legacy Pearson correlation heatmap ────────────────────────────────
-    print("  [Legacy] Pearson correlation heatmap")
-    try:
-        stat_names = ["mean_speed", "angular_speed", "accel_std"]
-        stats_mat  = np.stack(
-            [stats["mean_speed"], stats["mean_ang_sp"], stats["accel_std"]], axis=1
-        )
-        corr_beh = np.zeros((role_dim, 3), dtype=np.float32)
-        for i in range(role_dim):
-            for j in range(3):
-                if role_means[:, i].std() == 0 or stats_mat[:, j].std() == 0:
-                    corr_beh[i, j] = float("nan")
-                else:
-                    r, _ = pearsonr(role_means[:, i], stats_mat[:, j])
-                    corr_beh[i, j] = r
-
-        fig_corr, ax_c = plt.subplots(figsize=(5, 1 + role_dim * 0.55))
-        im = ax_c.imshow(corr_beh, cmap="RdBu_r", vmin=-1, vmax=1, aspect="auto")
-        ax_c.set_xticks(range(3))
-        ax_c.set_xticklabels(stat_names, rotation=25, ha="right")
-        ax_c.set_yticks(range(role_dim))
-        ax_c.set_yticklabels([f"dim_{i}" for i in range(role_dim)])
-        fig_corr.colorbar(im, ax=ax_c, label="Pearson r", shrink=0.7)
-        for i in range(role_dim):
-            for j in range(3):
-                val   = corr_beh[i, j]
-                lbl   = "N/A" if np.isnan(val) else f"{val:.2f}"
-                ax_c.text(j, i, lbl, ha="center", va="center", fontsize=9,
-                          color="white" if abs(val) > 0.5 else "black")
-        ax_c.set_title("Role dim × behavior correlations")
-        plt.tight_layout()
-        _save_log(fig_corr, "correlation")
-    except Exception as e:
-        print(f"  [Pearson correlation skipped: {e}]")
 
     # ── 12. Legacy temporal dynamics ──────────────────────────────────────────
     print("  [Legacy] Temporal role dynamics")
