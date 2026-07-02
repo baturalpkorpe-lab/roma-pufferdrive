@@ -844,7 +844,7 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device,
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint",        type=str,   required=True)
-    p.add_argument("--role_dim",          type=int,   default=8)
+    p.add_argument("--role_dim",          type=int,   default=4)
     p.add_argument("--obs_dim",           type=int,   default=1121)
     p.add_argument("--num_agents",        type=int,   default=3072)
     p.add_argument("--device",            type=str,   default="cuda")

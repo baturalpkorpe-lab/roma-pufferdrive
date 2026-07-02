@@ -22,7 +22,7 @@ def main():
                    help="Directory containing map_*.bin binaries")
     p.add_argument("--save_dir",   type=str, default="eval_results",
                    help="Videos go to <save_dir>/render_rollouts/")
-    p.add_argument("--role_dim",   type=int, default=8)
+    p.add_argument("--role_dim",   type=int, default=4)
     p.add_argument("--device",     type=str, default="cpu",
                    help="cpu is fine: 32 agents x 91 steps x 8 episodes")
     args = p.parse_args()
