@@ -203,6 +203,22 @@ def normalize_polylines(road_edges):
         if road_edges is None:
             return []
         if isinstance(road_edges, dict):
+            # PufferDrive format: flattened x/y coords + per-polyline lengths
+            # (see Drive.get_road_edge_polylines in pufferlib/ocean/drive/drive.py)
+            if {"x", "y", "lengths"} <= set(road_edges.keys()):
+                fx = np.asarray(road_edges["x"], dtype=np.float64).reshape(-1)
+                fy = np.asarray(road_edges["y"], dtype=np.float64).reshape(-1)
+                lengths = np.asarray(road_edges["lengths"],
+                                     dtype=np.int64).reshape(-1)
+                start = 0
+                for L in lengths:
+                    end = start + int(L)
+                    pts = np.stack([fx[start:end], fy[start:end]], axis=-1)
+                    pts = pts[np.isfinite(pts).all(axis=1)]
+                    if len(pts) >= 2:
+                        polys.append(pts)
+                    start = end
+                return polys
             road_edges = list(road_edges.values())
         if isinstance(road_edges, np.ndarray):
             if road_edges.ndim == 3:
@@ -300,10 +316,18 @@ def render_video(data, out_path, fps, dpi, trail, want_gt):
         try:
             gx = np.asarray(data["gt"]["x"], dtype=np.float64)
             gy = np.asarray(data["gt"]["y"], dtype=np.float64)
+            gv = data["gt"].get("valid")
+            gv = None if gv is None else np.asarray(gv)
             while gx.ndim > 2:                         # squeeze rollout dims
                 gx, gy = gx[:, 0], gy[:, 0]
+                gv = gv[:, 0] if gv is not None else None
             if gx.ndim == 1:
                 gx, gy = gx[None, :], gy[None, :]
+                gv = gv[None, :] if gv is not None else None
+            if gv is not None and gv.shape == gx.shape:
+                # Invalid GT points are stored as zeros -- mask them out.
+                gx = np.where(gv.astype(bool), gx, np.nan)
+                gy = np.where(gv.astype(bool), gy, np.nan)
             segs = []
             for i in range(gx.shape[0]):
                 pts = np.stack([gx[i], gy[i]], axis=-1)
