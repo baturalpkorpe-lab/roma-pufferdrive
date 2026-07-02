@@ -32,7 +32,10 @@ def main():
     device = torch.device(args.device)
 
     from pufferlib.ocean.drive.drive import Drive
-    probe = Drive(num_maps=1, num_agents=32, map_dir=args.data_dir)
+    # episode_length must be passed explicitly: the C binding requires it as an
+    # int kwarg (TypeError: Failed to unpack keyword episode_length otherwise).
+    probe = Drive(num_maps=1, num_agents=32, map_dir=args.data_dir,
+                  episode_length=91)
     obs_np, _ = probe.reset()
     obs_dim   = obs_np.shape[-1]
     probe.close()
