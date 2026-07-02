@@ -3,7 +3,7 @@
 #SBATCH --partition=compute
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=4G
+#SBATCH --mem-per-cpu=3900M   # compute-p1 caps at 3968 MB/CPU
 #SBATCH --time=01:00:00
 #SBATCH --account=research-ceg-tp
 #SBATCH --output=/scratch/e452103/logs/render_topdown_%j.out
