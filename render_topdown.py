@@ -274,7 +274,10 @@ def render_video(data, out_path, fps, dpi, trail, want_gt):
     moving   = path_len > 2.0                          # metres over the episode
 
     col_scalar = role_color_scalar(data["roles"])      # (T, B)
-    cmap       = cm.get_cmap("coolwarm")
+    try:
+        cmap = matplotlib.colormaps["coolwarm"]        # matplotlib >= 3.6
+    except AttributeError:
+        cmap = cm.get_cmap("coolwarm")                 # removed in 3.9
 
     w, h = x1 - x0, y1 - y0
     fig_w = 10.0 if w >= h else 10.0 * w / h
