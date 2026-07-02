@@ -14,12 +14,33 @@ Usage:
 """
 
 import argparse
+import ast
+import configparser
 import datetime
 import glob
 import os
 import time
 
 import numpy as np
+
+
+def load_drive_config():
+    """Read pufferlib's drive.ini exactly like train_roma.py does."""
+    import pufferlib
+    puffer_dir = os.path.dirname(pufferlib.__file__)
+    default_ini = os.path.join(puffer_dir, "config", "default.ini")
+    drive_ini   = os.path.join(puffer_dir, "config", "ocean", "drive.ini")
+    p = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    p.read([default_ini, drive_ini])
+
+    def _parse(v):
+        try:
+            return ast.literal_eval(v)
+        except Exception:
+            return v
+
+    return {section: {k: _parse(v) for k, v in p[section].items()}
+            for section in p.sections()}
 
 
 def parse_args():
@@ -45,9 +66,23 @@ def main():
 
     from pufferlib.ocean.drive.drive import Drive
 
+    # Build the env with the SAME config as training (drive.ini [env] section
+    # + overrides), so the benchmark measures the true training env. Passing
+    # only a few kwargs fails: the C binding requires e.g. episode_length
+    # explicitly (TypeError: Failed to unpack keyword episode_length as int).
+    try:
+        env_cfg = dict(load_drive_config()["env"])
+    except Exception as e:
+        print(f"drive.ini read failed ({e}); using minimal config")
+        env_cfg = {"episode_length": 91}
+    env_cfg.update({
+        "num_maps":   args.num_maps,
+        "num_agents": args.num_agents,
+        "map_dir":    args.data_dir,
+    })
+
     t0 = time.time()
-    env = Drive(num_maps=args.num_maps, num_agents=args.num_agents,
-                map_dir=args.data_dir)
+    env = Drive(**env_cfg)
     env.reset()
     print(f"env creation   : {time.time() - t0:.1f}s "
           f"({args.num_maps} maps, {args.num_agents} agents)")
