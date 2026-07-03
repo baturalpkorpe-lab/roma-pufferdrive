@@ -21,21 +21,26 @@ source /apps/generic/miniforge3/25.11.0/etc/profile.d/conda.sh
 conda activate roma
 export PYTHONPATH=$HOME/roma_pufferdrive:/scratch/e452103/PufferDrive
 CODE_DIR=$HOME/roma_pufferdrive
+PUFFER_DIR=/scratch/e452103/PufferDrive
 CKPT=/scratch/e452103/checkpoints/roma_baseline/roma_dim8_step3000238080.pt
 # main stack instead:
 #   conda activate /scratch/e452103/envs/roma_guid
 #   export PYTHONPATH=$HOME/roma_main:/scratch/e452103/PufferDrive_guid
 #   CODE_DIR=$HOME/roma_main
+#   PUFFER_DIR=/scratch/e452103/PufferDrive_guid
 #   CKPT=/scratch/e452103/checkpoints/roma_main/<checkpoint>.pt
 
 DATA_DIR=/scratch/e452103/PufferDrive/pufferlib/resources/drive/binaries/training
 OUT_DIR=/scratch/e452103/renders/topdown_$(date +%m%d_%H%M)
 
 mkdir -p /scratch/e452103/logs "$OUT_DIR"
-cd "$CODE_DIR"
+# Run from the PufferDrive dir like training does: the C binding loads
+# pufferlib/config/ocean/drive.ini via a RELATIVE path, so any other cwd
+# floods the log with "Error while loading ..." and uses compiled defaults.
+cd "$PUFFER_DIR"
 
 # Free rollouts: watch the policy drive 4 scenarios
-python render_topdown.py \
+python "$CODE_DIR/render_topdown.py" \
     --checkpoint "$CKPT" \
     --data_dir   "$DATA_DIR" \
     --out_dir    "$OUT_DIR" \
@@ -43,7 +48,7 @@ python render_topdown.py \
     --mode       free
 
 # Forced role sweep on the same 4 maps: role causality, visually
-python render_topdown.py \
+python "$CODE_DIR/render_topdown.py" \
     --checkpoint "$CKPT" \
     --data_dir   "$DATA_DIR" \
     --out_dir    "$OUT_DIR" \
