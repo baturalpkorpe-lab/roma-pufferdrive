@@ -29,6 +29,7 @@ source /apps/generic/miniforge3/25.11.0/etc/profile.d/conda.sh
 conda activate roma
 
 export PYTHONPATH=$HOME/roma_dim4:/scratch/e452103/PufferDrive
+export PYTHONUNBUFFERED=1   # stream prints to the .out log immediately
 # export WANDB_API_KEY=...   # only if not already set in ~/.bashrc
 
 mkdir -p /scratch/e452103/logs
