@@ -21,15 +21,20 @@ source /apps/generic/miniforge3/25.11.0/etc/profile.d/conda.sh
 conda activate roma
 export PYTHONPATH=$HOME/roma_pufferdrive:/scratch/e452103/PufferDrive
 CODE_DIR=$HOME/roma_pufferdrive
+PUFFER_DIR=/scratch/e452103/PufferDrive
 # main stack instead:
 #   conda activate /scratch/e452103/envs/roma_guid
 #   export PYTHONPATH=$HOME/roma_main:/scratch/e452103/PufferDrive_guid
 #   CODE_DIR=$HOME/roma_main
+#   PUFFER_DIR=/scratch/e452103/PufferDrive_guid
 
 mkdir -p /scratch/e452103/logs
-cd "$CODE_DIR"
+# Run from the PufferDrive dir like training does: the C binding loads
+# pufferlib/config/ocean/drive.ini via a RELATIVE path, so any other cwd
+# floods the log with "Error while loading ..." and uses compiled defaults.
+cd "$PUFFER_DIR"
 
-python bench_env_sps.py \
+python "$CODE_DIR/bench_env_sps.py" \
     --data_dir /scratch/e452103/PufferDrive/pufferlib/resources/drive/binaries/training \
     --num_agents 3072 \
     --num_maps 10000 \
