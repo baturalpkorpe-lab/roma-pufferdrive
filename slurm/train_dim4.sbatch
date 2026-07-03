@@ -20,7 +20,8 @@
 #
 # total_steps=3B on purpose: matches the existing dim-8 checkpoint
 # roma_dim8_step3000238080.pt for an apples-to-apples WOSAC comparison.
-# Post-training: WOSAC only (--role_episodes 0 skips role analysis).
+# Mid-run WOSAC every 500M steps, lite (10 batches); post-training WOSAC
+# full (100 batches). --role_episodes 0 skips role analysis.
 
 module purge
 module load miniconda3
@@ -43,7 +44,11 @@ python $HOME/roma_dim4/roma_pufferdrive/train_roma.py \
     --device             cuda \
     --run_eval \
     --role_episodes      0 \
-    --wosac_periodic     0 \
+    --wosac_periodic     1 \
+    --wosac_interval     500000000 \
+    --wosac_eval_maps    10000 \
+    --wosac_eval_rollouts 32 \
+    --wosac_eval_batches 10 \
     --wosac_rollouts     32 \
     --wosac_num_maps     10000 \
     --wosac_max_batches  100 \
