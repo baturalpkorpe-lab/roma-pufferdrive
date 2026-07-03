@@ -9,7 +9,10 @@ touch pufferlib/ocean/drive/__init__.py
 
 echo "[build] Compiling binding..."
 NUMPY_INC=$(python3 -c "import numpy; print(numpy.get_include())")
-gcc -O2 -shared -fPIC \
+# -O3/-mavx2/-mfma: plain -O2 caused a ~40% env slowdown (55->35k train SPS).
+# -mavx2 not -march=native: the same .so must run on both the Intel compute
+# nodes and the AMD gpu-a100 nodes.
+gcc -O3 -mavx2 -mfma -fopenmp -shared -fPIC \
     -I/usr/include/python3.11 -I"$NUMPY_INC" -I. \
     -I./raylib-5.5_linux_amd64/include \
     -I./box2d-linux-amd64/include \
