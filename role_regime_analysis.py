@@ -89,11 +89,14 @@ def load_drive_config():
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--checkpoint", type=str, required=True)
-    p.add_argument("--clusters",   type=str, required=True,
+    p.add_argument("--checkpoint", type=str, default=None)
+    p.add_argument("--clusters",   type=str, default=None,
                    help="map_clusters.csv from map_atlas.py (Phase B)")
-    p.add_argument("--data_dir",   type=str, required=True)
+    p.add_argument("--data_dir",   type=str, default=None)
     p.add_argument("--out_dir",    type=str, required=True)
+    p.add_argument("--replot",     action="store_true",
+                   help="Skip collection: rebuild all figures from "
+                        "<out_dir>/phaseC_agent_data.csv (seconds, no GPU)")
     p.add_argument("--episodes",   type=int, default=20,
                    help="Reset batches; each covers ~500 scenarios")
     p.add_argument("--num_agents", type=int, default=3072)
@@ -427,12 +430,25 @@ def analyse(df, role_dim, args):
         print(f"[phaseC] variance {m:<12}: regime {shares[i,0]:.1%}  "
               f"role {shares[i,1]:.1%}  residual {shares[i,2]:.1%}")
 
-    # -- 5. role clusters per regime: mean delta profiles -----------------------
+    # -- 5. role clusters per regime: spider chart of mean delta profiles ------
+    # Clusters are ORDERED by their d_speed so the same color/name means the
+    # same personality in every regime: conformist (closest to the human),
+    # middle, runaway (fastest over-speeder). Axes are min-max scaled across
+    # the clusters of that regime; legend shows the real-unit d_speed.
     from sklearn.cluster import KMeans
     K = args.kmeans_k
+    CLUSTER_NAMES  = (["conformist", "middle", "runaway"] if K == 3 else
+                      [f"cluster {c}" for c in range(K)])
+    CLUSTER_COLORS = plt.get_cmap("tab10")(np.linspace(0, 1, 10))
+    prof_metrics = ["d_speed", "ade", "d_turn_rate", "d_jerk", "event_rate"]
+    prof_labels  = ["Δspeed", "path dev\n(ADE)", "Δturn", "Δjerk", "events"]
+    n_m    = len(prof_metrics)
+    angles = np.linspace(0, 2 * np.pi, n_m, endpoint=False).tolist()
+    angles += angles[:1]
+
     fig, axes = plt.subplots(1, len(regimes),
-                             figsize=(4.2 * len(regimes), 4), sharey=True)
-    prof_metrics = ["d_speed", "ade", "d_turn_rate", "event_rate"]
+                             figsize=(4.4 * len(regimes), 4.8),
+                             subplot_kw=dict(polar=True))
     for ax, rg in zip(np.atleast_1d(axes), regimes):
         sub = df[df["regime"] == rg].dropna(subset=prof_metrics)
         if len(sub) < 50:
@@ -440,22 +456,76 @@ def analyse(df, role_dim, args):
             continue
         km  = KMeans(n_clusters=K, n_init=10, random_state=42)
         lab = km.fit_predict(sub[role_cols].values)
-        Zm  = (sub[prof_metrics] - sub[prof_metrics].mean()) / sub[prof_metrics].std()
-        x   = np.arange(len(prof_metrics))
-        w   = 0.8 / K
-        for c in range(K):
-            prof = Zm[lab == c].mean().values
-            ax.bar(x + (c - K / 2 + 0.5) * w, prof, width=w,
-                   label=f"role-cluster {c} (n={(lab == c).sum()})")
-        ax.axhline(0, color="black", lw=0.8)
-        ax.set_xticks(x)
-        ax.set_xticklabels(prof_metrics, rotation=20, ha="right", fontsize=8)
-        ax.set_title(f"{names.get(rg, rg)}", fontsize=9)
-        ax.legend(fontsize=6)
-    fig.suptitle("Role clusters within each regime: mean GT-delta profile "
-                 "(z-scored within regime)", fontsize=11)
+        means = np.array([[sub[m][lab == c].mean() for m in prof_metrics]
+                          for c in range(K)])              # (K, n_m)
+        order = np.argsort(means[:, 0])                    # by d_speed
+        lo, hi = means.min(axis=0), means.max(axis=0)
+        rng    = np.where(hi - lo == 0, 1, hi - lo)
+        normed = (means - lo) / rng
+
+        for rank, c in enumerate(order):
+            vals = normed[c].tolist() + [normed[c][0]]
+            ax.plot(angles, vals, "o-", lw=2, color=CLUSTER_COLORS[rank],
+                    label=f"{CLUSTER_NAMES[rank]} (n={(lab == c).sum()}, "
+                          f"Δv={means[c, 0]:+.1f} m/s)")
+            ax.fill(angles, vals, alpha=0.10, color=CLUSTER_COLORS[rank])
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(prof_labels, fontsize=8)
+        ax.set_yticks([0.25, 0.5, 0.75, 1.0])
+        ax.set_yticklabels([], fontsize=6)
+        ax.set_title(f"{names.get(rg, rg)}  (n={len(sub)})",
+                     fontsize=10, pad=16)
+        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.08), fontsize=7)
+    fig.suptitle("Role clusters per regime -- mean deviation from the human "
+                 "counterpart (axes min-max scaled per regime)",
+                 fontsize=12, y=1.06)
     fig.tight_layout()
-    fig.savefig(out / "phaseC_role_clusters.png", dpi=140)
+    fig.savefig(out / "phaseC_role_clusters.png", dpi=140,
+                bbox_inches="tight")
+    plt.close(fig)
+
+    # -- 6. role-axis dose-response: PC1 quintiles vs deltas in real units -----
+    # The most readable summary: one global role axis (conformist -> runaway
+    # pole), agents binned into quintiles, mean deviation from the human
+    # counterpart per bin and regime. Monotone lines in every regime = the
+    # role axis means the same thing everywhere.
+    MIN_CELL = 40
+    roles = df[role_cols].values
+    cen   = roles - roles.mean(axis=0)
+    pc1   = np.linalg.svd(cen, full_matrices=False)[2][0]
+    axis  = cen @ pc1
+    ok    = np.isfinite(df["d_speed"].values)
+    if np.corrcoef(axis[ok], df["d_speed"].values[ok])[0, 1] < 0:
+        axis = -axis                       # orient: + = over-speeding pole
+    NQ    = 5
+    edges = np.quantile(axis, np.linspace(0, 1, NQ + 1))
+    qbin  = np.clip(np.searchsorted(edges, axis, side="right") - 1, 0, NQ - 1)
+
+    fig, axs = plt.subplots(1, 2, figsize=(12, 4.5))
+    for ax, (met, lab) in zip(axs, [("d_speed", "faster than the human (m/s)"),
+                                    ("ade", "distance from human's path (m)")]):
+        for rg in regimes:
+            m = (df["regime"].values == rg) & np.isfinite(df[met].values)
+            ys, es, xs_ = [], [], []
+            for q in range(NQ):
+                v = df[met].values[m & (qbin == q)]
+                if len(v) < MIN_CELL:
+                    continue
+                xs_.append(q)
+                ys.append(v.mean())
+                es.append(1.96 * v.std() / len(v) ** 0.5)
+            ax.errorbar(xs_, ys, yerr=es, marker="o", capsize=3,
+                        label=f"{names.get(rg, rg)}")
+        ax.set_xticks(range(NQ))
+        ax.set_xticklabels(["conformist\npole", "", "middle", "", "runaway\npole"],
+                           fontsize=8)
+        ax.set_ylabel(lab, fontsize=9)
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=7)
+    fig.suptitle("Role axis (PC1) quintiles vs mean deviation from the human "
+                 "counterpart", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(out / "phaseC_role_axis.png", dpi=140)
     plt.close(fig)
 
     print(f"\n[phaseC] outputs -> {out}/phaseC_*.png + phaseC_agent_data.csv")
@@ -466,10 +536,19 @@ def main():
     if args.device == "cuda" and not torch.cuda.is_available():
         args.device = "cpu"
     device = torch.device(args.device)
-    df, role_dim = collect(args, device)
-    if len(df) < 500:
-        print(f"[phaseC] only {len(df)} usable agents -- increase --episodes "
-              f"or relax --min_margin")
+    if args.replot:
+        import pandas as pd
+        df = pd.read_csv(Path(args.out_dir) / "phaseC_agent_data.csv")
+        role_dim = sum(c.startswith("role_") for c in df.columns)
+        print(f"[phaseC] replot from CSV: {len(df)} rows, role_dim={role_dim}")
+    else:
+        if not (args.checkpoint and args.clusters and args.data_dir):
+            raise SystemExit("--checkpoint, --clusters and --data_dir are "
+                             "required unless --replot is given")
+        df, role_dim = collect(args, device)
+        if len(df) < 500:
+            print(f"[phaseC] only {len(df)} usable agents -- increase "
+                  f"--episodes or relax --min_margin")
     analyse(df, role_dim, args)
 
 
