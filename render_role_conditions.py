@@ -98,51 +98,34 @@ def cluster_role_conditions(agent_csv):
 
 
 # ---------------------------------------------------------------------------
-# Map probing: find core maps of each regime with a driving focal human
+# Map probing: hop maps with env.resample_maps() (the seed does NOT select
+# the map when num_maps=1 -- recreating the env with a new seed loads the
+# same scenario again)
 # ---------------------------------------------------------------------------
 
-def probe_maps(args, regime_of):
-    from pufferlib.ocean.drive.drive import Drive
-    need = {rg: args.maps_per_regime for rg in REGIME_NAMES}
-    found = {rg: [] for rg in REGIME_NAMES}   # rg -> [(seed, sid, focal_idx)]
-    used_sids = set()
-
-    for seed in range(args.seed_start, args.seed_start + args.max_probes):
-        if all(len(found[rg]) >= need[rg] for rg in need):
-            break
-        env = Drive(num_maps=1, num_agents=args.num_agents,
-                    map_dir=args.data_dir, episode_length=T, seed=seed)
-        try:
-            env.reset()
-            gt  = env.get_ground_truth_trajectories()
-            sid = _squeeze(np.asarray(gt["scenario_id"]).astype(str))[0]
-            rg  = regime_of.get(sid)
-            if rg is None or rg not in need or sid in used_sids \
-                    or len(found[rg]) >= need[rg]:
-                continue
-            gx, gy = _squeeze(gt["x"]), _squeeze(gt["y"])
-            valid  = _squeeze(gt["valid"]).astype(bool)
-            is_veh = np.asarray(gt["is_vehicle"]).reshape(-1).astype(bool)
-            # focal = vehicle whose human drives the farthest
-            lens = np.zeros(gx.shape[0])
-            for a in range(gx.shape[0]):
-                if not is_veh[a] or valid[a].sum() < 10:
-                    continue
-                px, py = gx[a][valid[a]], gy[a][valid[a]]
-                lens[a] = np.hypot(np.diff(px), np.diff(py)).sum()
-            focal = int(np.argmax(lens))
-            if lens[focal] < 10.0:                # humans barely move: skip map
-                continue
-            found[rg].append((seed, sid, focal))
-            used_sids.add(sid)
-            print(f"[probe] seed {seed}: regime {rg} "
-                  f"({REGIME_NAMES[rg]}), focal agent {focal} "
-                  f"(human drives {lens[focal]:.0f} m)  "
-                  f"[{sum(len(v) for v in found.values())}/"
-                  f"{sum(need.values())}]", flush=True)
-        finally:
-            env.close()
-    return found
+def check_map(env, regime_of, need, found, used_sids):
+    """Inspect the currently loaded map. Returns (sid, rg, focal) or None."""
+    env.reset()
+    gt  = env.get_ground_truth_trajectories()
+    sid = _squeeze(np.asarray(gt["scenario_id"]).astype(str))[0]
+    rg  = regime_of.get(sid)
+    if rg is None or rg not in need or sid in used_sids \
+            or len(found[rg]) >= need[rg]:
+        return None
+    gx, gy = _squeeze(gt["x"]), _squeeze(gt["y"])
+    valid  = _squeeze(gt["valid"]).astype(bool)
+    is_veh = np.asarray(gt["is_vehicle"]).reshape(-1).astype(bool)
+    # focal = vehicle whose human drives the farthest
+    lens = np.zeros(gx.shape[0])
+    for a in range(gx.shape[0]):
+        if not is_veh[a] or valid[a].sum() < 10:
+            continue
+        px, py = gx[a][valid[a]], gy[a][valid[a]]
+        lens[a] = np.hypot(np.diff(px), np.diff(py)).sum()
+    focal = int(np.argmax(lens))
+    if lens[focal] < 10.0:                        # humans barely move: skip
+        return None
+    return sid, int(rg), focal, float(lens[focal])
 
 
 # ---------------------------------------------------------------------------
@@ -350,42 +333,74 @@ def main():
         print(f"[conditions] regime {rg} ({REGIME_NAMES.get(rg)}): " +
               "  ".join(f"{n}: dv={dv:+.1f}" for n, (_, dv) in cc.items()))
 
-    print("\n[probe] searching for core maps per regime ...")
-    found = probe_maps(args, regime_of)
-
+    # One env for the whole job; hop maps with resample_maps() (a new seed
+    # does NOT load a new map when num_maps=1). The env stays on the accepted
+    # map while its 3 conditions run: env.reset() replays the same scenario,
+    # only resample_maps() changes it.
     from pufferlib.ocean.drive.drive import Drive
-    policy = None
-    for rg, maps in sorted(found.items()):
-        for seed, sid, focal in maps:
-            datas = {}
-            for cond in CONDITIONS:
-                vec, dv = conds[rg][cond]
-                env = Drive(num_maps=1, num_agents=args.num_agents,
-                            map_dir=args.data_dir, episode_length=T,
-                            seed=seed)
-                if policy is None:
-                    obs_probe, _ = env.reset()
-                    policy, ckpt_dim = load_policy(
-                        args.checkpoint, obs_probe.shape[-1], device)
-                    if ckpt_dim != role_dim:
-                        raise SystemExit(
-                            f"checkpoint role_dim={ckpt_dim} but agent_data "
-                            f"has {role_dim} role columns -- wrong pairing")
-                print(f"\n[render] regime {rg} seed {seed} focal {focal} "
-                      f"cond {cond} (dv={dv:+.1f} m/s)")
-                datas[cond] = rollout_forced(env, policy, focal, vec, device)
-                env.close()
-                name  = f"r{rg}_{REGIME_NAMES[rg]}_map{seed}_{cond}.mp4"
-                title = (f"{REGIME_NAMES[rg]} | map {seed} | focal role = "
-                         f"{cond} ({dv:+.1f} m/s vs human in Phase C)")
-                render_condition_video(datas[cond], focal, COND_COLORS[cond],
-                                       title, out_dir / name, args.fps,
-                                       args.dpi)
-            render_overlay(datas, focal,
-                           f"{REGIME_NAMES[rg]} | map {seed} | same scene, "
-                           f"same noise -- only the focal role differs",
-                           out_dir / f"overlay_r{rg}_map{seed}.png", args.dpi)
+    env = Drive(num_maps=1, num_agents=args.num_agents,
+                map_dir=args.data_dir, episode_length=T,
+                seed=args.seed_start)
+    obs_probe, _ = env.reset()
+    policy, ckpt_dim = load_policy(args.checkpoint, obs_probe.shape[-1],
+                                   device)
+    if ckpt_dim != role_dim:
+        raise SystemExit(f"checkpoint role_dim={ckpt_dim} but agent_data has "
+                         f"{role_dim} role columns -- wrong pairing")
 
+    need      = {rg: args.maps_per_regime for rg in REGIME_NAMES}
+    found     = {rg: [] for rg in REGIME_NAMES}
+    used_sids = set()
+    seen_sids = set()
+    n_done    = 0
+    n_target  = args.maps_per_regime * len(REGIME_NAMES)
+
+    print(f"\n[probe] hopping maps via resample_maps() "
+          f"(target {n_target} maps) ...")
+    for probe in range(args.max_probes):
+        if n_done >= n_target:
+            break
+        if probe > 0:
+            env.resample_maps()
+        hit = check_map(env, regime_of, need, found, used_sids)
+        gt  = env.get_ground_truth_trajectories()
+        seen_sids.add(_squeeze(np.asarray(gt["scenario_id"]).astype(str))[0])
+        if probe == 30 and len(seen_sids) <= 2:
+            print("[probe] WARNING: resample_maps() is not changing the map "
+                  "-- aborting early; only the maps found so far will render")
+            break
+        if hit is None:
+            continue
+        sid, rg, focal, human_m = hit
+        found[rg].append(sid)
+        used_sids.add(sid)
+        n_done += 1
+        print(f"[probe {probe}] regime {rg} ({REGIME_NAMES[rg]}) map "
+              f"{sid[:10]} focal {focal} (human drives {human_m:.0f} m)  "
+              f"[{n_done}/{n_target}]", flush=True)
+
+        datas = {}
+        for cond in CONDITIONS:
+            vec, dv = conds[rg][cond]
+            print(f"[render] regime {rg} map {sid[:10]} focal {focal} "
+                  f"cond {cond} (dv={dv:+.1f} m/s)")
+            datas[cond] = rollout_forced(env, policy, focal, vec, device)
+            name  = f"r{rg}_{REGIME_NAMES[rg]}_{sid[:10]}_{cond}.mp4"
+            title = (f"{REGIME_NAMES[rg]} | map {sid[:10]} | focal role = "
+                     f"{cond} ({dv:+.1f} m/s vs human in Phase C)")
+            render_condition_video(datas[cond], focal, COND_COLORS[cond],
+                                   title, out_dir / name, args.fps, args.dpi)
+        render_overlay(datas, focal,
+                       f"{REGIME_NAMES[rg]} | map {sid[:10]} | same scene, "
+                       f"same noise -- only the focal role differs",
+                       out_dir / f"overlay_r{rg}_{sid[:10]}.png", args.dpi)
+
+    env.close()
+    missing = {REGIME_NAMES[rg]: need[rg] - len(found[rg])
+               for rg in need if len(found[rg]) < need[rg]}
+    if missing:
+        print(f"[probe] note: not all regimes filled after {args.max_probes} "
+              f"probes, missing: {missing}")
     print(f"\n[render] done -> {out_dir}")
 
 

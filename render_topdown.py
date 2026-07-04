@@ -426,19 +426,21 @@ def main():
 
     from pufferlib.ocean.drive.drive import Drive
 
-    policy = None
-    for i in range(args.n_maps):
-        seed = args.seed + i
-        print(f"\nMap {i+1}/{args.n_maps} (seed={seed}, mode={args.mode})")
-        env = Drive(num_maps=1, num_agents=args.num_agents,
-                    map_dir=args.data_dir, episode_length=T, seed=seed)
+    # One env for all maps: with num_maps=1 the seed does NOT select the map
+    # (recreating with a new seed loads the same scenario) -- hop maps with
+    # env.resample_maps() instead.
+    env = Drive(num_maps=1, num_agents=args.num_agents,
+                map_dir=args.data_dir, episode_length=T, seed=args.seed)
+    obs_probe, _ = env.reset()
+    obs_dim = obs_probe.shape[-1]
+    policy, role_dim = load_policy(args.checkpoint, obs_dim, device,
+                                   args.role_dim)
+    print(f"[render] obs_dim={obs_dim}  role_dim={role_dim}")
 
-        if policy is None:
-            obs_probe, _ = env.reset()
-            obs_dim = obs_probe.shape[-1]
-            policy, role_dim = load_policy(args.checkpoint, obs_dim, device,
-                                           args.role_dim)
-            print(f"[render] obs_dim={obs_dim}  role_dim={role_dim}")
+    for i in range(args.n_maps):
+        if i > 0:
+            env.resample_maps()
+        print(f"\nMap {i+1}/{args.n_maps} (mode={args.mode})")
 
         if args.debug_api:
             env.reset()
@@ -472,12 +474,12 @@ def main():
             forced_fn = None
 
         data = rollout(env, policy, role_dim, device, forced_fn)
-        env.close()
 
-        out_path = out_dir / f"map{i}_seed{seed}_{args.mode}{ext}"
+        out_path = out_dir / f"map{i}_{args.mode}{ext}"
         render_video(data, out_path, args.fps, args.dpi, args.trail,
                      want_gt=bool(args.gt))
 
+    env.close()
     print(f"\n[render] Done -> {out_dir}")
 
 
