@@ -11,9 +11,14 @@ rollouts is the focal agent's role vector.
 
 Mechanics: the env loads a POOL of maps (--map_pool) with agent slots spread
 across them like in training; target scenes are found inside the live
-allocation and rendered by filtering slots/roads/GT via scenario_id. (A
-num_maps=1 env can never change its map -- neither the seed nor
-resample_maps() have any effect on it.)
+allocation and rendered by filtering slots/roads/GT via scenario_id.
+Two hard-won env facts encoded here:
+  1) a num_maps=1 env can never change its map (neither the seed nor
+     resample_maps() have any effect on it), and
+  2) env.reset() RESHUFFLES the slot<->scenario allocation, so slot indices
+     are meaningless across resets -- the focal agent is identified by
+     scenario_id + GT vehicle id and re-located after every reset (with
+     reset retries until the scene is dealt back in).
 
 Outputs per (regime, map):
   3 videos  r{regime}_map{seed}_{conformist|middle|runaway}.mp4
@@ -126,11 +131,16 @@ def cluster_role_conditions(agent_csv):
 
 def scan_allocation(env, regime_of, need, found, used_sids):
     """Group the live allocation's agent slots by scenario; return all new
-    usable target scenes as (sid, regime, slots, focal_slot, human_m).
+    usable target scenes as (sid, regime, focal_vehicle_id, human_m).
+
+    IMPORTANT: env.reset() reshuffles the slot<->scenario allocation, so
+    slot indices are worthless across resets. The focal agent is identified
+    by scenario_id + GT vehicle id and re-located after every reset.
     Reserves accepted scenes in `found`/`used_sids`."""
     env.reset()
     gt     = env.get_ground_truth_trajectories()
     sids   = _squeeze(np.asarray(gt["scenario_id"]).astype(str))
+    ids    = _squeeze(np.asarray(gt["id"])).reshape(-1)
     gx, gy = _squeeze(gt["x"]), _squeeze(gt["y"])
     valid  = _squeeze(gt["valid"]).astype(bool)
     is_veh = np.asarray(gt["is_vehicle"]).reshape(-1).astype(bool)
@@ -153,8 +163,8 @@ def scan_allocation(env, regime_of, need, found, used_sids):
             lens[i] = np.hypot(np.diff(px), np.diff(py)).sum()
         if lens.max() < 10.0:               # this scene's humans barely move
             continue
-        focal = int(slots[int(np.argmax(lens))])
-        accepted.append((sid, int(rg), slots, focal, float(lens.max())))
+        focal_vid = int(ids[slots[int(np.argmax(lens))]])
+        accepted.append((sid, int(rg), focal_vid, float(lens.max())))
         found[rg].append(sid)
         used_sids.add(sid)
     return accepted
@@ -272,16 +282,35 @@ def scene_view(data, slots, sid):
 # One controlled rollout: forced role on the focal agent only
 # ---------------------------------------------------------------------------
 
-def rollout_forced(env, policy, focal, cond_vec, device):
+def rollout_forced(env, policy, sid, focal_vid, cond_vec, device,
+                   max_tries=25):
+    """One rollout with the focal agent's role forced.
+
+    env.reset() reshuffles the slot<->scenario allocation, so the target
+    scene is re-located AFTER the reset: its slots by scenario_id, the focal
+    agent by its GT vehicle id. Resets are retried until the scene is dealt
+    in. Returns None if it never appears within max_tries."""
     B = env.num_agents
-    obs_np, _ = env.reset()
-    road = None
-    gt   = None
+    obs_np = gt = road = slots = None
+    focal  = -1
+    for attempt in range(max_tries):
+        obs_np, _ = env.reset()
+        gt   = env.get_ground_truth_trajectories()
+        sids = _squeeze(np.asarray(gt["scenario_id"]).astype(str))
+        ids  = _squeeze(np.asarray(gt["id"])).reshape(-1)
+        cand = np.where(sids == sid)[0]
+        hit  = cand[ids[cand] == focal_vid] if len(cand) else []
+        if len(hit):
+            slots, focal = cand, int(hit[0])
+            if attempt > 0:
+                print(f"    (scene re-dealt after {attempt + 1} resets)")
+            break
+    else:
+        return None
     try:
         road = env.get_road_edge_polylines()
-        gt   = env.get_ground_truth_trajectories()
     except Exception as e:
-        print(f"  [scene data: {e}]")
+        print(f"  [road data: {e}]")
 
     torch.manual_seed(ROLLOUT_SEED)              # identical noise per condition
     xs = np.zeros((T, B), dtype=np.float32)
@@ -317,7 +346,7 @@ def rollout_forced(env, policy, focal, cond_vec, device):
         obs = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
 
     return {"xs": xs, "ys": ys, "hs": hs, "length": length, "width": width,
-            "road_edges": road, "gt": gt}
+            "road_edges": road, "gt": gt, "slots": slots, "focal": focal}
 
 
 # ---------------------------------------------------------------------------
@@ -423,27 +452,44 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi):
     print(f"  saved {out_path}", flush=True)
 
 
-def render_overlay(datas, focal, title, out_path, dpi):
-    """datas: {condition: scene_view dict}. One image, three focal paths."""
-    ref   = datas[CONDITIONS[0]]
+def first_segment(x, y, jump=JUMP_THRESH):
+    """Path from the start up to the first respawn teleport -- the honest
+    comparison object (the same journey, from the same starting state)."""
+    x = np.asarray(x, dtype=np.float64).reshape(-1)
+    y = np.asarray(y, dtype=np.float64).reshape(-1)
+    if len(x) <= 1:
+        return x, y
+    cuts = np.where(np.hypot(np.diff(x), np.diff(y)) > jump)[0]
+    end  = int(cuts[0] + 1) if len(cuts) else len(x)
+    return x[:end], y[:end]
+
+
+def render_overlay(datas, title, out_path, dpi):
+    """datas: {condition: scene_view dict carrying its own 'focal' index}.
+    One image, three focal paths, each cut at its first respawn teleport."""
+    ref = datas[CONDITIONS[0]]
+
+    # Cut BEFORE the bbox -- post-respawn coordinates can be km away.
+    cuts = {c: first_segment(d["xs"][:, d["focal"]], d["ys"][:, d["focal"]])
+            for c, d in datas.items()}
+
     polys = ref["road_polys"]
-    all_x = np.concatenate([d["xs"][:, focal] for d in datas.values()])
-    all_y = np.concatenate([d["ys"][:, focal] for d in datas.values()])
+    all_x = np.concatenate([c[0] for c in cuts.values()])
+    all_y = np.concatenate([c[1] for c in cuts.values()])
     x0, x1, y0, y1 = bbox_of(polys, all_x[:, None], all_y[:, None])
 
     fig, ax = plt.subplots(figsize=(9, 9))
     fig.patch.set_facecolor(BG)
     scene_setup(ax, polys, ref["gt"], x0, x1, y0, y1)
     for cond in CONDITIONS:
-        d = datas[cond]
-        px, py = longest_segment(d["xs"][:, focal], d["ys"][:, focal])
+        px, py = cuts[cond]
         ax.plot(px, py, color=COND_COLORS[cond], lw=2.4,
                 alpha=0.95, label=cond, zorder=5)
         if len(px):
             ax.scatter(px[-1], py[-1], color=COND_COLORS[cond], s=90,
                        marker="X", zorder=6, edgecolors="white", linewidths=0.7)
-    ax.scatter(ref["xs"][0, focal], ref["ys"][0, focal], color="white",
-               s=70, zorder=6, label="start")
+    ax.scatter(ref["xs"][0, ref["focal"]], ref["ys"][0, ref["focal"]],
+               color="white", s=70, zorder=6, label="start")
     ax.legend(fontsize=9, loc="best")
     ax.set_title(title, color="#e8e8f0", fontsize=11)
     fig.tight_layout()
@@ -505,31 +551,41 @@ def main():
         print(f"[scan] round {rnd}: {len(scenes)} new target scenes found "
               f"in the {args.map_pool}-map allocation", flush=True)
 
-        for sid, rg, slots, focal, human_m in scenes:
-            n_done += 1
-            print(f"\n[scene {n_done}/{n_target}] regime {rg} "
-                  f"({REGIME_NAMES[rg]}) map {sid[:10]}: {len(slots)} agent "
-                  f"slots, focal slot {focal} (human drives {human_m:.0f} m)",
-                  flush=True)
-            focal_local = int(np.where(slots == focal)[0][0])
-            views = {}
+        for sid, rg, focal_vid, human_m in scenes:
+            print(f"\n[scene {n_done + 1}/{n_target}] regime {rg} "
+                  f"({REGIME_NAMES[rg]}) map {sid[:10]}: focal vehicle id "
+                  f"{focal_vid} (human drives {human_m:.0f} m)", flush=True)
+            views, ok = {}, True
             for cond in CONDITIONS:
                 vec, dv = conds[rg][cond]
                 print(f"[render] {REGIME_NAMES[rg]} map {sid[:10]} "
                       f"cond {cond} (dv={dv:+.1f} m/s)")
-                data = rollout_forced(env, policy, focal, vec, device)
-                views[cond] = scene_view(data, slots, sid)
+                data = rollout_forced(env, policy, sid, focal_vid, vec,
+                                      device)
+                if data is None:
+                    print(f"  [skip] scene {sid[:10]} was not re-dealt "
+                          f"within the reset retries -- trying another map")
+                    found[rg].remove(sid)     # free the regime slot
+                    ok = False
+                    break
+                view = scene_view(data, data["slots"], sid)
+                view["focal"] = int(np.where(
+                    data["slots"] == data["focal"])[0][0])
+                views[cond] = view
                 name  = f"r{rg}_{REGIME_NAMES[rg]}_{sid[:10]}_{cond}.mp4"
                 title = (f"{REGIME_NAMES[rg]} | map {sid[:10]} | focal role "
                          f"= {cond} ({dv:+.1f} m/s vs human in Phase C)")
-                render_condition_video(views[cond], focal_local,
+                render_condition_video(views[cond], view["focal"],
                                        COND_COLORS[cond], title,
                                        out_dir / name, args.fps, args.dpi)
-            render_overlay(views, focal_local,
+            if not ok:
+                continue
+            render_overlay(views,
                            f"{REGIME_NAMES[rg]} | map {sid[:10]} | same "
                            f"scene, same noise -- only the focal role differs",
                            out_dir / f"overlay_r{rg}_{sid[:10]}.png",
                            args.dpi)
+            n_done += 1
 
         if n_done >= n_target:
             break
