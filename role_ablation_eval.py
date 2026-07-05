@@ -115,9 +115,15 @@ def make_scene_perm(sids, rng):
 # Rollout collection under a role condition
 # ---------------------------------------------------------------------------
 
-def collect_condition(env, policy, condition, mean_role, sids, device,
+def collect_condition(env, policy, condition, mean_role, device,
                       rollouts, rng):
-    """WOSAC-format sim trajectories for one batch under one role condition."""
+    """WOSAC-format sim trajectories for one batch under one role condition.
+
+    env.reset() reshuffles the slot<->scenario allocation, so the scene
+    grouping (for the shuffled permutation and the spread stats) is re-read
+    from THIS rollout's own reset, never from a stale earlier one.
+    Returns (sim, gt_r0): the trajectories plus rollout-0's ground truth,
+    slot-aligned with rollout 0 of sim."""
     B = env.num_agents
     sim = {k: np.zeros((B, rollouts, T), dtype=np.float32)
            for k in ("x", "y", "z", "heading")}
@@ -129,12 +135,17 @@ def collect_condition(env, policy, condition, mean_role, sids, device,
         collapsed = torch.as_tensor(mean_role, dtype=torch.float32,
                                     device=device).unsqueeze(0).expand(B, -1)
 
+    gt_r0 = None
     for r in range(rollouts):
         obs_np, _ = env.reset()
+        gt_r   = env.get_ground_truth_trajectories()
+        sids_r = _squeeze(np.asarray(gt_r["scenario_id"]).astype(str))
+        if r == 0:
+            gt_r0 = gt_r
         obs   = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
         state = policy.initial_state(B, device)
         trunc = np.zeros(B, dtype=bool)
-        perm  = (make_scene_perm(sids, rng)
+        perm  = (make_scene_perm(sids_r, rng)
                  if condition == "shuffled" else None)
         perm_t = (torch.as_tensor(perm, dtype=torch.long, device=device)
                   if perm is not None else None)
@@ -164,7 +175,7 @@ def collect_condition(env, policy, condition, mean_role, sids, device,
             trunc = np.asarray(trunc).reshape(B)
             obs = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
 
-    return sim
+    return sim, gt_r0
 
 
 # ---------------------------------------------------------------------------
@@ -263,17 +274,23 @@ def main():
         if batch > 0:
             env.resample_maps()
         env.reset()
+        # Batch-level gt/agent_state/road go to the WOSAC evaluator, which
+        # matches trajectories by vehicle id (robust to the reset reshuffle);
+        # anything slot-aligned uses per-rollout data from collect_condition.
         gt          = env.get_ground_truth_trajectories()
         agent_state = env.get_global_agent_state()
         road_edges  = env.get_road_edge_polylines()
-        sids        = _squeeze(np.asarray(gt["scenario_id"]).astype(str))
 
         for cond in CONDITIONS:
             t0  = time.time()
-            sim = collect_condition(env, policy, cond, mean_role, sids,
-                                    device, args.rollouts, rng)
+            sim, gt_r0 = collect_condition(env, policy, cond, mean_role,
+                                           device, args.rollouts, rng)
             res = results[cond]
-            res["spread"].extend(spread_stats(sim, gt, sids))
+            # spread uses rollout 0's OWN ground truth: reset() reshuffles
+            # the slot<->scenario allocation, so slot-alignment only holds
+            # within the same reset generation.
+            sids_r0 = _squeeze(np.asarray(gt_r0["scenario_id"]).astype(str))
+            res["spread"].extend(spread_stats(sim, gt_r0, sids_r0))
             try:
                 df  = evaluator.compute_metrics(gt, sim, agent_state,
                                                 road_edges,
