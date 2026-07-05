@@ -43,6 +43,15 @@ mkdir -p /scratch/e452103/logs
 # C binding loads pufferlib/config/ocean/drive.ini via a relative path.
 cd /scratch/e452103/PufferDrive_guid
 
+# Pre-flight: fail in 1s if the map binaries are missing, instead of crashing
+# inside Drive() and leaving a hung wandb process holding the GPU. The guid
+# stack needs its OWN binaries -- its binary format segfaults on the baseline
+# ones -- generated via process_all_maps into $DATA_DIR.
+if [ ! -f "$DATA_DIR/map_000.bin" ]; then
+    echo "FATAL: no map binaries at $DATA_DIR -- generate them first." >&2
+    exit 1
+fi
+
 python $HOME/roma_main/roma_pufferdrive/train_roma.py \
     --role_dim                8 \
     --num_maps                10000 \
