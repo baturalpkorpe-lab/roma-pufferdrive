@@ -9,6 +9,12 @@ charts). All other agents keep their natural encoder roles; torch RNG is
 re-seeded identically per condition, so the ONLY difference between the three
 rollouts is the focal agent's role vector.
 
+Mechanics: the env loads a POOL of maps (--map_pool) with agent slots spread
+across them like in training; target scenes are found inside the live
+allocation and rendered by filtering slots/roads/GT via scenario_id. (A
+num_maps=1 env can never change its map -- neither the seed nor
+resample_maps() have any effect on it.)
+
 Outputs per (regime, map):
   3 videos  r{regime}_map{seed}_{conformist|middle|runaway}.mp4
             focal agent = large colored box + trail, others gray,
@@ -43,9 +49,9 @@ from torch.distributions import Categorical
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from render_topdown import (normalize_polylines, vehicle_corners,
-                            load_policy, BG, ROAD, GTC)
+from render_topdown import vehicle_corners, load_policy, BG, ROAD, GTC
 from role_regime_analysis import _squeeze
+from map_features import split_polylines
 
 T = 91
 CONDITIONS = ["conformist", "middle", "runaway"]
@@ -65,10 +71,17 @@ def parse_args():
     p.add_argument("--data_dir",   type=str, required=True)
     p.add_argument("--out_dir",    type=str, required=True)
     p.add_argument("--maps_per_regime", type=int, default=2)
-    p.add_argument("--num_agents", type=int, default=32)
+    p.add_argument("--map_pool",   type=int, default=128,
+                   help="Maps loaded into the env; target scenes are found "
+                        "inside the live allocation (num_maps=1 cannot "
+                        "change its map -- neither seed nor resample)")
+    p.add_argument("--total_agents", type=int, default=768,
+                   help="Agent slots spread across the map pool "
+                        "(~6 per scene, like training)")
     p.add_argument("--min_margin", type=float, default=1.5)
     p.add_argument("--seed_start", type=int, default=100)
-    p.add_argument("--max_probes", type=int, default=400)
+    p.add_argument("--max_resamples", type=int, default=10,
+                   help="Pool reshuffles if some regime is missing")
     p.add_argument("--device",     type=str, default="cpu")
     p.add_argument("--fps",        type=int, default=10)
     p.add_argument("--dpi",        type=int, default=110)
@@ -98,34 +111,69 @@ def cluster_role_conditions(agent_csv):
 
 
 # ---------------------------------------------------------------------------
-# Map probing: hop maps with env.resample_maps() (the seed does NOT select
-# the map when num_maps=1 -- recreating the env with a new seed loads the
-# same scenario again)
+# Scene selection inside the live allocation.
+# The env loads a POOL of maps (num_maps=map_pool) and spreads the agent
+# slots across them, exactly like training. A num_maps=1 env can NEVER
+# change its map (neither the seed nor resample_maps() do anything), so we
+# find our target scenes among the pool and render them by filtering the
+# scene's agent slots / road polylines / GT rows via scenario_id.
 # ---------------------------------------------------------------------------
 
-def check_map(env, regime_of, need, found, used_sids):
-    """Inspect the currently loaded map. Returns (sid, rg, focal) or None."""
+def scan_allocation(env, regime_of, need, found, used_sids):
+    """Group the live allocation's agent slots by scenario; return all new
+    usable target scenes as (sid, regime, slots, focal_slot, human_m).
+    Reserves accepted scenes in `found`/`used_sids`."""
     env.reset()
-    gt  = env.get_ground_truth_trajectories()
-    sid = _squeeze(np.asarray(gt["scenario_id"]).astype(str))[0]
-    rg  = regime_of.get(sid)
-    if rg is None or rg not in need or sid in used_sids \
-            or len(found[rg]) >= need[rg]:
-        return None
+    gt     = env.get_ground_truth_trajectories()
+    sids   = _squeeze(np.asarray(gt["scenario_id"]).astype(str))
     gx, gy = _squeeze(gt["x"]), _squeeze(gt["y"])
     valid  = _squeeze(gt["valid"]).astype(bool)
     is_veh = np.asarray(gt["is_vehicle"]).reshape(-1).astype(bool)
-    # focal = vehicle whose human drives the farthest
-    lens = np.zeros(gx.shape[0])
-    for a in range(gx.shape[0]):
-        if not is_veh[a] or valid[a].sum() < 10:
+
+    accepted = []
+    for sid in np.unique(sids):
+        if not sid or sid in used_sids:
             continue
-        px, py = gx[a][valid[a]], gy[a][valid[a]]
-        lens[a] = np.hypot(np.diff(px), np.diff(py)).sum()
-    focal = int(np.argmax(lens))
-    if lens[focal] < 10.0:                        # humans barely move: skip
-        return None
-    return sid, int(rg), focal, float(lens[focal])
+        rg = regime_of.get(sid)
+        if rg is None or rg not in need or len(found[rg]) >= need[rg]:
+            continue
+        slots = np.where(sids == sid)[0]
+        lens  = np.zeros(len(slots))
+        for i, a in enumerate(slots):
+            if not is_veh[a] or valid[a].sum() < 10:
+                continue
+            px, py = gx[a][valid[a]], gy[a][valid[a]]
+            lens[i] = np.hypot(np.diff(px), np.diff(py)).sum()
+        if lens.max() < 10.0:               # this scene's humans barely move
+            continue
+        focal = int(slots[int(np.argmax(lens))])
+        accepted.append((sid, int(rg), slots, focal, float(lens.max())))
+        found[rg].append(sid)
+        used_sids.add(sid)
+    return accepted
+
+
+def scene_view(data, slots, sid):
+    """Subset a full-allocation rollout to one scenario: its agent slots,
+    its road polylines, its GT rows."""
+    view = {
+        "xs": data["xs"][:, slots], "ys": data["ys"][:, slots],
+        "hs": data["hs"][:, slots],
+        "length": data["length"][slots], "width": data["width"][slots],
+        "road_polys": [], "gt": None,
+    }
+    try:
+        view["road_polys"] = split_polylines(data["road_edges"]).get(sid, [])
+    except Exception as e:
+        print(f"  [road filter: {e}]")
+    if isinstance(data["gt"], dict):
+        try:
+            view["gt"] = {"x":     _squeeze(data["gt"]["x"])[slots],
+                          "y":     _squeeze(data["gt"]["y"])[slots],
+                          "valid": _squeeze(data["gt"]["valid"])[slots]}
+        except Exception:
+            pass
+    return view
 
 
 # ---------------------------------------------------------------------------
@@ -224,9 +272,10 @@ def bbox_of(polys, xs, ys):
 
 
 def render_condition_video(data, focal, color, title, out_path, fps, dpi):
+    """data: a scene_view() dict; focal: index within the view's slots."""
     xs, ys, hs = data["xs"], data["ys"], data["hs"]
     B = xs.shape[1]
-    polys = normalize_polylines(data["road_edges"])
+    polys = data["road_polys"]
     x0, x1, y0, y1 = bbox_of(polys, xs, ys)
 
     w, h = x1 - x0, y1 - y0
@@ -282,9 +331,9 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi):
 
 
 def render_overlay(datas, focal, title, out_path, dpi):
-    """datas: {condition: data}. One image, three focal trajectories."""
+    """datas: {condition: scene_view dict}. One image, three focal paths."""
     ref   = datas[CONDITIONS[0]]
-    polys = normalize_polylines(ref["road_edges"])
+    polys = ref["road_polys"]
     all_x = np.concatenate([d["xs"][:, focal] for d in datas.values()])
     all_y = np.concatenate([d["ys"][:, focal] for d in datas.values()])
     x0, x1, y0, y1 = bbox_of(polys, all_x[:, None], all_y[:, None])
@@ -333,12 +382,13 @@ def main():
         print(f"[conditions] regime {rg} ({REGIME_NAMES.get(rg)}): " +
               "  ".join(f"{n}: dv={dv:+.1f}" for n, (_, dv) in cc.items()))
 
-    # One env for the whole job; hop maps with resample_maps() (a new seed
-    # does NOT load a new map when num_maps=1). The env stays on the accepted
-    # map while its 3 conditions run: env.reset() replays the same scenario,
-    # only resample_maps() changes it.
+    # One env holding a POOL of maps; agent slots are spread across the pool
+    # like in training. Target scenes are found inside the live allocation
+    # and rendered by scenario_id filtering. env.reset() replays the same
+    # allocation (WOSAC relies on this), so the 3 conditions per scene are
+    # exactly comparable; resample_maps() reshuffles if a regime is missing.
     from pufferlib.ocean.drive.drive import Drive
-    env = Drive(num_maps=1, num_agents=args.num_agents,
+    env = Drive(num_maps=args.map_pool, num_agents=args.total_agents,
                 map_dir=args.data_dir, episode_length=T,
                 seed=args.seed_start)
     obs_probe, _ = env.reset()
@@ -351,57 +401,54 @@ def main():
     need      = {rg: args.maps_per_regime for rg in REGIME_NAMES}
     found     = {rg: [] for rg in REGIME_NAMES}
     used_sids = set()
-    seen_sids = set()
-    n_done    = 0
     n_target  = args.maps_per_regime * len(REGIME_NAMES)
+    n_done    = 0
 
-    print(f"\n[probe] hopping maps via resample_maps() "
-          f"(target {n_target} maps) ...")
-    for probe in range(args.max_probes):
+    for rnd in range(args.max_resamples + 1):
+        if rnd > 0:
+            print(f"\n[scan] regimes still missing -- resampling the map "
+                  f"pool (round {rnd}) ...")
+            env.resample_maps()
+        scenes = scan_allocation(env, regime_of, need, found, used_sids)
+        print(f"[scan] round {rnd}: {len(scenes)} new target scenes found "
+              f"in the {args.map_pool}-map allocation", flush=True)
+
+        for sid, rg, slots, focal, human_m in scenes:
+            n_done += 1
+            print(f"\n[scene {n_done}/{n_target}] regime {rg} "
+                  f"({REGIME_NAMES[rg]}) map {sid[:10]}: {len(slots)} agent "
+                  f"slots, focal slot {focal} (human drives {human_m:.0f} m)",
+                  flush=True)
+            focal_local = int(np.where(slots == focal)[0][0])
+            views = {}
+            for cond in CONDITIONS:
+                vec, dv = conds[rg][cond]
+                print(f"[render] {REGIME_NAMES[rg]} map {sid[:10]} "
+                      f"cond {cond} (dv={dv:+.1f} m/s)")
+                data = rollout_forced(env, policy, focal, vec, device)
+                views[cond] = scene_view(data, slots, sid)
+                name  = f"r{rg}_{REGIME_NAMES[rg]}_{sid[:10]}_{cond}.mp4"
+                title = (f"{REGIME_NAMES[rg]} | map {sid[:10]} | focal role "
+                         f"= {cond} ({dv:+.1f} m/s vs human in Phase C)")
+                render_condition_video(views[cond], focal_local,
+                                       COND_COLORS[cond], title,
+                                       out_dir / name, args.fps, args.dpi)
+            render_overlay(views, focal_local,
+                           f"{REGIME_NAMES[rg]} | map {sid[:10]} | same "
+                           f"scene, same noise -- only the focal role differs",
+                           out_dir / f"overlay_r{rg}_{sid[:10]}.png",
+                           args.dpi)
+
         if n_done >= n_target:
             break
-        if probe > 0:
-            env.resample_maps()
-        hit = check_map(env, regime_of, need, found, used_sids)
-        gt  = env.get_ground_truth_trajectories()
-        seen_sids.add(_squeeze(np.asarray(gt["scenario_id"]).astype(str))[0])
-        if probe == 30 and len(seen_sids) <= 2:
-            print("[probe] WARNING: resample_maps() is not changing the map "
-                  "-- aborting early; only the maps found so far will render")
-            break
-        if hit is None:
-            continue
-        sid, rg, focal, human_m = hit
-        found[rg].append(sid)
-        used_sids.add(sid)
-        n_done += 1
-        print(f"[probe {probe}] regime {rg} ({REGIME_NAMES[rg]}) map "
-              f"{sid[:10]} focal {focal} (human drives {human_m:.0f} m)  "
-              f"[{n_done}/{n_target}]", flush=True)
-
-        datas = {}
-        for cond in CONDITIONS:
-            vec, dv = conds[rg][cond]
-            print(f"[render] regime {rg} map {sid[:10]} focal {focal} "
-                  f"cond {cond} (dv={dv:+.1f} m/s)")
-            datas[cond] = rollout_forced(env, policy, focal, vec, device)
-            name  = f"r{rg}_{REGIME_NAMES[rg]}_{sid[:10]}_{cond}.mp4"
-            title = (f"{REGIME_NAMES[rg]} | map {sid[:10]} | focal role = "
-                     f"{cond} ({dv:+.1f} m/s vs human in Phase C)")
-            render_condition_video(datas[cond], focal, COND_COLORS[cond],
-                                   title, out_dir / name, args.fps, args.dpi)
-        render_overlay(datas, focal,
-                       f"{REGIME_NAMES[rg]} | map {sid[:10]} | same scene, "
-                       f"same noise -- only the focal role differs",
-                       out_dir / f"overlay_r{rg}_{sid[:10]}.png", args.dpi)
 
     env.close()
     missing = {REGIME_NAMES[rg]: need[rg] - len(found[rg])
                for rg in need if len(found[rg]) < need[rg]}
     if missing:
-        print(f"[probe] note: not all regimes filled after {args.max_probes} "
-              f"probes, missing: {missing}")
-    print(f"\n[render] done -> {out_dir}")
+        print(f"\n[scan] note: not all regimes filled after "
+              f"{args.max_resamples} resamples, missing: {missing}")
+    print(f"\n[render] done -> {out_dir}  ({n_done} scenes)")
 
 
 if __name__ == "__main__":
