@@ -90,6 +90,13 @@ def parse_args():
     p.add_argument("--num_maps",   type=int, default=10000)
     p.add_argument("--device",     type=str, default="cuda")
     p.add_argument("--seed",       type=int, default=0)
+    p.add_argument("--wandb",         action="store_true",
+                   help="Log the ablation table + summary figure to wandb.")
+    p.add_argument("--wandb_project", type=str, default="roma-pufferdrive")
+    p.add_argument("--wandb_entity",  type=str, default=None,
+                   help="Defaults to $WANDB_ENTITY (e.g. s-rahmani-tu-delft).")
+    p.add_argument("--wandb_run_name", type=str, default=None,
+                   help="Defaults to role_ablation_<checkpoint stem>.")
     return p.parse_args()
 
 
@@ -231,6 +238,23 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(args.seed)
 
+    wandb_run = None
+    if args.wandb:
+        try:
+            import wandb
+            wandb_run = wandb.init(
+                project = args.wandb_project,
+                entity  = args.wandb_entity or os.environ.get("WANDB_ENTITY"),
+                name    = args.wandb_run_name
+                          or f"role_ablation_{Path(args.checkpoint).stem}",
+                config  = vars(args),
+                tags    = ["role_ablation"],
+            )
+            print(f"[ablation] wandb: {wandb_run.url}")
+        except Exception as e:
+            print(f"[ablation] wandb init failed ({e}); continuing without it")
+            wandb_run = None
+
     mean_role, role_dim_csv = population_mean_role(args.agent_data)
     print(f"[ablation] population-mean role ({role_dim_csv} dims): "
           f"{np.round(mean_role, 3)}")
@@ -357,6 +381,31 @@ def main():
             w.writerow([k] + [table[c].get(k, "") for c in CONDITIONS])
     print(f"\n[ablation] saved -> {csv_path}")
 
+    # ----- wandb: per-condition scalars + a comparison table + deltas ---------
+    if wandb_run is not None:
+        try:
+            import wandb
+            log = {}
+            for cond in CONDITIONS:
+                for k, v in table[cond].items():
+                    if isinstance(v, (int, float)):
+                        log[f"ablation/{cond}/{k}"] = v
+            # headline deltas vs natural (the "usefulness" numbers)
+            nat = table.get("natural", {})
+            for cond in ("shuffled", "collapsed"):
+                for k in ("realism_meta_score", "likelihood_collision_indication",
+                          "likelihood_offroad_indication", "interactive_metrics"):
+                    if k in nat and k in table.get(cond, {}):
+                        log[f"ablation/delta_{cond}/{k}"] = table[cond][k] - nat[k]
+            # a sortable W&B Table of the whole grid
+            tbl = wandb.Table(columns=["metric"] + CONDITIONS)
+            for k in metrics_all:
+                tbl.add_data(k, *[table[c].get(k) for c in CONDITIONS])
+            log["ablation/table"] = tbl
+            wandb_run.log(log)
+        except Exception as e:
+            print(f"[ablation] wandb table log failed ({e})")
+
     # ----- summary figure -----------------------------------------------------
     fig, axes = plt.subplots(1, 3, figsize=(14, 4.5))
     panels = [
@@ -381,11 +430,20 @@ def main():
     fig.suptitle(f"Role ablation -- {Path(args.checkpoint).stem}",
                  fontsize=12)
     fig.tight_layout()
-    fig.savefig(out_dir / "ablation_summary.png", dpi=140)
+    summary_path = out_dir / "ablation_summary.png"
+    fig.savefig(summary_path, dpi=140)
+    if wandb_run is not None:
+        try:
+            import wandb
+            wandb_run.log({"ablation/summary": wandb.Image(str(summary_path))})
+        except Exception as e:
+            print(f"[ablation] wandb image log failed ({e})")
     plt.close(fig)
-    print(f"[ablation] figure -> {out_dir / 'ablation_summary.png'}")
+    print(f"[ablation] figure -> {summary_path}")
 
     env.close()
+    if wandb_run is not None:
+        wandb_run.finish()
 
 
 if __name__ == "__main__":

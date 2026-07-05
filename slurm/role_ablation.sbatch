@@ -21,6 +21,7 @@ conda activate roma
 
 export PYTHONPATH=$HOME/roma_pufferdrive:/scratch/e452103/PufferDrive
 export PYTHONUNBUFFERED=1
+export WANDB_ENTITY=s-rahmani-tu-delft   # eval scripts read entity from here
 CODE_DIR=$HOME/roma_pufferdrive
 
 mkdir -p /scratch/e452103/logs
@@ -33,7 +34,8 @@ python "$CODE_DIR/role_ablation_eval.py" \
     --agent_data /scratch/e452103/role_regime/dim8/phaseC_agent_data.csv \
     --data_dir   pufferlib/resources/drive/binaries/training \
     --out_dir    /scratch/e452103/role_ablation/dim8 \
-    --batches    15
+    --batches    15 \
+    --wandb --wandb_run_name role_ablation_dim8
 
 echo "=== role ablation: dim-4 checkpoint ==="
 python "$CODE_DIR/role_ablation_eval.py" \
@@ -41,6 +43,7 @@ python "$CODE_DIR/role_ablation_eval.py" \
     --agent_data /scratch/e452103/role_regime/dim4/phaseC_agent_data.csv \
     --data_dir   pufferlib/resources/drive/binaries/training \
     --out_dir    /scratch/e452103/role_ablation/dim4 \
-    --batches    15
+    --batches    15 \
+    --wandb --wandb_run_name role_ablation_dim4
 
 echo "Results: /scratch/e452103/role_ablation/{dim8,dim4}/"
