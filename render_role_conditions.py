@@ -49,11 +49,16 @@ from torch.distributions import Categorical
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from render_topdown import vehicle_corners, load_policy, BG, ROAD, GTC
+from render_topdown import (vehicle_corners, load_policy, normalize_polylines,
+                            BG, GTC)
 from role_regime_analysis import _squeeze
 from map_features import split_polylines
 
 T = 91
+JUMP_THRESH = 8.0          # metres -- respawn teleports between segments
+MIN_VIEW_SPAN = 70.0        # metres -- keep agents readable when movement is small
+ROAD = "#8a8aa0"            # brighter than render_topdown default for dark BG
+ROAD_LW = 1.2
 CONDITIONS = ["conformist", "middle", "runaway"]
 COND_COLORS = {"conformist": "#4477aa", "middle": "#ee8833",
                "runaway": "#33aa44"}
@@ -134,6 +139,8 @@ def scan_allocation(env, regime_of, need, found, used_sids):
     for sid in np.unique(sids):
         if not sid or sid in used_sids:
             continue
+        if str(sid).lower().startswith("map"):
+            continue                        # placeholder ids, not real scenarios
         rg = regime_of.get(sid)
         if rg is None or rg not in need or len(found[rg]) >= need[rg]:
             continue
@@ -153,6 +160,93 @@ def scan_allocation(env, regime_of, need, found, used_sids):
     return accepted
 
 
+def longest_segment(x, y, jump=JUMP_THRESH):
+    """Longest contiguous run with no >jump m single-step teleports."""
+    x = np.asarray(x, dtype=np.float64).reshape(-1)
+    y = np.asarray(y, dtype=np.float64).reshape(-1)
+    ok = np.isfinite(x) & np.isfinite(y)
+    x, y = x[ok], y[ok]
+    if len(x) <= 1:
+        return x, y
+    cuts = np.concatenate([[0], np.where(np.hypot(np.diff(x), np.diff(y)) > jump)[0] + 1,
+                           [len(x)]])
+    best = slice(0, len(x))
+    for a, b in zip(cuts[:-1], cuts[1:]):
+        if b - a > best.stop - best.start:
+            best = slice(a, b)
+    return x[best], y[best]
+
+
+def agent_extent(xs, ys, jump=JUMP_THRESH, min_span=MIN_VIEW_SPAN):
+    """Axis-aligned bounds from agent motion; teleports cannot blow up the frame."""
+    xs = np.asarray(xs, dtype=np.float64)
+    ys = np.asarray(ys, dtype=np.float64)
+    if xs.ndim == 1:
+        xs, ys = xs[:, None], ys[:, None]
+    segs = []
+    for b in range(xs.shape[1]):
+        px, py = longest_segment(xs[:, b], ys[:, b], jump)
+        if len(px):
+            segs.append(np.stack([px, py], axis=-1))
+    if not segs:
+        fx = xs[np.isfinite(xs)]
+        fy = ys[np.isfinite(ys)]
+        if fx.size == 0:
+            h = min_span / 2
+            return -h, h, -h, h
+        x0, x1 = np.percentile(fx, [2, 98])
+        y0, y1 = np.percentile(fy, [2, 98])
+    else:
+        allp = np.concatenate(segs, axis=0)
+        x0, x1 = np.percentile(allp[:, 0], [2, 98])
+        y0, y1 = np.percentile(allp[:, 1], [2, 98])
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    half = max(x1 - x0, y1 - y0, min_span) / 2
+    return float(cx - half), float(cx + half), float(cy - half), float(cy + half)
+
+
+def filter_polys_near(polys, x0, x1, y0, y1, margin=50.0):
+    """Keep road segments that overlap the agent bbox (+ margin)."""
+    if not polys:
+        return []
+    mx, my = margin, margin
+    x0, x1, y0, y1 = x0 - mx, x1 + mx, y0 - my, y1 + my
+    out = []
+    for p in np.asarray(polys, dtype=object):
+        p = np.asarray(p, dtype=np.float64)
+        if p.shape[0] < 2:
+            continue
+        if (p[:, 0].max() >= x0 and p[:, 0].min() <= x1
+                and p[:, 1].max() >= y0 and p[:, 1].min() <= y1):
+            out.append(p)
+    return out
+
+
+def roads_for_scene(road_edges, sid, xs, ys):
+    """Road polylines for one scenario, clipped to where agents actually drive."""
+    x0, x1, y0, y1 = agent_extent(xs, ys)
+    polys = []
+    if road_edges is None:
+        return polys
+    try:
+        by_sid = split_polylines(road_edges)
+        polys  = list(by_sid.get(sid, []))
+        if not polys:
+            pref = sid[:10]
+            for k, v in by_sid.items():
+                if (k == sid or k.startswith(pref) or pref.startswith(k[:10])
+                        or sid.startswith(k)):
+                    polys.extend(v)
+        if not polys:
+            all_polys = [p for ps in by_sid.values() for p in ps]
+            polys = filter_polys_near(all_polys, x0, x1, y0, y1, margin=80.0)
+    except Exception as e:
+        print(f"  [road filter: {e}]")
+        polys = normalize_polylines(road_edges)
+    nearby = filter_polys_near(polys, x0, x1, y0, y1, margin=60.0)
+    return nearby if nearby else polys
+
+
 def scene_view(data, slots, sid):
     """Subset a full-allocation rollout to one scenario: its agent slots,
     its road polylines, its GT rows."""
@@ -162,10 +256,8 @@ def scene_view(data, slots, sid):
         "length": data["length"][slots], "width": data["width"][slots],
         "road_polys": [], "gt": None,
     }
-    try:
-        view["road_polys"] = split_polylines(data["road_edges"]).get(sid, [])
-    except Exception as e:
-        print(f"  [road filter: {e}]")
+    view["road_polys"] = roads_for_scene(data["road_edges"], sid,
+                                         view["xs"], view["ys"])
     if isinstance(data["gt"], dict):
         try:
             view["gt"] = {"x":     _squeeze(data["gt"]["x"])[slots],
@@ -241,7 +333,8 @@ def scene_setup(ax, polys, gt, x0, x1, y0, y1):
     for sp in ax.spines.values():
         sp.set_color("#333344")
     if polys:
-        ax.add_collection(LineCollection(polys, colors=ROAD, linewidths=0.8))
+        ax.add_collection(LineCollection(polys, colors=ROAD, linewidths=ROAD_LW,
+                                         zorder=1))
     if isinstance(gt, dict):
         try:
             gx, gy = _squeeze(gt["x"]), _squeeze(gt["y"])
@@ -260,14 +353,18 @@ def scene_setup(ax, polys, gt, x0, x1, y0, y1):
 
 
 def bbox_of(polys, xs, ys):
+    """Frame agents first; add only nearby roads so the view stays tight."""
+    x0, x1, y0, y1 = agent_extent(xs, ys)
     if polys:
-        allp = np.concatenate(polys, axis=0)
-        x0, x1 = allp[:, 0].min(), allp[:, 0].max()
-        y0, y1 = allp[:, 1].min(), allp[:, 1].max()
-    else:
-        x0, x1 = np.percentile(xs, [2, 98])
-        y0, y1 = np.percentile(ys, [2, 98])
-    mx, my = 0.03 * (x1 - x0 + 1), 0.03 * (y1 - y0 + 1)
+        nearby = filter_polys_near(polys, x0, x1, y0, y1, margin=40.0)
+        if nearby:
+            allp = np.concatenate(nearby, axis=0)
+            x0 = min(x0, float(allp[:, 0].min()))
+            x1 = max(x1, float(allp[:, 0].max()))
+            y0 = min(y0, float(allp[:, 1].min()))
+            y1 = max(y1, float(allp[:, 1].max()))
+    mx = max(0.08 * (x1 - x0 + 1), 8.0)
+    my = max(0.08 * (y1 - y0 + 1), 8.0)
     return x0 - mx, x1 + mx, y0 - my, y1 + my
 
 
@@ -286,11 +383,11 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi):
     scene_setup(ax, polys, data["gt"], x0, x1, y0, y1)
     ax.set_title(title, color="#e8e8f0", fontsize=10)
 
-    others = PolyCollection([], facecolors=(0.55, 0.55, 0.60, 1.0),
-                            edgecolors="#000000", linewidths=0.3, zorder=4)
+    others = PolyCollection([], facecolors=(0.72, 0.72, 0.78, 1.0),
+                            edgecolors="#1a1a22", linewidths=0.45, zorder=4)
     focal_c = PolyCollection([], facecolors=color, edgecolors="#ffffff",
-                             linewidths=0.8, zorder=6)
-    trail = LineCollection([], colors=color, linewidths=2.0, alpha=0.8,
+                             linewidths=1.0, zorder=6)
+    trail = LineCollection([], colors=color, linewidths=2.4, alpha=0.9,
                            zorder=5)
     ax.add_collection(others)
     ax.add_collection(focal_c)
@@ -299,22 +396,18 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi):
                   fontsize=10, va="top", family="monospace")
 
     def update(t):
-        vis = ((xs[t] > x0) & (xs[t] < x1) & (ys[t] > y0) & (ys[t] < y1))
-        idx = np.array([a for a in np.where(vis)[0] if a != focal], dtype=int)
+        ok = (np.isfinite(xs[t]) & np.isfinite(ys[t]) & np.isfinite(hs[t]))
+        idx = np.array([a for a in range(B) if a != focal and ok[a]], dtype=int)
         others.set_verts(list(vehicle_corners(
             xs[t, idx], ys[t, idx], hs[t, idx],
             data["length"][idx], data["width"][idx])) if len(idx) else [])
         focal_c.set_verts(list(vehicle_corners(
             xs[t, focal:focal+1], ys[t, focal:focal+1], hs[t, focal:focal+1],
-            data["length"][focal:focal+1] * 1.15,
-            data["width"][focal:focal+1] * 1.15)))
+            data["length"][focal:focal+1] * 1.25,
+            data["width"][focal:focal+1] * 1.25)))
         s = max(0, t - 40)
-        px, py = xs[s:t+1, focal], ys[s:t+1, focal]
-        jump = np.hypot(np.diff(px), np.diff(py)) > 8.0
-        cut  = np.where(jump)[0]
-        start = cut[-1] + 1 if len(cut) else 0
-        trail.set_segments([np.stack([px[start:], py[start:]], axis=-1)]
-                           if t - s - start >= 1 else [])
+        px, py = longest_segment(xs[s:t+1, focal], ys[s:t+1, focal])
+        trail.set_segments([np.stack([px, py], axis=-1)] if len(px) >= 2 else [])
         txt.set_text(f"t = {t:2d}/{T-1}  ({t/10:.1f}s)")
         return others, focal_c, trail, txt
 
@@ -343,13 +436,12 @@ def render_overlay(datas, focal, title, out_path, dpi):
     scene_setup(ax, polys, ref["gt"], x0, x1, y0, y1)
     for cond in CONDITIONS:
         d = datas[cond]
-        px, py = d["xs"][:, focal], d["ys"][:, focal]
-        jump = np.hypot(np.diff(px), np.diff(py)) > 8.0
-        end  = int(np.where(jump)[0][0] + 1) if jump.any() else T
-        ax.plot(px[:end], py[:end], color=COND_COLORS[cond], lw=2.2,
+        px, py = longest_segment(d["xs"][:, focal], d["ys"][:, focal])
+        ax.plot(px, py, color=COND_COLORS[cond], lw=2.4,
                 alpha=0.95, label=cond, zorder=5)
-        ax.scatter(px[end-1], py[end-1], color=COND_COLORS[cond], s=90,
-                   marker="X", zorder=6, edgecolors="white", linewidths=0.7)
+        if len(px):
+            ax.scatter(px[-1], py[-1], color=COND_COLORS[cond], s=90,
+                       marker="X", zorder=6, edgecolors="white", linewidths=0.7)
     ax.scatter(ref["xs"][0, focal], ref["ys"][0, focal], color="white",
                s=70, zorder=6, label="start")
     ax.legend(fontsize=9, loc="best")
