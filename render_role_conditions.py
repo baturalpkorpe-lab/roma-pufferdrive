@@ -693,8 +693,11 @@ def main():
     # allocation (WOSAC relies on this), so the 3 conditions per scene are
     # exactly comparable; resample_maps() reshuffles if a regime is missing.
     from pufferlib.ocean.drive.drive import Drive
+    # goal_speed=100 disables the respawn speed gate (the env default ~20 m/s
+    # blocks fast agents from ever registering goal-reach even at 0 m), so
+    # aggressive roles can respawn on reaching their goal in the render.
     env = Drive(num_maps=args.map_pool, num_agents=args.total_agents,
-                map_dir=args.data_dir, episode_length=T, goal_speed=100
+                map_dir=args.data_dir, episode_length=T, goal_speed=100,
                 seed=args.seed_start)
     obs_probe, _ = env.reset()
     policy, ckpt_dim = load_policy(args.checkpoint, obs_probe.shape[-1],
