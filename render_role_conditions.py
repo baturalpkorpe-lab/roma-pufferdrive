@@ -92,6 +92,14 @@ def parse_args():
     p.add_argument("--seed_start", type=int, default=100)
     p.add_argument("--max_resamples", type=int, default=10,
                    help="Pool reshuffles if some regime is missing")
+    p.add_argument("--max_relocate", type=int, default=80,
+                   help="env.reset() retries to re-deal a target scene before "
+                        "giving up on it (resets are cheap; higher = fewer "
+                        "scenes skipped for bad luck)")
+    p.add_argument("--keep_ghosts", action="store_true",
+                   help="Keep drawing background agents after their human GT "
+                        "ends (default: hide them, so cars don't drive past "
+                        "the end of their real trajectory)")
     p.add_argument("--device",     type=str, default="cpu")
     p.add_argument("--fps",        type=int, default=10)
     p.add_argument("--dpi",        type=int, default=110)
@@ -255,6 +263,22 @@ def roads_for_scene(road_edges, sid, xs, ys):
         polys = normalize_polylines(road_edges)
     nearby = filter_polys_near(polys, x0, x1, y0, y1, margin=60.0)
     return nearby if nearby else polys
+
+
+def hide_after_frame(view, keep_ghosts=False):
+    """Per-agent last frame to draw. A background agent is hidden once its
+    human GT ends (else the policy drives it aimlessly forever); agents with
+    no valid GT are hidden entirely. keep_ghosts -> draw everything."""
+    n = view["xs"].shape[1]
+    gt = view.get("gt")
+    if keep_ghosts or gt is None:
+        return None
+    v   = np.asarray(gt["valid"]).astype(bool)      # (n, T_gt)
+    out = np.full(n, T - 1, dtype=int)
+    for a in range(n):
+        idx = np.where(v[a])[0]
+        out[a] = int(idx[-1]) if len(idx) else -1   # -1 = never draw
+    return out
 
 
 def scene_view(data, slots, sid):
@@ -424,9 +448,17 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi):
     txt = ax.text(0.02, 0.98, "", transform=ax.transAxes, color="#e8e8f0",
                   fontsize=10, va="top", family="monospace")
 
+    # Per-background-agent last frame to draw: once a context vehicle's human
+    # GT ends, the policy would keep driving it forever (off-road, through
+    # buildings) since it has no goal -- so we stop drawing it there. The focal
+    # agent is always drawn. hide_after=None (‑‑keep_ghosts) draws everything.
+    hide_after = data.get("hide_after")
+
     def update(t):
         ok = (np.isfinite(xs[t]) & np.isfinite(ys[t]) & np.isfinite(hs[t]))
-        idx = np.array([a for a in range(B) if a != focal and ok[a]], dtype=int)
+        idx = np.array(
+            [a for a in range(B) if a != focal and ok[a]
+             and (hide_after is None or t <= hide_after[a])], dtype=int)
         others.set_verts(list(vehicle_corners(
             xs[t, idx], ys[t, idx], hs[t, idx],
             data["length"][idx], data["width"][idx])) if len(idx) else [])
@@ -555,37 +587,60 @@ def main():
             print(f"\n[scene {n_done + 1}/{n_target}] regime {rg} "
                   f"({REGIME_NAMES[rg]}) map {sid[:10]}: focal vehicle id "
                   f"{focal_vid} (human drives {human_m:.0f} m)", flush=True)
+
+            # Phase 1 -- run ALL three rollouts first (the expensive part).
+            # Nothing is written to disk yet, so a scene that fails to re-deal
+            # on any condition leaves NO partial files behind.
             views, ok = {}, True
             for cond in CONDITIONS:
                 vec, dv = conds[rg][cond]
-                print(f"[render] {REGIME_NAMES[rg]} map {sid[:10]} "
-                      f"cond {cond} (dv={dv:+.1f} m/s)")
+                print(f"  rollout {cond:>10} (dv={dv:+.1f} m/s)", flush=True)
                 data = rollout_forced(env, policy, sid, focal_vid, vec,
-                                      device)
+                                      device, max_tries=args.max_relocate)
                 if data is None:
-                    print(f"  [skip] scene {sid[:10]} was not re-dealt "
-                          f"within the reset retries -- trying another map")
+                    print(f"  [skip] scene {sid[:10]} not re-dealt within "
+                          f"{args.max_relocate} resets on '{cond}' -- "
+                          f"discarding this scene entirely (no files written)")
                     found[rg].remove(sid)     # free the regime slot
                     ok = False
                     break
                 view = scene_view(data, data["slots"], sid)
                 view["focal"] = int(np.where(
                     data["slots"] == data["focal"])[0][0])
+                view["hide_after"] = hide_after_frame(view, args.keep_ghosts)
                 views[cond] = view
-                name  = f"r{rg}_{REGIME_NAMES[rg]}_{sid[:10]}_{cond}.mp4"
-                title = (f"{REGIME_NAMES[rg]} | map {sid[:10]} | focal role "
-                         f"= {cond} ({dv:+.1f} m/s vs human in Phase C)")
-                render_condition_video(views[cond], view["focal"],
-                                       COND_COLORS[cond], title,
-                                       out_dir / name, args.fps, args.dpi)
             if not ok:
                 continue
-            render_overlay(views,
-                           f"{REGIME_NAMES[rg]} | map {sid[:10]} | same "
-                           f"scene, same noise -- only the focal role differs",
-                           out_dir / f"overlay_r{rg}_{sid[:10]}.png",
-                           args.dpi)
-            n_done += 1
+
+            # Phase 2 -- all three succeeded: write videos + overlay. If a
+            # render error slips through, delete every file for this scene so
+            # a partial triplet can never persist.
+            try:
+                for cond in CONDITIONS:
+                    vec, dv = conds[rg][cond]
+                    name  = f"r{rg}_{REGIME_NAMES[rg]}_{sid[:10]}_{cond}.mp4"
+                    title = (f"{REGIME_NAMES[rg]} | map {sid[:10]} | focal "
+                             f"role = {cond} ({dv:+.1f} m/s vs human)")
+                    render_condition_video(views[cond], views[cond]["focal"],
+                                           COND_COLORS[cond], title,
+                                           out_dir / name, args.fps, args.dpi)
+                render_overlay(views,
+                               f"{REGIME_NAMES[rg]} | map {sid[:10]} | same "
+                               f"scene, same noise -- only the focal role "
+                               f"differs",
+                               out_dir / f"overlay_r{rg}_{sid[:10]}.png",
+                               args.dpi)
+                n_done += 1
+            except Exception as e:
+                print(f"  [render error on {sid[:10]}: {e}] -- removing any "
+                      f"partial files for this scene")
+                for f in list(out_dir.glob(f"*{sid[:10]}*")):
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+                found[rg].remove(sid)
+                import traceback; traceback.print_exc()
 
         if n_done >= n_target:
             break
