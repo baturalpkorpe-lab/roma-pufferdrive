@@ -41,6 +41,7 @@ Usage (from /scratch/e452103/PufferDrive):
 """
 
 import argparse
+import csv
 from pathlib import Path
 
 import numpy as np
@@ -104,6 +105,17 @@ def parse_args():
                    help="Keep drawing background agents after their human GT "
                         "ends (default: hide them, so cars don't drive past "
                         "the end of their real trajectory)")
+    p.add_argument("--min_focal_drive", type=float, default=5.0,
+                   help="Min metres the focal's human must drive for a scene "
+                        "to qualify. 5 m so slow regimes (parking, regime 2) "
+                        "are not filtered out (10 m rejected almost all).")
+    p.add_argument("--policy_background", action="store_true",
+                   help="Drive background agents with the policy (old default) "
+                        "instead of replaying their logged GT. GT replay "
+                        "(default) removes respawn-splitting and policy "
+                        "misbehaviour of context cars.")
+    p.add_argument("--goal_radius", type=float, default=2.0,
+                   help="Metres for the on-screen 'REACHED' flag (matches ini)")
     p.add_argument("--device",     type=str, default="cpu")
     p.add_argument("--fps",        type=int, default=10)
     p.add_argument("--dpi",        type=int, default=110)
@@ -141,7 +153,7 @@ def cluster_role_conditions(agent_csv):
 # scene's agent slots / road polylines / GT rows via scenario_id.
 # ---------------------------------------------------------------------------
 
-def scan_allocation(env, regime_of, need, found, used_sids):
+def scan_allocation(env, regime_of, need, found, used_sids, min_drive=5.0):
     """Group the live allocation's agent slots by scenario; return all new
     usable target scenes as (sid, regime, focal_vehicle_id, human_m).
 
@@ -173,7 +185,10 @@ def scan_allocation(env, regime_of, need, found, used_sids):
                 continue
             px, py = gx[a][valid[a]], gy[a][valid[a]]
             lens[i] = np.hypot(np.diff(px), np.diff(py)).sum()
-        if lens.max() < 10.0:               # this scene's humans barely move
+        # min_drive is low (default 5 m) so slow regimes (parking / low-speed
+        # = regime 2) are not filtered out for barely moving -- a 10 m bar
+        # rejected almost every parking scene, so regime 2 never rendered.
+        if lens.max() < min_drive:
             continue
         focal_vid = int(ids[slots[int(np.argmax(lens))]])
         accepted.append((sid, int(rg), focal_vid, float(lens.max())))
@@ -298,9 +313,12 @@ def scene_view(data, slots, sid):
                                          view["xs"], view["ys"])
     if isinstance(data["gt"], dict):
         try:
-            view["gt"] = {"x":     _squeeze(data["gt"]["x"])[slots],
-                          "y":     _squeeze(data["gt"]["y"])[slots],
-                          "valid": _squeeze(data["gt"]["valid"])[slots]}
+            g = {"x":     _squeeze(data["gt"]["x"])[slots],
+                 "y":     _squeeze(data["gt"]["y"])[slots],
+                 "valid": _squeeze(data["gt"]["valid"])[slots]}
+            if "heading" in data["gt"]:
+                g["heading"] = _squeeze(data["gt"]["heading"])[slots]
+            view["gt"] = g
         except Exception:
             pass
     return view
@@ -477,14 +495,53 @@ def bbox_of(polys, xs, ys):
     return x0 - mx, x1 + mx, y0 - my, y1 + my
 
 
-def render_condition_video(data, focal, color, title, out_path, fps, dpi):
-    """data: a scene_view() dict; focal: index within the view's slots."""
+def goal_distance_track(data, focal, goal_radius=2.0):
+    """Per-frame distance (m) from the focal agent to its goal, computed only
+    over the pre-respawn segment (post-teleport coords are meaningless). Also
+    returns the closest approach and whether it entered goal_radius."""
+    goal = focal_goal(data["gt"], focal)
+    T_n  = data["xs"].shape[0]
+    dist = np.full(T_n, np.nan, dtype=np.float64)
+    if goal is None:
+        return dist, np.nan, -1, False
+    fx = data["xs"][:, focal].astype(np.float64)
+    fy = data["ys"][:, focal].astype(np.float64)
+    # cut at first respawn teleport
+    step = np.hypot(np.diff(fx), np.diff(fy))
+    tp   = np.where(step > JUMP_THRESH)[0]
+    end  = int(tp[0] + 1) if len(tp) else T_n
+    d    = np.hypot(fx[:end] - goal[0], fy[:end] - goal[1])
+    dist[:end] = d
+    dmin = float(np.nanmin(d)) if len(d) else np.nan
+    fmin = int(np.nanargmin(d)) if len(d) else -1
+    return dist, dmin, fmin, bool(dmin <= goal_radius)
+
+
+def render_condition_video(data, focal, color, title, out_path, fps, dpi,
+                           gt_background=True, goal_radius=2.0):
+    """data: a scene_view() dict; focal: index within the view's slots.
+    gt_background: draw non-focal agents from their logged GT (clean, no
+    policy weirdness / respawn splitting) instead of their policy rollout."""
     xs, ys, hs = data["xs"], data["ys"], data["hs"]
     B = xs.shape[1]
     polys = data["road_polys"]
     x0, x1, y0, y1 = bbox_of(polys, xs, ys)
     x0, x1, y0, y1 = include_point(x0, x1, y0, y1,
                                    focal_goal(data["gt"], focal))
+
+    # Background source: GT (default) or policy. GT gives clean context cars
+    # that never respawn/split and never drive aimlessly past their route.
+    gt = data.get("gt") if gt_background else None
+    if gt is not None and "heading" in gt:
+        bxs, bys = np.asarray(gt["x"]), np.asarray(gt["y"])
+        bhs      = np.asarray(gt["heading"])
+        bvalid   = np.asarray(gt["valid"]).astype(bool)
+        T_bg     = bxs.shape[1]
+    else:
+        gt_background = False
+        bxs = bys = bhs = bvalid = None
+
+    dist, dmin, fmin, reached = goal_distance_track(data, focal, goal_radius)
 
     w, h = x1 - x0, y1 - y0
     fw = 10.0 if w >= h else max(10.0 * w / h, 4)
@@ -506,20 +563,27 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi):
     txt = ax.text(0.02, 0.98, "", transform=ax.transAxes, color="#e8e8f0",
                   fontsize=10, va="top", family="monospace")
 
-    # Per-background-agent last frame to draw: once a context vehicle's human
-    # GT ends, the policy would keep driving it forever (off-road, through
-    # buildings) since it has no goal -- so we stop drawing it there. The focal
-    # agent is always drawn. hide_after=None (‑‑keep_ghosts) draws everything.
-    hide_after = data.get("hide_after")
+    # Policy-background only: hide a context car once its human GT ends.
+    hide_after = None if gt_background else data.get("hide_after")
 
     def update(t):
-        ok = (np.isfinite(xs[t]) & np.isfinite(ys[t]) & np.isfinite(hs[t]))
-        idx = np.array(
-            [a for a in range(B) if a != focal and ok[a]
-             and (hide_after is None or t <= hide_after[a])], dtype=int)
-        others.set_verts(list(vehicle_corners(
-            xs[t, idx], ys[t, idx], hs[t, idx],
-            data["length"][idx], data["width"][idx])) if len(idx) else [])
+        if gt_background:
+            tb  = min(t, T_bg - 1)
+            idx = np.array([a for a in range(B) if a != focal
+                            and bvalid[a, tb]
+                            and np.isfinite(bxs[a, tb])], dtype=int)
+            verts = (list(vehicle_corners(
+                bxs[idx, tb], bys[idx, tb], bhs[idx, tb],
+                data["length"][idx], data["width"][idx])) if len(idx) else [])
+        else:
+            ok  = (np.isfinite(xs[t]) & np.isfinite(ys[t]) & np.isfinite(hs[t]))
+            idx = np.array(
+                [a for a in range(B) if a != focal and ok[a]
+                 and (hide_after is None or t <= hide_after[a])], dtype=int)
+            verts = (list(vehicle_corners(
+                xs[t, idx], ys[t, idx], hs[t, idx],
+                data["length"][idx], data["width"][idx])) if len(idx) else [])
+        others.set_verts(verts)
         focal_c.set_verts(list(vehicle_corners(
             xs[t, focal:focal+1], ys[t, focal:focal+1], hs[t, focal:focal+1],
             data["length"][focal:focal+1] * 1.25,
@@ -527,7 +591,14 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi):
         s = max(0, t - 40)
         px, py = longest_segment(xs[s:t+1, focal], ys[s:t+1, focal])
         trail.set_segments([np.stack([px, py], axis=-1)] if len(px) >= 2 else [])
-        txt.set_text(f"t = {t:2d}/{T-1}  ({t/10:.1f}s)")
+        d = dist[t]
+        if np.isnan(d):
+            gtxt = "goal: (respawned)"
+        elif d <= goal_radius:
+            gtxt = f"goal: {d:5.1f} m  REACHED"
+        else:
+            gtxt = f"goal: {d:5.1f} m"
+        txt.set_text(f"t = {t:2d}/{T-1}  ({t/10:.1f}s)\n{gtxt}")
         return others, focal_c, trail, txt
 
     ani = animation.FuncAnimation(fig, update, frames=T, blit=False)
@@ -539,7 +610,11 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi):
     ani.save(str(out_path), writer=writer, dpi=dpi,
              savefig_kwargs={"facecolor": BG})
     plt.close(fig)
-    print(f"  saved {out_path}", flush=True)
+    reach_str = (f"reached goal @ frame {fmin} ({dmin:.1f} m)" if reached
+                 else f"closest {dmin:.1f} m @ frame {fmin} (never within "
+                      f"{goal_radius:.0f} m)")
+    print(f"  saved {out_path}  |  {reach_str}", flush=True)
+    return dist, dmin, fmin, reached
 
 
 def first_segment(x, y, jump=JUMP_THRESH):
@@ -639,7 +714,8 @@ def main():
             print(f"\n[scan] regimes still missing -- resampling the map "
                   f"pool (round {rnd}) ...")
             env.resample_maps()
-        scenes = scan_allocation(env, regime_of, need, found, used_sids)
+        scenes = scan_allocation(env, regime_of, need, found, used_sids,
+                                 min_drive=args.min_focal_drive)
         print(f"[scan] round {rnd}: {len(scenes)} new target scenes found "
               f"in the {args.map_pool}-map allocation", flush=True)
 
@@ -677,6 +753,7 @@ def main():
             # render error slips through, delete every file for this scene so
             # a partial triplet can never persist.
             try:
+                tracks = {}          # cond -> per-frame distance-to-goal array
                 for cond in CONDITIONS:
                     vec, dv = (None, None) if cond == "natural" \
                               else conds[rg][cond]
@@ -685,15 +762,29 @@ def main():
                     name  = f"r{rg}_{REGIME_NAMES[rg]}_{sid[:10]}_{cond}.mp4"
                     title = (f"{REGIME_NAMES[rg]} | map {sid[:10]} | focal "
                              f"role = {cond} ({tag})")
-                    render_condition_video(views[cond], views[cond]["focal"],
-                                           COND_COLORS[cond], title,
-                                           out_dir / name, args.fps, args.dpi)
+                    dist, dmin, fmin, reached = render_condition_video(
+                        views[cond], views[cond]["focal"], COND_COLORS[cond],
+                        title, out_dir / name, args.fps, args.dpi,
+                        gt_background=not args.policy_background,
+                        goal_radius=args.goal_radius)
+                    tracks[cond] = dist
                 render_overlay(views,
                                f"{REGIME_NAMES[rg]} | map {sid[:10]} | same "
                                f"scene, same noise -- only the focal role "
                                f"differs",
                                out_dir / f"overlay_r{rg}_{sid[:10]}.png",
                                args.dpi)
+                # frame-by-frame distance-to-goal log for this scene
+                dist_csv = out_dir / f"goaldist_r{rg}_{sid[:10]}.csv"
+                with open(dist_csv, "w", newline="") as f:
+                    w = csv.writer(f)
+                    w.writerow(["frame"] + CONDITIONS)
+                    for t in range(T):
+                        w.writerow([t] + [
+                            "" if np.isnan(tracks[c][t])
+                            else round(float(tracks[c][t]), 2)
+                            for c in CONDITIONS])
+                print(f"  goal-distance track -> {dist_csv.name}")
                 n_done += 1
             except Exception as e:
                 print(f"  [render error on {sid[:10]}: {e}] -- removing any "
