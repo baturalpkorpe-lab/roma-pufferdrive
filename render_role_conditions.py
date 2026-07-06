@@ -377,7 +377,26 @@ def rollout_forced(env, policy, sid, focal_vid, cond_vec, device,
 # Rendering
 # ---------------------------------------------------------------------------
 
-def scene_setup(ax, polys, gt, x0, x1, y0, y1):
+def focal_goal(gt, focal):
+    """The focal agent's goal = the last valid point of its human GT
+    trajectory (that is what 'reaching the goal' means in this env).
+    Returns (gx, gy) or None."""
+    if not isinstance(gt, dict) or focal is None:
+        return None
+    try:
+        gx = _squeeze(gt["x"])[focal]
+        gy = _squeeze(gt["y"])[focal]
+        gv = _squeeze(gt["valid"])[focal].astype(bool)
+        idx = np.where(gv)[0]
+        if len(idx):
+            return float(gx[idx[-1]]), float(gy[idx[-1]])
+    except Exception:
+        pass
+    return None
+
+
+def scene_setup(ax, polys, gt, x0, x1, y0, y1, focal=None,
+                focal_color="#ffd24a"):
     ax.set_facecolor(BG)
     ax.set_xlim(x0, x1)
     ax.set_ylim(y0, y1)
@@ -394,6 +413,8 @@ def scene_setup(ax, polys, gt, x0, x1, y0, y1):
             gv     = _squeeze(gt["valid"]).astype(bool)
             segs = []
             for a in range(gx.shape[0]):
+                if a == focal:
+                    continue                      # focal route drawn brighter below
                 pts = np.stack([gx[a][gv[a]], gy[a][gv[a]]], axis=-1)
                 if len(pts) >= 2 and np.hypot(*np.diff(pts, axis=0).T).sum() > 2:
                     segs.append(pts)
@@ -401,8 +422,33 @@ def scene_setup(ax, polys, gt, x0, x1, y0, y1):
                 ax.add_collection(LineCollection(
                     segs, colors=GTC, linewidths=0.7,
                     linestyles=(0, (3, 3)), alpha=0.35))
+            # focal's intended human route, brighter, + its GOAL as a star
+            if focal is not None:
+                fpts = np.stack([gx[focal][gv[focal]], gy[focal][gv[focal]]],
+                                axis=-1)
+                if len(fpts) >= 2:
+                    ax.plot(fpts[:, 0], fpts[:, 1], color=focal_color, lw=1.3,
+                            ls=(0, (4, 2)), alpha=0.55, zorder=2)
         except Exception:
             pass
+    g = focal_goal(gt, focal)
+    if g is not None:
+        ax.scatter([g[0]], [g[1]], marker="*", s=340, color=focal_color,
+                   edgecolors="black", linewidths=0.8, zorder=8)
+        ax.annotate("goal", (g[0], g[1]), color=focal_color, fontsize=8,
+                    xytext=(4, 4), textcoords="offset points", zorder=8)
+
+
+def include_point(x0, x1, y0, y1, pt, pad=6.0):
+    """Grow a bbox to contain pt (the goal), so the goal star is never
+    off-frame even when the agent never reaches it."""
+    if pt is None:
+        return x0, x1, y0, y1
+    gx, gy = pt
+    if not (np.isfinite(gx) and np.isfinite(gy)):
+        return x0, x1, y0, y1
+    return (min(x0, gx - pad), max(x1, gx + pad),
+            min(y0, gy - pad), max(y1, gy + pad))
 
 
 def bbox_of(polys, xs, ys):
@@ -427,13 +473,15 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi):
     B = xs.shape[1]
     polys = data["road_polys"]
     x0, x1, y0, y1 = bbox_of(polys, xs, ys)
+    x0, x1, y0, y1 = include_point(x0, x1, y0, y1,
+                                   focal_goal(data["gt"], focal))
 
     w, h = x1 - x0, y1 - y0
     fw = 10.0 if w >= h else max(10.0 * w / h, 4)
     fh = 10.0 if h >= w else max(10.0 * h / w, 4)
     fig, ax = plt.subplots(figsize=(fw, fh))
     fig.patch.set_facecolor(BG)
-    scene_setup(ax, polys, data["gt"], x0, x1, y0, y1)
+    scene_setup(ax, polys, data["gt"], x0, x1, y0, y1, focal=focal)
     ax.set_title(title, color="#e8e8f0", fontsize=10)
 
     others = PolyCollection([], facecolors=(0.72, 0.72, 0.78, 1.0),
@@ -509,10 +557,12 @@ def render_overlay(datas, title, out_path, dpi):
     all_x = np.concatenate([c[0] for c in cuts.values()])
     all_y = np.concatenate([c[1] for c in cuts.values()])
     x0, x1, y0, y1 = bbox_of(polys, all_x[:, None], all_y[:, None])
+    x0, x1, y0, y1 = include_point(x0, x1, y0, y1,
+                                   focal_goal(ref["gt"], ref["focal"]))
 
     fig, ax = plt.subplots(figsize=(9, 9))
     fig.patch.set_facecolor(BG)
-    scene_setup(ax, polys, ref["gt"], x0, x1, y0, y1)
+    scene_setup(ax, polys, ref["gt"], x0, x1, y0, y1, focal=ref["focal"])
     for cond in CONDITIONS:
         px, py = cuts[cond]
         ax.plot(px, py, color=COND_COLORS[cond], lw=2.4,
