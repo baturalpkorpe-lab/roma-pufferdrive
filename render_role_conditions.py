@@ -694,7 +694,7 @@ def main():
     # exactly comparable; resample_maps() reshuffles if a regime is missing.
     from pufferlib.ocean.drive.drive import Drive
     env = Drive(num_maps=args.map_pool, num_agents=args.total_agents,
-                map_dir=args.data_dir, episode_length=T,
+                map_dir=args.data_dir, episode_length=T, goal_speed=100
                 seed=args.seed_start)
     obs_probe, _ = env.reset()
     policy, ckpt_dim = load_policy(args.checkpoint, obs_probe.shape[-1],
