@@ -64,9 +64,13 @@ JUMP_THRESH = 8.0          # metres -- respawn teleports between segments
 MIN_VIEW_SPAN = 70.0        # metres -- keep agents readable when movement is small
 ROAD = "#8a8aa0"            # brighter than render_topdown default for dark BG
 ROAD_LW = 1.2
-CONDITIONS = ["conformist", "middle", "runaway"]
-COND_COLORS = {"conformist": "#4477aa", "middle": "#ee8833",
-               "runaway": "#33aa44"}
+# "natural" = focal keeps its OWN encoder role (unforced, recomputed every
+# frame from its observation) -- the honest "what does a trained agent do"
+# baseline. The other three force the focal to a cluster-mean role.
+FORCED_CONDITIONS = ["conformist", "middle", "runaway"]
+CONDITIONS = ["natural"] + FORCED_CONDITIONS
+COND_COLORS = {"natural": "#dcdce6", "conformist": "#4477aa",
+               "middle": "#ee8833", "runaway": "#33aa44"}
 REGIME_NAMES = {0: "quiet_local", 1: "fast_corridors",
                 2: "parking_low_speed", 4: "congested_urban"}
 ROLLOUT_SEED = 1234   # identical action noise across the 3 conditions
@@ -122,7 +126,7 @@ def cluster_role_conditions(agent_csv):
         lab = km.fit_predict(sub[role_cols].values)
         d_speed = np.array([sub["d_speed"][lab == c].mean() for c in range(3)])
         order   = np.argsort(d_speed)             # conformist -> runaway
-        out[int(rg)] = {CONDITIONS[rank]:
+        out[int(rg)] = {FORCED_CONDITIONS[rank]:
                         (km.cluster_centers_[c], float(d_speed[c]))
                         for rank, c in enumerate(order)}
     return out, len(role_cols)
@@ -343,7 +347,9 @@ def rollout_forced(env, policy, sid, focal_vid, cond_vec, device,
     length = np.full(B, 4.5, dtype=np.float32)
     width  = np.full(B, 2.0, dtype=np.float32)
 
-    cond = torch.as_tensor(cond_vec, dtype=torch.float32, device=device)
+    # cond_vec is None for the "natural" condition (focal keeps its own role).
+    cond = (None if cond_vec is None
+            else torch.as_tensor(cond_vec, dtype=torch.float32, device=device))
     obs   = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
     state = policy.initial_state(B, device)
 
@@ -359,12 +365,16 @@ def rollout_forced(env, policy, sid, focal_vid, cond_vec, device,
                 except Exception:
                     pass
         with torch.no_grad():
-            # pass 1: natural roles for everyone (state NOT advanced)
-            _, _, _, ri = policy(obs, state)
-            forced = ri["role_z"].clone()
-            forced[focal] = cond
-            # pass 2: same input state, focal role replaced
-            logits, _, state, _ = policy(obs, state, forced_role=forced)
+            if cond is None:
+                # natural: nobody forced, focal uses its own live role
+                logits, _, state, _ = policy(obs, state)
+            else:
+                # pass 1: natural roles for everyone (state NOT advanced)
+                _, _, _, ri = policy(obs, state)
+                forced = ri["role_z"].clone()
+                forced[focal] = cond
+                # pass 2: same input state, focal role replaced
+                logits, _, state, _ = policy(obs, state, forced_role=forced)
         action = Categorical(logits=logits.float()).sample()
         obs_np, _, _, _, _ = env.step(action.cpu().numpy().reshape(B, 1))
         obs = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
@@ -643,8 +653,9 @@ def main():
             # on any condition leaves NO partial files behind.
             views, ok = {}, True
             for cond in CONDITIONS:
-                vec, dv = conds[rg][cond]
-                print(f"  rollout {cond:>10} (dv={dv:+.1f} m/s)", flush=True)
+                vec, dv = (None, None) if cond == "natural" else conds[rg][cond]
+                dv_str = "own role" if dv is None else f"dv={dv:+.1f} m/s"
+                print(f"  rollout {cond:>10} ({dv_str})", flush=True)
                 data = rollout_forced(env, policy, sid, focal_vid, vec,
                                       device, max_tries=args.max_relocate)
                 if data is None:
@@ -667,10 +678,13 @@ def main():
             # a partial triplet can never persist.
             try:
                 for cond in CONDITIONS:
-                    vec, dv = conds[rg][cond]
+                    vec, dv = (None, None) if cond == "natural" \
+                              else conds[rg][cond]
+                    tag   = ("own live role" if dv is None
+                             else f"{dv:+.1f} m/s vs human")
                     name  = f"r{rg}_{REGIME_NAMES[rg]}_{sid[:10]}_{cond}.mp4"
                     title = (f"{REGIME_NAMES[rg]} | map {sid[:10]} | focal "
-                             f"role = {cond} ({dv:+.1f} m/s vs human)")
+                             f"role = {cond} ({tag})")
                     render_condition_video(views[cond], views[cond]["focal"],
                                            COND_COLORS[cond], title,
                                            out_dir / name, args.fps, args.dpi)
