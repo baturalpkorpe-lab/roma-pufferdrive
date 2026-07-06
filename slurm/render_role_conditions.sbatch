@@ -2,9 +2,9 @@
 #SBATCH --job-name=role_videos
 #SBATCH --partition=compute
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=8
 #SBATCH --mem-per-cpu=3900M
-#SBATCH --time=03:00:00
+#SBATCH --time=05:00:00
 #SBATCH --account=research-ceg-tp
 #SBATCH --output=/scratch/e452103/logs/role_videos_%j.out
 #SBATCH --error=/scratch/e452103/logs/role_videos_%j.err
@@ -26,11 +26,18 @@ mkdir -p /scratch/e452103/logs
 # C binding loads pufferlib/config/ocean/drive.ini via a relative path.
 cd /scratch/e452103/PufferDrive
 
+# --total_agents 3072 (~24 agents/scene) so the focal vehicle is reliably
+# dealt into the allocation -- at low density its exact slot was rarely
+# filled, which starved the many-vehicle regimes (congested, parking).
+# --max_relocate 150 as insurance (reset-searches are cheap).
 python "$CODE_DIR/render_role_conditions.py" \
     --checkpoint /scratch/e452103/checkpoints/roma_baseline_dim4/roma_dim4_step3000238080.pt \
     --clusters   /scratch/e452103/map_atlas/map_clusters.csv \
     --agent_data /scratch/e452103/role_regime/dim4/phaseC_agent_data.csv \
     --data_dir   pufferlib/resources/drive/binaries/training \
-    --out_dir    /scratch/e452103/renders/role_conditions_dim4
+    --out_dir    /scratch/e452103/renders/role_conditions_dim4 \
+    --map_pool     128 \
+    --total_agents 3072 \
+    --max_relocate 150
 
 echo "Videos in: /scratch/e452103/renders/role_conditions_dim4"
