@@ -158,8 +158,10 @@ def parse_args():
     # Note: reward/goal/resample env settings come from drive.ini via load_drive_config().
 
     # Role
-    p.add_argument("--role_dim",      type=int,   default=8,
-                   help="Role vector dimension. 1=original ROMA, 8=proposed extension.")
+    p.add_argument("--role_dim",      type=int,   default=0,
+                   help="Role vector dimension. This branch: 0 = NO-ROLE "
+                        "ablation (role encoder + MI/diversity losses removed; "
+                        "same perception encoders + policy GRU).")
     p.add_argument("--role_hidden",   type=int,   default=64)
     p.add_argument("--policy_hidden", type=int,   default=128)
     p.add_argument("--var_floor",     type=float, default=1e-4)
@@ -788,17 +790,21 @@ def train(args):
         obs_window_len = 8,
     ).to(device)
 
-    aux_loss_fn = RomaAuxLoss(
-        role_dim   = args.role_dim,
-        emb_dim    = policy.env_embed_dim,
-        mi_weight  = args.mi_weight,
-        div_weight = args.div_weight,
-    ).to(device)
+    # role_dim == 0 -> NO-ROLE ablation: no role encoder, so no MI/diversity
+    # loss (they operate on the role vector). aux_loss_fn stays None and the
+    # PPO loss below omits the aux term entirely.
+    use_role    = args.role_dim > 0
+    aux_loss_fn = None
+    if use_role:
+        aux_loss_fn = RomaAuxLoss(
+            role_dim   = args.role_dim,
+            emb_dim    = policy.env_embed_dim,
+            mi_weight  = args.mi_weight,
+            div_weight = args.div_weight,
+        ).to(device)
 
-    optimizer = Adam(
-        list(policy.parameters()) + list(aux_loss_fn.parameters()),
-        lr=args.lr,
-    )
+    aux_params = list(aux_loss_fn.parameters()) if use_role else []
+    optimizer = Adam(list(policy.parameters()) + aux_params, lr=args.lr)
     Path(args.save_dir).mkdir(parents=True, exist_ok=True)
 
     # CSV logger — always runs regardless of wandb
@@ -929,9 +935,14 @@ def train(args):
                     if "episode_return" in info:
                         ep_returns.append(float(np.mean(info["episode_return"])))
 
-        # Role health: std across agents (>0 = diverse roles), norm (grows as roles sharpen)
-        role_std_all  = role_info["role_mean"].float().std(dim=0).mean().item()
-        role_norm_all = role_info["role_mean"].float().norm(dim=-1).mean().item()
+        # Role health: std across agents (>0 = diverse roles), norm (grows as
+        # roles sharpen). No-role ablation has an empty role vector -> log 0.
+        if use_role:
+            role_std_all  = role_info["role_mean"].float().std(dim=0).mean().item()
+            role_norm_all = role_info["role_mean"].float().norm(dim=-1).mean().item()
+        else:
+            role_std_all  = 0.0
+            role_norm_all = 0.0
 
         # ---- GAE ----
         with torch.no_grad():
@@ -957,7 +968,8 @@ def train(args):
 
         # ---- PPO update ----
         policy.train()
-        aux_loss_fn.train()
+        if use_role:
+            aux_loss_fn.train()
         idx     = torch.randperm(ptr, device=device)
         mb_size = max(1, ptr // args.num_minibatch)
 
@@ -988,19 +1000,20 @@ def train(args):
                     # Use the freshly recomputed role variables (they carry a
                     # computation graph) — the rollout-buffer copies were created
                     # under no_grad, so the aux losses would otherwise send zero
-                    # gradient to the role encoder.
-                    aux = aux_loss_fn(role_info["role_z"], role_info["role_mean"],
-                                      role_info["role_log_var"], b_embwin[mb])
+                    # gradient to the role encoder. No-role ablation: no aux.
+                    if use_role:
+                        aux = aux_loss_fn(role_info["role_z"], role_info["role_mean"],
+                                          role_info["role_log_var"], b_embwin[mb])
 
                     loss = (pl
                             + args.vf_coef * vl
                             - args.ent_coef * entropy.mean()
-                            + aux["aux_loss"])
+                            + (aux["aux_loss"] if use_role else 0.0))
 
                 optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(
-                    list(policy.parameters()) + list(aux_loss_fn.parameters()),
+                    list(policy.parameters()) + aux_params,
                     args.max_grad_norm,
                 )
                 optimizer.step()
@@ -1067,7 +1080,7 @@ def train(args):
             torch.save({
                 "global_step"   : global_step,
                 "policy_state"  : policy.state_dict(),
-                "aux_loss_state": aux_loss_fn.state_dict(),
+                "aux_loss_state": (aux_loss_fn.state_dict() if use_role else None),
                 "args"          : vars(args),
             }, ckpt)
             print(f"[ROMA] Saved -> {ckpt}")

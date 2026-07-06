@@ -100,6 +100,7 @@ class RomaPolicy(nn.Module):
         self.obs_dim        = obs_dim
         self.action_dim     = action_dim
         self.role_dim       = role_dim
+        self.role_hidden    = role_hidden
         self.policy_hidden  = policy_hidden
         self.obs_window_len = obs_window_len
         self.ego_dim        = ego_dim
@@ -110,13 +111,23 @@ class RomaPolicy(nn.Module):
         env_embed_dim    = 32 + 32 + 64
         self.env_embed_dim = env_embed_dim
 
-        self.role_encoder = RoleEncoder(env_embed_dim, role_dim, role_hidden, var_floor)
+        # role_dim == 0 -> NO-ROLE ablation (option A): the role encoder is
+        # removed and the policy GRU sees only the env embedding. This is the
+        # "same architecture without the ROMA role machinery" baseline; MI and
+        # diversity losses are also skipped (in train_roma).
+        self.use_role = role_dim > 0
+        if self.use_role:
+            self.role_encoder = RoleEncoder(env_embed_dim, role_dim, role_hidden, var_floor)
+        else:
+            self.role_encoder = None
         self.policy_gru   = nn.GRUCell(env_embed_dim + role_dim, policy_hidden)
         self.actor        = nn.Linear(policy_hidden, action_dim)
         self.critic       = nn.Linear(policy_hidden, 1)
 
     def initial_state(self, batch_size, device):
-        role_h   = torch.zeros(batch_size, self.role_encoder.hidden_dim, device=device)
+        # role_h keeps its shape even in the no-role case so the training
+        # buffers (b_role_h) are unchanged; it is simply never read.
+        role_h   = torch.zeros(batch_size, self.role_hidden, device=device)
         policy_h = torch.zeros(batch_size, self.policy_hidden, device=device)
         # Window of past env embeddings (128-dim each) instead of raw obs
         # (1121-dim) — 9x less memory and a structured, learned behavioural
@@ -141,10 +152,17 @@ class RomaPolicy(nn.Module):
     def forward(self, obs, state, forced_role=None):
         role_h, policy_h, emb_win = state
         env_emb  = self._env_embed(obs)
-        role_z, role_mean, role_log_var, new_role_h = self.role_encoder(env_emb, role_h)
-        if forced_role is not None:
-            role_z = forced_role
-        policy_input = torch.cat([env_emb, role_z], dim=-1)
+        if self.use_role:
+            role_z, role_mean, role_log_var, new_role_h = self.role_encoder(env_emb, role_h)
+            if forced_role is not None:
+                role_z = forced_role
+            policy_input = torch.cat([env_emb, role_z], dim=-1)
+        else:
+            # no-role ablation: policy sees only the env embedding
+            empty        = env_emb.new_zeros(env_emb.shape[0], 0)
+            role_z       = role_mean = role_log_var = empty
+            new_role_h   = role_h
+            policy_input = env_emb
         new_policy_h = self.policy_gru(policy_input, policy_h)
         logits   = self.actor(new_policy_h)
         value    = self.critic(new_policy_h)
