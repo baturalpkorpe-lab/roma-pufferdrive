@@ -26,18 +26,17 @@ mkdir -p /scratch/e452103/logs
 # C binding loads pufferlib/config/ocean/drive.ini via a relative path.
 cd /scratch/e452103/PufferDrive
 
-# DENSITY (agents/scene) is what reliably deals the focal vehicle, not raw
-# agent count. Small pool (64) + 1536 agents = ~24/scene: same reliability as
-# 3072/128 but 1/3 the CPU cost (3072 agents was too heavy). resample_maps
-# brings new scenes if a regime is short. --max_relocate 150 as insurance.
+# 3072 agents over 128 maps (~24/scene) so the focal vehicle is reliably
+# dealt into the allocation. --max_resamples 20 so rare regimes (parking,
+# congested) get enough distinct scenes; --max_relocate 150 as insurance.
 python "$CODE_DIR/render_role_conditions.py" \
     --checkpoint /scratch/e452103/checkpoints/roma_baseline_dim4/roma_dim4_step3000238080.pt \
     --clusters   /scratch/e452103/map_atlas/map_clusters.csv \
     --agent_data /scratch/e452103/role_regime/dim4/phaseC_agent_data.csv \
     --data_dir   pufferlib/resources/drive/binaries/training \
     --out_dir    /scratch/e452103/renders/role_conditions_dim4 \
-    --map_pool      64 \
-    --total_agents 1536 \
+    --map_pool     128 \
+    --total_agents 3072 \
     --max_resamples 20 \
     --max_relocate 150
 
