@@ -29,10 +29,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 
-FEATURES = ["n_vehicles", "n_moving", "speed_p85", "speed_mean",
-            "speed_std_across", "stop_frac", "turn_rate",
-            "road_len", "curviness", "extent", "road_density"]
-LOG_FEATURES = ["n_vehicles", "n_moving", "road_len", "extent", "road_density"]
+# Trimmed feature set (2026-07-08): dropped the redundant / low-signal features
+# (n_moving~n_vehicles, speed_mean~speed_p85, road_len/extent/road_density = size
+# collinear, turn_rate = flat across real regimes / junk-only). One feature per
+# conceptual axis: density / speed / flow-spread / congestion / road geometry.
+FEATURES = ["n_vehicles", "speed_p85", "speed_std_across", "stop_frac", "curviness"]
+LOG_FEATURES = ["n_vehicles"]
 
 BG, ROAD = "#0f0f1a", "#55556a"
 
@@ -41,9 +43,16 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--in_dir",  type=str, default="map_atlas",
                    help="Directory holding map_features.csv + geometry_cache.pkl")
+    p.add_argument("--out_dir", type=str, default="",
+                   help="Where to write atlas outputs (default = --in_dir). "
+                        "Use a per-K subdir so k=3 and k=5 don't overwrite.")
     p.add_argument("--k",       type=int, default=0,
                    help="Number of clusters. 0 = pick best silhouette in --k_range")
     p.add_argument("--k_range", type=str, default="3,8")
+    p.add_argument("--junk_turn_rate", type=float, default=0.5,
+                   help="Drop scenarios with turn_rate above this BEFORE "
+                        "clustering (corrupted GT headings, ~1.94 rad/s). Real "
+                        "regimes sit at 0.04-0.10, so 0.5 is a safe cutoff.")
     p.add_argument("--seed",    type=int, default=42)
     return p.parse_args()
 
@@ -61,7 +70,7 @@ def suggest_name(centroid_raw, all_centroids_raw):
 
     speed = ["slow", "mid-speed", "fast"][tercile("speed_p85")]
     curv  = ["straight", "", "curvy"][tercile("curviness")]
-    dens  = ["sparse", "", "dense"][tercile("n_moving")]
+    dens  = ["sparse", "", "dense"][tercile("n_vehicles")]
     tags  = [speed]
     if curv:
         tags.append(curv)
@@ -73,8 +82,10 @@ def suggest_name(centroid_raw, all_centroids_raw):
 
 
 def main():
-    args   = parse_args()
-    in_dir = Path(args.in_dir)
+    args    = parse_args()
+    in_dir  = Path(args.in_dir)
+    out_dir = Path(args.out_dir) if args.out_dir else in_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     import pandas as pd
     from sklearn.cluster import KMeans
@@ -85,6 +96,13 @@ def main():
     n0 = len(df)
     df = df.replace([np.inf, -np.inf], np.nan).dropna()
     print(f"[phaseB] {len(df)} scenarios ({n0 - len(df)} dropped as degenerate)")
+
+    # Quarantine junk maps (corrupted GT headings -> implausible turn_rate) BEFORE
+    # clustering, since turn_rate is no longer a clustering feature to isolate them.
+    n_pre = len(df)
+    df = df[df["turn_rate"] <= args.junk_turn_rate].reset_index(drop=True)
+    print(f"[phaseB] removed {n_pre - len(df)} junk maps "
+          f"(turn_rate > {args.junk_turn_rate} rad/s); {len(df)} remain")
 
     # -- Preprocess: log-transform skewed features, then z-score everything --
     X = df[FEATURES].copy()
@@ -118,7 +136,7 @@ def main():
 
     df_out = pd.DataFrame({"scenario_id": df["scenario_id"].values,
                            "cluster": labels, "margin": margin.round(3)})
-    df_out.to_csv(in_dir / "map_clusters.csv", index=False)
+    df_out.to_csv(out_dir / "map_clusters.csv", index=False)
     core_frac = (margin > 1.5).mean()
     print(f"[phaseB] margin>1.5 (core maps usable as clean strata): {core_frac:.0%}")
 
@@ -129,7 +147,7 @@ def main():
              for c in range(K)]
     sizes = np.bincount(labels, minlength=K)
 
-    with open(in_dir / "atlas_names.txt", "w") as f:
+    with open(out_dir / "atlas_names.txt", "w") as f:
         for c in range(K):
             line = (f"cluster {c} (n={sizes[c]}, {sizes[c]/len(df):.0%}): "
                     f"'{names[c]}'  " +
@@ -146,7 +164,7 @@ def main():
     for a in (a1, a2):
         a.grid(alpha=0.3)
     fig.tight_layout()
-    fig.savefig(in_dir / "atlas_model_choice.png", dpi=140)
+    fig.savefig(out_dir / "atlas_model_choice.png", dpi=140)
     plt.close(fig)
 
     # -- Figure 2: centroid heatmap (z-scored, annotated with raw units) ------
@@ -168,7 +186,7 @@ def main():
     plt.colorbar(im, ax=ax, label="z-score (color) / raw units (text)")
     ax.set_title(f"Map-regime centroids  (K={K})")
     fig.tight_layout()
-    fig.savefig(in_dir / "atlas_centroids.png", dpi=140)
+    fig.savefig(out_dir / "atlas_centroids.png", dpi=140)
     plt.close(fig)
 
     # -- Figure 3: PCA scatter -------------------------------------------------
@@ -186,7 +204,7 @@ def main():
     ax.legend(fontsize=8, markerscale=3)
     ax.set_title("Map regimes in feature space (PCA)")
     fig.tight_layout()
-    fig.savefig(in_dir / "atlas_pca.png", dpi=140)
+    fig.savefig(out_dir / "atlas_pca.png", dpi=140)
     plt.close(fig)
 
     # -- Figure 4: example maps per cluster ------------------------------------
@@ -230,10 +248,10 @@ def main():
         fig.suptitle("Example maps per regime (roads gray, GT paths colored "
                      "by speed: blue=slow red=fast)", color="#e8e8f0")
         fig.tight_layout()
-        fig.savefig(in_dir / "atlas_examples.png", dpi=130, facecolor=BG)
+        fig.savefig(out_dir / "atlas_examples.png", dpi=130, facecolor=BG)
         plt.close(fig)
 
-    print(f"\n[phaseB] atlas written to {in_dir}/atlas_*.png + map_clusters.csv")
+    print(f"\n[phaseB] atlas written to {out_dir}/atlas_*.png + map_clusters.csv")
 
 
 if __name__ == "__main__":
