@@ -62,6 +62,12 @@ DELTA_FEATS = ["d_speed", "speed_ratio", "ade", "d_turn_rate", "d_jerk"]
 CONTEXT     = ["gt_speed"]
 REPORT_FEATS = RAW_FEATS + DELTA_FEATS + CONTEXT
 
+# Features used as the K-means INPUT when --cluster_on raw: policy-generated
+# kinematics only (no deltas, no gt_speed, no event_rate which is ~constant).
+# Standardized + 1-99% clipped before clustering (see _cluster_matrix).
+RAW_CLUSTER_FEATS = ["speed_mean", "speed_max", "speed_std", "accel_abs",
+                     "accel_std", "jerk_abs", "turn_abs"]
+
 
 def load_drive_config():
     import pufferlib
@@ -102,7 +108,13 @@ def parse_args():
     p.add_argument("--regime_names", type=str, default="",
                    help="Optional 'id:name,id:name' labels (from atlas_names.txt)")
     p.add_argument("--kmeans_k",   type=int, default=3,
-                   help="Role clusters per regime")
+                   help="Clusters per regime")
+    p.add_argument("--cluster_on", type=str, default="role",
+                   choices=["role", "raw"],
+                   help="What to K-means on: 'role' = the role vector z "
+                        "(anchor on the latent); 'raw' = the policy-generated "
+                        "kinematics (speed/accel/jerk...). Both report the same "
+                        "profiles + role means + cross-view ARI.")
     p.add_argument("--device",     type=str, default="cuda")
     p.add_argument("--seed",       type=int, default=42)
     return p.parse_args()
@@ -272,6 +284,24 @@ def collect(args, device):
 # Cluster + profile
 # ---------------------------------------------------------------------------
 
+def _cluster_matrix(sub, mode, role_cols):
+    """Feature matrix K-means is fit on. mode='role' -> the raw role vector;
+    mode='raw' -> policy kinematics, median-imputed, 1-99% clipped per feature
+    (so single-frame-jump artifacts don't hijack assignment), then z-scored
+    (features are on wildly different scales: speed ~10, jerk ~100s)."""
+    if mode == "role":
+        return sub[role_cols].values.astype(np.float64)
+    X   = sub[RAW_CLUSTER_FEATS].values.astype(np.float64)
+    med = np.nanmedian(X, axis=0)
+    bad = np.where(~np.isfinite(X))
+    X[bad] = np.take(med, bad[1])
+    lo, hi = np.nanpercentile(X, 1, axis=0), np.nanpercentile(X, 99, axis=0)
+    X = np.clip(X, lo, hi)
+    mu, sd = X.mean(axis=0), X.std(axis=0)
+    sd[sd == 0] = 1.0
+    return (X - mu) / sd
+
+
 def eta_sq(values, labels):
     """Share of variance in `values` explained by the cluster `labels`."""
     v = np.asarray(values, dtype=np.float64)
@@ -291,6 +321,7 @@ def eta_sq(values, labels):
 def analyse(df, role_dim, args):
     import pandas as pd
     from sklearn.cluster import KMeans
+    from sklearn.metrics import adjusted_rand_score
 
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -300,34 +331,45 @@ def analyse(df, role_dim, args):
         names = {int(k): v for k, v in
                  (item.split(":") for item in args.regime_names.split(","))}
 
+    mode      = args.cluster_on
+    other     = "raw" if mode == "role" else "role"
     role_cols = [f"role_{d}" for d in range(role_dim)]
     regimes   = sorted(df["regime"].unique())
     K         = args.kmeans_k
     cnames    = (["conformist", "middle", "runaway"] if K == 3 else
                  [f"cluster {c}" for c in range(K)])
 
-    df.to_csv(out / "role_direct_agent_data.csv", index=False)
-    print(f"\n[direct] {len(df)} agent-episodes  "
-          f"median ADE={df['ade'].median():.1f} m (sanity ~1-20 m)")
+    print(f"\n[direct] clustering ON: {mode}  ({len(df)} agent-episodes, "
+          f"median ADE={df['ade'].median():.1f} m, sanity ~1-20 m)")
 
-    # -- Cluster in z-space WITHIN each regime; order clusters by d_speed -------
-    df["cluster_rank"] = -1
-    profile_rows, eta_rows = [], []
+    # -- Cluster WITHIN each regime; order clusters by d_speed -----------------
+    rank_col = f"cluster_rank_{mode}"
+    df[rank_col] = -1
+    profile_rows, eta_rows, ari_rows = [], [], []
     for rg in regimes:
         idx = df.index[df["regime"] == rg]
         sub = df.loc[idx]
         if len(sub) < max(50, K * 10):
             print(f"[direct] regime {rg}: only {len(sub)} agents -- skipped")
             continue
-        km  = KMeans(n_clusters=K, n_init=10, random_state=args.seed)
-        lab = km.fit_predict(sub[role_cols].values)
 
-        # order raw cluster ids by mean d_speed so rank 0 = conformist pole
+        def _fit(m):
+            return KMeans(n_clusters=K, n_init=10, random_state=args.seed
+                          ).fit_predict(_cluster_matrix(sub, m, role_cols))
+        lab   = _fit(mode)
+        lab_o = _fit(other)
+        ari   = adjusted_rand_score(lab, lab_o)
+        ari_rows.append({"regime": rg, "regime_name": names.get(rg, f"regime {rg}"),
+                         "ari_role_vs_raw": ari})
+        print(f"[direct] regime {rg}: ARI(role-clustering vs raw-clustering) "
+              f"= {ari:.3f}")
+
+        # order cluster ids by mean d_speed so rank 0 = conformist pole
         dsp   = [np.nanmean(sub["d_speed"].values[lab == c]) for c in range(K)]
         order = np.argsort(dsp)                      # raw id in ascending d_speed
         raw_to_rank = {c: r for r, c in enumerate(order)}
         ranks = np.array([raw_to_rank[c] for c in lab])
-        df.loc[idx, "cluster_rank"] = ranks
+        df.loc[idx, rank_col] = ranks
 
         for r in range(K):
             m = ranks == r
@@ -350,9 +392,16 @@ def analyse(df, role_dim, args):
 
     prof_df = pd.DataFrame(profile_rows)
     eta_df  = pd.DataFrame(eta_rows)
-    prof_df.to_csv(out / "role_direct_profiles.csv", index=False)
-    eta_df.to_csv(out / "role_direct_separability.csv", index=False)
-    df.to_csv(out / "role_direct_agent_data.csv", index=False)   # w/ cluster_rank
+    ari_df  = pd.DataFrame(ari_rows)
+    tag = f"_{mode}"          # so role- and raw-clustered outputs don't collide
+    prof_df.to_csv(out / f"role_direct{tag}_profiles.csv", index=False)
+    eta_df.to_csv(out / f"role_direct{tag}_separability.csv", index=False)
+    ari_df.to_csv(out / f"role_direct{tag}_ari.csv", index=False)
+    df.to_csv(out / "role_direct_agent_data.csv", index=False)   # w/ rank cols
+    if not ari_df.empty:
+        print(f"[direct] mean ARI(role vs raw clustering) across regimes = "
+              f"{ari_df['ari_role_vs_raw'].mean():.3f} "
+              f"(1=identical grouping, 0=unrelated)")
 
     # -- Stdout summary (readable in the .out log) -----------------------------
     for rg in regimes:
@@ -370,13 +419,13 @@ def analyse(df, role_dim, args):
             print(f"  {r['cluster_name']:>11} {int(r['n_agents']):>11}  {vals}"
                   f"   | role: {role_str}")
 
-    _plot_profiles(prof_df, regimes, names, out, K)
-    _plot_separability(eta_df, regimes, names, out)
-    _plot_role_means(prof_df, regimes, names, out, role_dim)
-    print(f"\n[direct] outputs -> {out}/role_direct_*.png + *.csv")
+    _plot_profiles(prof_df, regimes, names, out, K, tag)
+    _plot_separability(eta_df, regimes, names, out, tag)
+    _plot_role_means(prof_df, regimes, names, out, role_dim, tag)
+    print(f"\n[direct] outputs -> {out}/role_direct{tag}_*.png + *.csv")
 
 
-def _plot_role_means(prof_df, regimes, names, out, role_dim):
+def _plot_role_means(prof_df, regimes, names, out, role_dim, tag=""):
     """(regime:cluster) x role_dim heatmap of mean role_mean. Raw units, shared
     scale across everything -- this is what actually defines each pole, as
     opposed to the behavioral features it's interpreted through."""
@@ -406,11 +455,11 @@ def _plot_role_means(prof_df, regimes, names, out, role_dim):
     ax.set_title("Mean role vector per z-cluster -- what actually defines each "
                  "pole", fontsize=10)
     fig.tight_layout()
-    fig.savefig(out / "role_direct_role_means.png", dpi=140)
+    fig.savefig(out / f"role_direct{tag}_role_means.png", dpi=140)
     plt.close(fig)
 
 
-def _plot_profiles(prof_df, regimes, names, out, K):
+def _plot_profiles(prof_df, regimes, names, out, K, tag=""):
     """Per-regime heatmap: cluster x feature, color = within-feature z-score
     across the K clusters (so separation is visible), text = raw mean."""
     regimes = [rg for rg in regimes if not prof_df[prof_df["regime"] == rg].empty]
@@ -447,11 +496,11 @@ def _plot_profiles(prof_df, regimes, names, out, K):
     fig.suptitle("Role-variable clusters (K-means on z, per regime) — mean of "
                  "raw kinematics vs GT-deltas", fontsize=11)
     fig.tight_layout()
-    fig.savefig(out / "role_direct_profiles.png", dpi=140)
+    fig.savefig(out / f"role_direct{tag}_profiles.png", dpi=140)
     plt.close(fig)
 
 
-def _plot_separability(eta_df, regimes, names, out):
+def _plot_separability(eta_df, regimes, names, out, tag=""):
     """feature x regime heatmap of eta^2 = how strongly the z-clusters separate
     each feature. Raw vs delta blocks compared side by side."""
     regimes = [rg for rg in regimes if rg in set(eta_df["regime"])]
@@ -483,7 +532,7 @@ def _plot_separability(eta_df, regimes, names, out):
     ax.set_title("Which features do the role clusters separate?\n"
                  "top block = RAW kinematics, middle = GT-deltas", fontsize=10)
     fig.tight_layout()
-    fig.savefig(out / "role_direct_separability.png", dpi=140)
+    fig.savefig(out / f"role_direct{tag}_separability.png", dpi=140)
     plt.close(fig)
 
 
