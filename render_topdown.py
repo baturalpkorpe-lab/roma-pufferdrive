@@ -243,10 +243,27 @@ def vehicle_corners(x, y, h, length, width):
     return np.stack([cx, cy], axis=-1)
 
 
+def speed_color_scalar(xs, ys):
+    """(T, B) per-step speed normalized to [0,1] -- used to color vehicles when
+    there is no role (dim-0 no-role policy). Instantaneous speed = hypot(dx,dy)
+    * 10 (m/s at 10 Hz); robustly normalized, so blue=slow red=fast."""
+    d   = np.sqrt(np.diff(xs, axis=0)**2 + np.diff(ys, axis=0)**2) * 10.0  # (T-1,B)
+    spd = np.vstack([d[:1], d])                       # pad first frame -> (T,B)
+    vals = spd[np.isfinite(spd)]
+    if vals.size == 0:
+        return np.full(xs.shape, 0.5, dtype=np.float32)
+    lo, hi = np.percentile(vals, [2, 98])
+    if hi - lo < 1e-6:
+        return np.full(xs.shape, 0.5, dtype=np.float32)
+    return np.clip((spd - lo) / (hi - lo), 0, 1).astype(np.float32)
+
+
 def role_color_scalar(roles):
     """(T, B, D) roles -> (T, B) scalar in [0,1]: projection on the leading
     principal direction of episode-mean roles, robustly normalized."""
     Tn, B, D = roles.shape
+    if D == 0:                                        # no-role policy: caller
+        return np.full((Tn, B), 0.5, dtype=np.float32)  # should use speed instead
     ep_mean  = roles.mean(axis=0)                     # (B, D)
     centered = ep_mean - ep_mean.mean(axis=0, keepdims=True)
     try:
@@ -289,7 +306,13 @@ def render_video(data, out_path, fps, dpi, trail, want_gt):
     path_len = np.sqrt(np.diff(xs, axis=0)**2 + np.diff(ys, axis=0)**2).sum(axis=0)
     moving   = path_len > 2.0                          # metres over the episode
 
-    col_scalar = role_color_scalar(data["roles"])      # (T, B)
+    # Color by role (PC1 projection) if the policy has a role; otherwise by
+    # speed (dim-0 no-role policy). Both use coolwarm: blue=low, red=high.
+    roles = data["roles"]
+    if roles.ndim == 3 and roles.shape[-1] > 0:
+        col_scalar = role_color_scalar(roles)          # (T, B)
+    else:
+        col_scalar = speed_color_scalar(xs, ys)        # (T, B)
     try:
         cmap = matplotlib.colormaps["coolwarm"]        # matplotlib >= 3.6
     except AttributeError:
@@ -435,7 +458,11 @@ def main():
     obs_dim = obs_probe.shape[-1]
     policy, role_dim = load_policy(args.checkpoint, obs_dim, device,
                                    args.role_dim)
-    print(f"[render] obs_dim={obs_dim}  role_dim={role_dim}")
+    print(f"[render] obs_dim={obs_dim}  role_dim={role_dim}"
+          + ("  (no-role: coloring by speed)" if role_dim == 0 else ""))
+    if role_dim == 0 and args.mode != "free":
+        raise SystemExit("role_dim=0 (dim-0 no-role policy): only --mode free "
+                         "is meaningful -- there is no role to force/sweep.")
 
     for i in range(args.n_maps):
         if i > 0:
