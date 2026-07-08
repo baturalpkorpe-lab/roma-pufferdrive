@@ -61,12 +61,11 @@ GT_MOVE_MS = 1.0
 EVENT_REW  = -0.4
 ROLLOUT_SEED = 1234  # identical action noise across every condition
 
-# behavior metrics measured on the focal's own pre-respawn segment
-METRICS = ["speed_mean", "accel_abs", "jerk_abs", "turn_abs",
-           "d_speed", "ade", "event_rate"]
+# behavior metrics measured on the focal's own pre-respawn segment -- DIRECT
+# ego kinematics only (no GT deltas), plus a safety/competence check.
+METRICS = ["speed_mean", "accel_abs", "jerk_abs", "turn_abs", "event_rate"]
 METRIC_LABEL = {"speed_mean": "speed (m/s)", "accel_abs": "|accel| (m/s2)",
                 "jerk_abs": "|jerk| (m/s3)", "turn_abs": "|turn| (rad/s)",
-                "d_speed": "speed - human (m/s)", "ade": "path dev vs human (m)",
                 "event_rate": "safety events / 91"}
 
 
@@ -115,6 +114,11 @@ def parse_args():
                    help="How many principal role axes to sweep (role is ~2-D)")
     p.add_argument("--alphas",     type=str, default="-2,-1,0,1,2",
                    help="Sweep grid in sigma units of the role distribution")
+    p.add_argument("--target_feats", type=str,
+                   default="speed_mean,accel_abs,jerk_abs,turn_abs",
+                   help="Direct ego features to build behavior-aligned "
+                        "directions for (OLS gradient of the feature on z). "
+                        "Swept alongside the PCA axes. Direct features only.")
     p.add_argument("--observe_only", action="store_true",
                    help="Stop after the OBSERVATIONAL pre-check (warmup + the "
                         "role_axis_observational.png graph + direction "
@@ -145,12 +149,12 @@ def focal_metrics(a, xs, ys, hs, rews, gx, gy, gh, gvalid, T_gt):
     if pair.sum() < MIN_STEPS:
         return None
 
+    # GT is used ONLY as a validity filter (require the human counterpart to
+    # have actually driven); all reported metrics are direct ego kinematics.
     g_dx = (gx[a, 1:t_end] - gx[a, :t_end-1])[pair]
     g_dy = (gy[a, 1:t_end] - gy[a, :t_end-1])[pair]
-    g_spd = np.hypot(g_dx, g_dy) * 10.0
-    if g_spd.max() <= GT_MOVE_MS:
+    if (np.hypot(g_dx, g_dy) * 10.0).max() <= GT_MOVE_MS:
         return None
-    g_dh = wrap_angle((gh[a, 1:t_end] - gh[a, :t_end-1])[pair]) * 10.0
 
     p_dx = np.diff(xs[:t_end, a])[pair]
     p_dy = np.diff(ys[:t_end, a])[pair]
@@ -158,16 +162,11 @@ def focal_metrics(a, xs, ys, hs, rews, gx, gy, gh, gvalid, T_gt):
     p_dh  = wrap_angle(np.diff(hs[:t_end, a])[pair]) * 10.0
     p_acc = np.diff(p_spd) * 10.0
     p_jrk = np.diff(p_acc) * 10.0
-
-    vi  = np.where(v)[0]
-    ade = float(np.mean(np.hypot(xs[vi, a] - gx[a, vi], ys[vi, a] - gy[a, vi])))
     return {
         "speed_mean": float(p_spd.mean()),
         "accel_abs":  float(np.abs(p_acc).mean()) if len(p_acc) else np.nan,
         "jerk_abs":   float(np.abs(p_jrk).mean()) if len(p_jrk) else np.nan,
         "turn_abs":   float(np.abs(p_dh).mean()),
-        "d_speed":    float(p_spd.mean() - g_spd.mean()),
-        "ade":        ade,
         "event_rate": float((rews[:t_end, a] <= EVENT_REW).sum() / t_end * T),
     }
 
@@ -320,7 +319,8 @@ def main():
     for d in range(n_axes):
         u = vt[d]
         directions.append([f"PC{d+1}", u, float((cen @ u).std())])
-    for tgt in ["d_speed", "speed_mean"]:
+    target_feats = [f for f in args.target_feats.split(",") if f in Bdf.columns]
+    for tgt in target_feats:
         y  = Bdf[tgt].values.astype(float)
         ok = np.isfinite(y)
         w, *_ = np.linalg.lstsq(cen[ok], y[ok] - y[ok].mean(), rcond=None)
@@ -333,7 +333,8 @@ def main():
     # -- Observational pre-check: in NATURAL data (before any forcing), does
     #    moving along each direction track the behaviors we care about? A flat
     #    / low-r panel warns the causal sweep of that direction will be flat. --
-    obs_metrics = ["speed_mean", "d_speed", "accel_abs", "event_rate"]
+    obs_metrics = ["speed_mean", "accel_abs", "jerk_abs", "turn_abs",
+                   "event_rate"]
     fig, axes = plt.subplots(len(directions), len(obs_metrics),
                              figsize=(3.0 * len(obs_metrics),
                                       2.6 * len(directions)), squeeze=False)
