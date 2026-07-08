@@ -336,6 +336,11 @@ def analyse(df, role_dim, args):
                     "n_agents": int(m.sum())}
             for f in REPORT_FEATS:
                 prof[f] = float(np.nanmean(sub[f].values[m]))
+            # Mean + std of the role vector itself -- what actually defines
+            # this cluster in z-space (the thing we clustered ON).
+            for d, rc in enumerate(role_cols):
+                prof[f"role_{d}_mean"] = float(np.nanmean(sub[rc].values[m]))
+                prof[f"role_{d}_std"]  = float(np.nanstd(sub[rc].values[m]))
             profile_rows.append(prof)
 
         for f in REPORT_FEATS:
@@ -359,11 +364,50 @@ def analyse(df, role_dim, args):
         print("  " + hdr)
         for _, r in p.iterrows():
             vals = "  ".join(f"{r[f]:>11.2f}" for f in REPORT_FEATS)
-            print(f"  {r['cluster_name']:>11} {int(r['n_agents']):>11}  {vals}")
+            role_str = "  ".join(f"z{d}={r[f'role_{d}_mean']:+.2f}"
+                                 f"(sd{r[f'role_{d}_std']:.2f})"
+                                 for d in range(role_dim))
+            print(f"  {r['cluster_name']:>11} {int(r['n_agents']):>11}  {vals}"
+                  f"   | role: {role_str}")
 
     _plot_profiles(prof_df, regimes, names, out, K)
     _plot_separability(eta_df, regimes, names, out)
+    _plot_role_means(prof_df, regimes, names, out, role_dim)
     print(f"\n[direct] outputs -> {out}/role_direct_*.png + *.csv")
+
+
+def _plot_role_means(prof_df, regimes, names, out, role_dim):
+    """(regime:cluster) x role_dim heatmap of mean role_mean. Raw units, shared
+    scale across everything -- this is what actually defines each pole, as
+    opposed to the behavioral features it's interpreted through."""
+    regimes = [rg for rg in regimes if not prof_df[prof_df["regime"] == rg].empty]
+    if not regimes:
+        return
+    rows, row_labels = [], []
+    for rg in regimes:
+        p = prof_df[prof_df["regime"] == rg].sort_values("cluster_rank")
+        for r in p.itertuples():
+            rows.append([getattr(r, f"role_{d}_mean") for d in range(role_dim)])
+            row_labels.append(f"{names.get(rg, rg)}: {r.cluster_name}")
+    mat  = np.array(rows)
+    vmax = float(np.nanmax(np.abs(mat))) or 1.0
+    fig, ax = plt.subplots(figsize=(1.1 * role_dim + 2.5, 0.45 * len(rows) + 1.5))
+    im = ax.imshow(mat, cmap="RdBu_r", vmin=-vmax, vmax=vmax, aspect="auto")
+    ax.set_xticks(range(role_dim))
+    ax.set_xticklabels([f"dim {d}" for d in range(role_dim)], fontsize=8)
+    ax.set_yticks(range(len(row_labels)))
+    ax.set_yticklabels(row_labels, fontsize=7)
+    for i in range(mat.shape[0]):
+        for j in range(mat.shape[1]):
+            ax.text(j, i, f"{mat[i, j]:.2f}", ha="center", va="center",
+                    fontsize=7,
+                    color="white" if abs(mat[i, j]) > vmax * 0.6 else "black")
+    plt.colorbar(im, ax=ax, label="mean role_mean (raw units)")
+    ax.set_title("Mean role vector per z-cluster -- what actually defines each "
+                 "pole", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(out / "role_direct_role_means.png", dpi=140)
+    plt.close(fig)
 
 
 def _plot_profiles(prof_df, regimes, names, out, K):
