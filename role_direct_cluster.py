@@ -425,6 +425,7 @@ def analyse(df, role_dim, args):
             print(f"  {r['cluster_name']:>11} {int(r['n_agents']):>11}  {vals}"
                   f"   | role: {role_str}")
 
+    _plot_z_tendency(df, role_cols, regimes, names, out, K, args.seed)
     _plot_profiles(prof_df, regimes, names, out, K, tag)
     _plot_separability(eta_df, regimes, names, out, tag)
     _plot_role_means(prof_df, regimes, names, out, role_dim, tag)
@@ -462,6 +463,50 @@ def _plot_role_means(prof_df, regimes, names, out, role_dim, tag=""):
                  "pole", fontsize=10)
     fig.tight_layout()
     fig.savefig(out / f"role_direct{tag}_role_means.png", dpi=140)
+    plt.close(fig)
+
+
+def _plot_z_tendency(df, role_cols, regimes, names, out, K, seed):
+    """Does z actually cluster, or is it a continuum? Per regime: silhouette over
+    K=2..6 (near 0 => no discrete clusters => don't K-means, use a continuous
+    axis), plus a 2-D PCA scatter of the role vectors colored by the K-cluster
+    assignment (one diffuse blob => continuum)."""
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import silhouette_score
+    from sklearn.decomposition import PCA
+
+    regs = [rg for rg in regimes if (df["regime"] == rg).sum() >= max(50, K * 10)]
+    if not regs:
+        return
+    fig, axes = plt.subplots(1, len(regs), figsize=(4 * len(regs), 4))
+    axes = np.atleast_1d(axes)
+    print("\n[direct] --- z cluster tendency (silhouette; ~0 = no real clusters, "
+          "i.e. a continuum -> prefer a continuous axis over K-means) ---")
+    for ax, rg in zip(axes, regs):
+        Z = df.loc[df["regime"] == rg, role_cols].values.astype(np.float64)
+        sils = []
+        for k in range(2, 7):
+            if len(Z) <= k:
+                sils.append((k, np.nan)); continue
+            lab = KMeans(k, n_init=10, random_state=seed).fit_predict(Z)
+            sils.append((k, float(silhouette_score(Z, lab))))
+        print(f"[direct]   regime {rg} ({names.get(rg, rg)}): "
+              + "  ".join(f"K{k}={s:.3f}" for k, s in sils))
+        lab = KMeans(K, n_init=10, random_state=seed).fit_predict(Z)
+        pca = PCA(n_components=2).fit(Z)
+        Z2  = pca.transform(Z)
+        for c in range(K):
+            m = lab == c
+            ax.scatter(Z2[m, 0], Z2[m, 1], s=4, alpha=0.4)
+        sel = dict(sils).get(K, np.nan)
+        ax.set_title(f"{names.get(rg, rg)}  sil(K={K})={sel:.3f}\n"
+                     f"PC1 {pca.explained_variance_ratio_[0]:.0%}  "
+                     f"PC2 {pca.explained_variance_ratio_[1]:.0%}", fontsize=9)
+        ax.set_xticks([]); ax.set_yticks([])
+    fig.suptitle("Is z clustered or a continuum? (2-D PCA of role vectors per "
+                 "regime; silhouette ~0 = no discrete clusters)", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(out / "role_direct_z_tendency.png", dpi=140)
     plt.close(fig)
 
 
