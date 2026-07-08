@@ -26,7 +26,7 @@ IN_DIR=/scratch/e452103/map_atlas    # holds map_features.csv + geometry_cache.p
 
 mkdir -p /scratch/e452103/logs
 
-for K in 3 5; do
+for K in 4; do
     echo "=== clustering K=$K ==="
     python "$CODE_DIR/map_atlas.py" \
         --in_dir  "$IN_DIR" \
