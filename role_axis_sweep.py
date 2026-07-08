@@ -115,6 +115,11 @@ def parse_args():
                    help="How many principal role axes to sweep (role is ~2-D)")
     p.add_argument("--alphas",     type=str, default="-2,-1,0,1,2",
                    help="Sweep grid in sigma units of the role distribution")
+    p.add_argument("--observe_only", action="store_true",
+                   help="Stop after the OBSERVATIONAL pre-check (warmup + the "
+                        "role_axis_observational.png graph + direction "
+                        "alignment) WITHOUT running the causal forced sweep. "
+                        "Cheap (~warmup only) -- look first, then commit.")
     p.add_argument("--device",     type=str, default="cuda")
     return p.parse_args()
 
@@ -123,11 +128,16 @@ def parse_args():
 # Behavior of one focal agent over its pre-respawn, GT-valid segment
 # ---------------------------------------------------------------------------
 
-def focal_metrics(a, xs, ys, hs, rews, gx, gy, gh, gvalid, T_gt):
+def seg_end(a, xs, ys, T_gt):
+    """First-respawn cut for agent a (shared by warmup role-mean + metrics)."""
     step_d = np.hypot(np.diff(xs[:, a]), np.diff(ys[:, a]))
     jumps  = np.where(step_d > TELEPORT_M)[0]
     t_end  = int(jumps[0] + 1) if len(jumps) else T
-    t_end  = min(t_end, T_gt)
+    return min(t_end, T_gt)
+
+
+def focal_metrics(a, xs, ys, hs, rews, gx, gy, gh, gvalid, T_gt):
+    t_end = seg_end(a, xs, ys, T_gt)
     if t_end < MIN_STEPS + 1:
         return None
     v = gvalid[a, :t_end]
@@ -268,44 +278,112 @@ def main():
     n_axes = min(args.n_axes, role_dim)
     print(f"[axis] role_dim={role_dim}, sweeping {n_axes} axes")
 
-    # -- A. Warmup: natural roles -> PCA axes (mu, PCs, per-axis sigma) --------
-    role_vecs = []
+    # -- A. Warmup: natural roles + behavior -> PCA axes + behavior directions -
+    role_vecs, beh_rows = [], []
     for ep in range(args.warmup_episodes):
         if ep > 0:
             env.resample_maps()
         data = rollout(env, policy, device)
         gt = data["gt"]
+        gx, gy = _squeeze(gt["x"]), _squeeze(gt["y"])
+        gh     = _squeeze(gt["heading"])
         gvalid = _squeeze(gt["valid"]).astype(bool)
+        sids   = _squeeze(np.asarray(gt["scenario_id"]).astype(str))
         is_veh = np.asarray(gt["is_vehicle"]).reshape(-1).astype(bool)
-        step_d = np.hypot(np.diff(data["xs"], axis=0), np.diff(data["ys"], axis=0))
+        T_gt   = gx.shape[1]
         for a in range(env.num_agents):
             if not is_veh[a]:
                 continue
-            jumps = np.where(step_d[:, a] > TELEPORT_M)[0]
-            t_end = int(jumps[0] + 1) if len(jumps) else T
-            if t_end < MIN_STEPS + 1 or gvalid[a, :t_end].sum() < MIN_STEPS:
+            m = focal_metrics(a, data["xs"], data["ys"], data["hs"],
+                              data["rews"], gx, gy, gh, gvalid, T_gt)
+            if m is None:
                 continue
-            role_vecs.append(data["roles"][:t_end, a].mean(axis=0))
+            te = seg_end(a, data["xs"], data["ys"], T_gt)
+            role_vecs.append(data["roles"][:te, a].mean(axis=0))
+            m["regime"] = int(regime_of.get(sids[a], -1))
+            beh_rows.append(m)
         print(f"[axis] warmup {ep+1}/{args.warmup_episodes}: "
-              f"{len(role_vecs)} role vectors", flush=True)
+              f"{len(role_vecs)} natural (role, behavior) pairs", flush=True)
 
-    R = np.asarray(role_vecs)
-    mu = R.mean(axis=0)
+    R   = np.asarray(role_vecs)                       # (N, role_dim)
+    Bdf = pd.DataFrame(beh_rows)
+    mu  = R.mean(axis=0)
     cen = R - mu
     _, svals, vt = np.linalg.svd(cen, full_matrices=False)
-    U = vt[:n_axes]                                   # (n_axes, role_dim)
-    sigma = np.array([cen @ U[d] for d in range(n_axes)]).std(axis=1)  # (n_axes,)
     evr = (svals**2) / (svals**2).sum()
-    print(f"[axis] PCA: explained var {['%.0f%%' % (100*e) for e in evr[:n_axes]]}"
-          f"  sigma={np.round(sigma,3)}")
+
+    # Directions to probe: PCA axes (max role VARIANCE) + behavior-aligned
+    # directions (OLS gradient of a behavior on z = the direction that moves
+    # that behavior fastest). PCA != behavior, so we probe both and let the
+    # data say which one is the real knob.
+    directions = []
+    for d in range(n_axes):
+        u = vt[d]
+        directions.append([f"PC{d+1}", u, float((cen @ u).std())])
+    for tgt in ["d_speed", "speed_mean"]:
+        y  = Bdf[tgt].values.astype(float)
+        ok = np.isfinite(y)
+        w, *_ = np.linalg.lstsq(cen[ok], y[ok] - y[ok].mean(), rcond=None)
+        if np.linalg.norm(w) > 1e-9:
+            u = w / np.linalg.norm(w)
+            directions.append([f"{tgt}_dir", u, float((cen @ u).std())])
+    print(f"[axis] PCA explained var (PC1..): "
+          f"{['%.0f%%' % (100*e) for e in evr[:n_axes]]}")
+
+    # -- Observational pre-check: in NATURAL data (before any forcing), does
+    #    moving along each direction track the behaviors we care about? A flat
+    #    / low-r panel warns the causal sweep of that direction will be flat. --
+    obs_metrics = ["speed_mean", "d_speed", "accel_abs", "event_rate"]
+    fig, axes = plt.subplots(len(directions), len(obs_metrics),
+                             figsize=(3.0 * len(obs_metrics),
+                                      2.6 * len(directions)), squeeze=False)
+    print("\n[axis] === observational correlations (natural roles, NOT causal) ===")
+    for i, (nm, u, sg) in enumerate(directions):
+        proj = cen @ u
+        for j, met in enumerate(obs_metrics):
+            ax = axes[i][j]
+            y  = Bdf[met].values.astype(float)
+            ok = np.isfinite(proj) & np.isfinite(y)
+            r  = (np.corrcoef(proj[ok], y[ok])[0, 1]
+                  if ok.sum() > 10 and proj[ok].std() > 0 and y[ok].std() > 0
+                  else np.nan)
+            ax.scatter(proj[ok], y[ok], s=3, alpha=0.12, color="#4477aa")
+            if np.isfinite(r):
+                b  = np.polyfit(proj[ok], y[ok], 1)
+                xx = np.array([proj[ok].min(), proj[ok].max()])
+                ax.plot(xx, b[0] * xx + b[1], "r-", lw=1.5)
+            ax.set_title(f"{nm} vs {met}\nr={r:+.2f}", fontsize=8)
+            ax.tick_params(labelsize=6)
+            print(f"[axis]   {nm:>13} vs {met:<11}: r={r:+.3f}")
+    for nm, u, sg in directions:
+        if nm.endswith("_dir"):
+            print(f"[axis]   |cos({nm}, PCk)| = " + "  ".join(
+                f"PC{d+1}:{abs(float(u @ vt[d])):.2f}" for d in range(n_axes)))
+    fig.suptitle("Observational: does moving along each role direction track "
+                 "behavior? (natural rollouts, scene-confounded — low-r here "
+                 "predicts a flat causal sweep)", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    fig.savefig(out / "role_axis_observational.png", dpi=140)
+    plt.close(fig)
+    pd.DataFrame([{"direction": nm, "sigma": sg,
+                   **{f"u{d}": float(u[d]) for d in range(len(u))}}
+                  for nm, u, sg in directions]).to_csv(
+        out / "role_axis_directions.csv", index=False)
+
+    if args.observe_only:
+        env.close()
+        print(f"\n[axis] observe_only: wrote role_axis_observational.png + "
+              f"role_axis_directions.csv -> {out}\n[axis] inspect the graph, "
+              f"then rerun WITHOUT --observe_only to do the causal sweep.")
+        return
 
     alphas = [float(x) for x in args.alphas.split(",")]
 
     # -- B. Sweep: force one focal per scene along each axis at each alpha -----
     rows = []
-    for d in range(n_axes):
+    for name, u, sg in directions:
         for al in alphas:
-            fvec = mu + al * sigma[d] * U[d]           # absolute role vector
+            fvec = mu + al * sg * u                     # absolute role vector
             got = 0
             for ep in range(args.episodes):
                 env.resample_maps()
@@ -321,9 +399,9 @@ def main():
                                       data["rews"], gx, gy, gh, gvalid, T_gt)
                     if m is None:
                         continue
-                    m.update({"axis": d, "alpha": al, "regime": int(rgm)})
+                    m.update({"axis": name, "alpha": al, "regime": int(rgm)})
                     rows.append(m); got += 1
-            print(f"[axis] PC{d+1} alpha={al:+.0f}: {got} focal observations",
+            print(f"[axis] {name} alpha={al:+.0f}: {got} focal observations",
                   flush=True)
     env.close()
 
@@ -335,8 +413,10 @@ def main():
     # -- C. Aggregate + dose-response figures + slopes ------------------------
     regimes = sorted(df["regime"].unique())
     dose_rows, slope_rows = [], []
-    for d in range(n_axes):
-        sub_d = df[df["axis"] == d]
+    for name, u, sg in directions:
+        sub_d = df[df["axis"] == name]
+        if sub_d.empty:
+            continue
         fig, axes = plt.subplots(1, len(METRICS),
                                  figsize=(3.1 * len(METRICS), 3.6))
         for ax, met in zip(np.atleast_1d(axes), METRICS):
@@ -355,8 +435,9 @@ def main():
                     if len(v) >= 5:
                         xr.append(al); yr.append(v.mean())
                         er.append(1.96 * v.std() / len(v) ** 0.5)
-                        dose_rows.append({"axis": d, "regime": rg, "alpha": al,
-                                          "metric": met, "mean": float(v.mean()),
+                        dose_rows.append({"axis": name, "regime": rg,
+                                          "alpha": al, "metric": met,
+                                          "mean": float(v.mean()),
                                           "sem": float(v.std()/len(v)**0.5),
                                           "n": int(len(v))})
                 if xr:
@@ -371,7 +452,7 @@ def main():
                 yy = np.array(ys_a)[order]
                 mono = bool(np.all(np.diff(yy) >= -1e-9)
                             or np.all(np.diff(yy) <= 1e-9))
-                slope_rows.append({"axis": d, "metric": met,
+                slope_rows.append({"axis": name, "metric": met,
                                    "slope_per_sigma": slope, "monotone": mono})
                 ax.set_title(f"{METRIC_LABEL[met]}\nslope={slope:+.2f}/σ"
                              f"{'  (mono)' if mono else '  (NOT mono)'}",
@@ -379,15 +460,16 @@ def main():
             else:
                 ax.set_title(METRIC_LABEL[met], fontsize=8)
             ax.axvline(0, color="grey", lw=0.7, ls=":")
-            ax.set_xlabel(f"PC{d+1} role (σ units)", fontsize=8)
+            ax.set_xlabel(f"{name} role (σ units)", fontsize=8)
             ax.grid(alpha=0.3)
         h, l = axes[0].get_legend_handles_labels()
         fig.legend(h, l, fontsize=7, ncol=len(l), loc="lower center")
-        fig.suptitle(f"Forced-role dose-response along PC{d+1} "
-                     f"({100*evr[d]:.0f}% of role variance) — scene fixed, only "
-                     f"the focal role changes (CAUSAL)", fontsize=11)
+        kind = (f"PC ({100*evr[int(name[2:])-1]:.0f}% of role variance)"
+                if name.startswith("PC") else "behavior-aligned direction")
+        fig.suptitle(f"Forced-role dose-response along {name} — {kind} — scene "
+                     f"fixed, only the focal role changes (CAUSAL)", fontsize=11)
         fig.tight_layout(rect=(0, 0.06, 1, 1))
-        fig.savefig(out / f"role_axis_PC{d+1}.png", dpi=140)
+        fig.savefig(out / f"role_axis_{name}.png", dpi=140)
         plt.close(fig)
 
     pd.DataFrame(dose_rows).to_csv(out / "role_axis_dose.csv", index=False)
@@ -395,7 +477,7 @@ def main():
     sl.to_csv(out / "role_axis_slopes.csv", index=False)
     print("\n[axis] === causal slopes (overall, per sigma) ===")
     for _, r in sl.iterrows():
-        print(f"[axis]   PC{int(r['axis'])+1:d}  {r['metric']:<11}: "
+        print(f"[axis]   {r['axis']:>13}  {r['metric']:<11}: "
               f"{r['slope_per_sigma']:+.3f}/σ  "
               f"{'monotone' if r['monotone'] else 'NON-monotone'}")
     print(f"\n[axis] outputs -> {out}/role_axis_*.png + *.csv")
