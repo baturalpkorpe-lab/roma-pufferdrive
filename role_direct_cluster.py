@@ -49,7 +49,13 @@ import matplotlib.pyplot as plt
 from torch.distributions import Categorical
 
 T = 91
-TELEPORT_M   = 8.0    # per-step jump above this = respawn -> cut segment
+# Per-step jump above this (m) = discontinuity (goal-reach respawn) -> truncate
+# the segment there. Was 8.0, but diag_speed_spikes.py showed respawns land
+# ~4-8 m away (a lone jump on the +1.0 goal reward), all UNDER 8 m, injecting
+# 40-80 m/s spikes into ~19% of segments and wrecking speed_max/accel/jerk.
+# 4.0 m (=40 m/s, above any real speed here) removes only ~0.45% of steps (the
+# clear artifacts) while keeping the real over-speeding signal at 25-35 m/s.
+TELEPORT_M   = 4.0
 MIN_STEPS    = 10     # min overlapping valid steps for usable metrics
 GT_MOVE_MS   = 1.0    # human counterpart must actually drive
 EVENT_REW    = -0.4   # reward <= this counts as a safety penalty event
