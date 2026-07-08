@@ -32,6 +32,6 @@ python "$CODE_DIR/role_axis_sweep.py" \
     --clusters   /scratch/e452103/map_atlas/k4/map_clusters.csv \
     --data_dir   pufferlib/resources/drive/binaries/training \
     --out_dir    /scratch/e452103/role_axis/dim4 \
-    --n_axes 2 --alphas "-2,-1,0,1,2" --warmup_episodes 3 --episodes 4
+    --n_axes 2 --alphas="-2,-1,0,1,2" --warmup_episodes 3 --episodes 4
 
 echo "Done -> /scratch/e452103/role_axis/dim4/role_axis_*.png"
