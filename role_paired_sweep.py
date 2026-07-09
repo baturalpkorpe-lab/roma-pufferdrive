@@ -291,6 +291,15 @@ def main():
           f"{['%.0f%%' % (100*e) for e in evr[:n_axes]]}  "
           f"sigma={np.round(axes_sg, 3)}")
 
+    # Persist mu + axes so render_role_alpha.py forces the SAME directions.
+    ax_rows = [{"name": "mu", "sigma": 0.0,
+                **{f"c{i}": float(mu[i]) for i in range(role_dim)}}]
+    for d in range(n_axes):
+        ax_rows.append({"name": f"PC{d+1}", "sigma": axes_sg[d],
+                        **{f"c{i}": float(axes_u[d][i])
+                           for i in range(role_dim)}})
+    pd.DataFrame(ax_rows).to_csv(out / "role_paired_axes.csv", index=False)
+
     alphas = sorted(float(x) for x in args.alphas.split(","))
 
     # Conditions: natural + shared alpha=0 (mu) + each (PCd, alpha!=0)
