@@ -28,10 +28,17 @@ mkdir -p /scratch/e452103/logs
 # C binding loads pufferlib/config/ocean/drive.ini via a relative path.
 cd /scratch/e452103/PufferDrive
 
+# --axes_csv is only passed if the paired sweep (new enough to save axes)
+# produced it; otherwise the renderer's own warmup estimates PC1 (85% of role
+# variance -- the estimated direction is essentially identical).
+AXES=/scratch/e452103/role_paired/dim4/role_paired_axes.csv
+AXES_ARG=""
+if [ -f "$AXES" ]; then AXES_ARG="--axes_csv $AXES"; fi
+
 python "$CODE_DIR/render_role_alpha.py" \
     --checkpoint /scratch/e452103/checkpoints/roma_baseline_dim4/roma_dim4_final.pt \
     --clusters   /scratch/e452103/map_atlas/k4/map_clusters.csv \
-    --axes_csv   /scratch/e452103/role_paired/dim4/role_paired_axes.csv \
+    $AXES_ARG \
     --data_dir   pufferlib/resources/drive/binaries/training \
     --out_dir    /scratch/e452103/renders/role_alpha_dim4 \
     --axis PC1 --alphas="-2,-1,0,1,2" --maps_per_regime 1
