@@ -75,6 +75,33 @@ def masked_kinematics(spd, dh, mask):
     return outm
 
 
+def ego_kinematics(p_spd, p_dh):
+    """Direct ego kinematics from a focal's per-step speed (m/s) and per-step
+    heading-change RATE (rad/s), with physical plausibility masking applied --
+    the shared fix for the impossible accel/jerk artifacts. Returns
+    speed_mean/max/min/std, accel_abs/std, jerk_abs, turn_abs, n_steps.
+    Steps with speed > SPEED_MAX_MS are dropped; accels with |a| > ACCEL_MAX_MS2
+    are dropped before jerk. Turn is NOT capped here (real sharp low-speed turns
+    are legitimate; the caller filters corrupt GT separately)."""
+    ok = p_spd <= SPEED_MAX_MS
+    s  = p_spd[ok]
+    dh = p_dh[ok] if p_dh is not None else None
+    acc = np.diff(s) * 10.0
+    acc = acc[np.abs(acc) <= ACCEL_MAX_MS2]
+    jrk = np.diff(acc) * 10.0
+    return {
+        "speed_mean": float(s.mean()) if len(s) else np.nan,
+        "speed_max":  float(s.max()) if len(s) else np.nan,
+        "speed_min":  float(s.min()) if len(s) else np.nan,
+        "speed_std":  float(s.std()) if len(s) else np.nan,
+        "accel_abs":  float(np.abs(acc).mean()) if len(acc) else np.nan,
+        "accel_std":  float(acc.std()) if len(acc) else np.nan,
+        "jerk_abs":   float(np.abs(jrk).mean()) if len(jrk) else np.nan,
+        "turn_abs":   float(np.abs(dh).mean()) if dh is not None and len(dh) else np.nan,
+        "n_steps":    int(len(s)),
+    }
+
+
 def gt_traj_features(gx, gy, gh, valid):
     """Trajectory-stratification features for ONE vehicle's GT arrays (T,).
 

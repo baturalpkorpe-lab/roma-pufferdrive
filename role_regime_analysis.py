@@ -57,6 +57,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from torch.distributions import Categorical
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from traj_kinematics import ego_kinematics
+
 T = 91
 TELEPORT_M   = 4.0    # per-step jump above this = respawn -> cut segment.
                       # Lowered from 8.0: diag_speed_spikes.py confirmed respawns
@@ -228,14 +232,19 @@ def collect(args, device):
             if g_spd.max() <= GT_MOVE_MS:
                 continue                               # human was parked
             g_dh  = wrap_angle((gh[a, 1:t_end] - gh[a, :t_end-1])[pair]) * 10
-            g_acc = np.diff(g_spd)
 
             # policy agent over the same timesteps
             p_dx  = np.diff(xs[:t_end, a])[pair]
             p_dy  = np.diff(ys[:t_end, a])[pair]
             p_spd = np.hypot(p_dx, p_dy) * 10
             p_dh  = wrap_angle(np.diff(hs[:t_end, a])[pair]) * 10
-            p_acc = np.diff(p_spd)
+
+            # plausibility-masked kinematics (drops impossible accel/jerk from
+            # residual respawn / GT spikes) for policy AND human counterpart
+            kp = ego_kinematics(p_spd, p_dh)
+            kg = ego_kinematics(g_spd, g_dh)
+            if kp["n_steps"] < MIN_STEPS:
+                continue
 
             # position error vs the human path, same timesteps
             vi   = np.where(v)[0]
@@ -255,14 +264,13 @@ def collect(args, device):
                 "scenario_id": sid[a],
                 "regime":      int(regime),
                 "n_steps":     int(pair.sum()),
-                "gt_speed":    float(g_spd.mean()),
-                "policy_speed": float(p_spd.mean()),
-                "d_speed":     float(p_spd.mean() - g_spd.mean()),
-                "speed_ratio": float(p_spd.mean() / max(g_spd.mean(), 0.1)),
+                "gt_speed":    kg["speed_mean"],
+                "policy_speed": kp["speed_mean"],
+                "d_speed":     kp["speed_mean"] - kg["speed_mean"],
+                "speed_ratio": float(kp["speed_mean"] / max(kg["speed_mean"], 0.1)),
                 "ade":         ade,
-                "d_turn_rate": float(np.abs(p_dh).mean() - np.abs(g_dh).mean()),
-                "d_jerk":      float(p_acc.std() - g_acc.std())
-                               if len(p_acc) > 2 else np.nan,
+                "d_turn_rate": kp["turn_abs"] - kg["turn_abs"],
+                "d_jerk":      kp["accel_std"] - kg["accel_std"],
                 "same_turn":   same_turn,
                 "event_rate":  float((rews[:t_end, a] <= EVENT_REW).sum()
                                      / t_end * T),

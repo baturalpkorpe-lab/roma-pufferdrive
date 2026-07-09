@@ -58,6 +58,7 @@ from torch.distributions import Categorical
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from render_topdown import load_policy
+from traj_kinematics import ego_kinematics
 
 T = 91
 TELEPORT_M = 4.0     # respawn discontinuity cut (validated by diag_speed_spikes)
@@ -138,13 +139,14 @@ def focal_metrics(a, xs, ys, hs, rews, gx, gy, gvalid, T_gt):
     p_dy = np.diff(ys[:t_end, a])[pair]
     p_spd = np.hypot(p_dx, p_dy) * 10.0
     p_dh  = wrap_angle(np.diff(hs[:t_end, a])[pair]) * 10.0
-    p_acc = np.diff(p_spd) * 10.0
-    p_jrk = np.diff(p_acc) * 10.0
+    k = ego_kinematics(p_spd, p_dh)               # plausibility-masked kinematics
+    if k["n_steps"] < MIN_STEPS:
+        return None
     return {
-        "speed_mean": float(p_spd.mean()),
-        "accel_abs":  float(np.abs(p_acc).mean()) if len(p_acc) else np.nan,
-        "jerk_abs":   float(np.abs(p_jrk).mean()) if len(p_jrk) else np.nan,
-        "turn_abs":   float(np.abs(p_dh).mean()),
+        "speed_mean": k["speed_mean"],
+        "accel_abs":  k["accel_abs"],
+        "jerk_abs":   k["jerk_abs"],
+        "turn_abs":   k["turn_abs"],
         "event_rate": float((rews[:t_end, a] <= EVENT_REW).sum() / t_end * T),
     }
 

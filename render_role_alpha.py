@@ -51,6 +51,7 @@ from render_role_conditions import (rollout_forced, scan_allocation, scene_view,
                                     scene_setup, bbox_of, include_point,
                                     first_segment, focal_goal)
 from role_regime_analysis import _squeeze
+from traj_kinematics import ego_kinematics
 
 T = 91
 TELEPORT_M = 4.0      # metric segment cut (respawn discontinuity)
@@ -156,14 +157,14 @@ def focal_numbers(data):
     tp = np.where(step > TELEPORT_M)[0]
     end = int(tp[0] + 1) if len(tp) else T
     spd = step[:max(end - 1, 1)] * 10.0
-    dh  = np.abs(wrap_angle(np.diff(fh[:end]))) * 10.0
-    acc = np.diff(spd) * 10.0
-    jrk = np.diff(acc) * 10.0
+    dh  = wrap_angle(np.diff(fh[:end])) * 10.0
+    n   = min(len(spd), len(dh))
+    k = ego_kinematics(spd[:n], dh[:n])           # plausibility-masked kinematics
     return {
-        "speed_mean": float(spd.mean()) if len(spd) else np.nan,
-        "accel_abs":  float(np.abs(acc).mean()) if len(acc) else np.nan,
-        "jerk_abs":   float(np.abs(jrk).mean()) if len(jrk) else np.nan,
-        "turn_abs":   float(dh.mean()) if len(dh) else np.nan,
+        "speed_mean": k["speed_mean"],
+        "accel_abs":  k["accel_abs"],
+        "jerk_abs":   k["jerk_abs"],
+        "turn_abs":   k["turn_abs"],
         "event_rate": np.nan,   # rewards not returned by rollout_forced
         "seg_end":    end,
     }

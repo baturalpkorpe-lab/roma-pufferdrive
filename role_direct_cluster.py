@@ -48,6 +48,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from torch.distributions import Categorical
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from traj_kinematics import ego_kinematics
+
 T = 91
 # Per-step jump above this (m) = discontinuity (goal-reach respawn) -> truncate
 # the segment there. Was 8.0, but diag_speed_spikes.py showed respawns land
@@ -236,15 +241,19 @@ def collect(args, device):
             if g_spd.max() <= GT_MOVE_MS:
                 continue
             g_dh  = wrap_angle((gh[a, 1:t_end] - gh[a, :t_end-1])[pair]) * 10.0
-            g_acc = np.diff(g_spd) * 10.0
 
             # policy agent over the same timesteps
             p_dx  = np.diff(xs[:t_end, a])[pair]
             p_dy  = np.diff(ys[:t_end, a])[pair]
             p_spd = np.hypot(p_dx, p_dy) * 10.0
             p_dh  = wrap_angle(np.diff(hs[:t_end, a])[pair]) * 10.0
-            p_acc = np.diff(p_spd) * 10.0                # m/s^2
-            p_jrk = np.diff(p_acc) * 10.0                # m/s^3
+
+            # plausibility-masked kinematics for policy AND human (drops the
+            # impossible accel/jerk from residual respawn / GT spikes)
+            kp = ego_kinematics(p_spd, p_dh)
+            kg = ego_kinematics(g_spd, g_dh)
+            if kp["n_steps"] < MIN_STEPS:
+                continue
 
             vi  = np.where(v)[0]
             ade = float(np.mean(np.hypot(xs[vi, a] - gx[a, vi],
@@ -253,25 +262,24 @@ def collect(args, device):
             row = {
                 "scenario_id": sid[a],
                 "regime":      int(regime),
-                "n_steps":     int(pair.sum()),
+                "n_steps":     int(kp["n_steps"]),
                 # --- RAW ego kinematics (no GT) ---
-                "speed_mean":  float(p_spd.mean()),
-                "speed_max":   float(p_spd.max()),
-                "speed_std":   float(p_spd.std()),
-                "accel_abs":   float(np.abs(p_acc).mean()) if len(p_acc) else np.nan,
-                "accel_std":   float(p_acc.std())          if len(p_acc) else np.nan,
-                "jerk_abs":    float(np.abs(p_jrk).mean()) if len(p_jrk) else np.nan,
-                "turn_abs":    float(np.abs(p_dh).mean()),
+                "speed_mean":  kp["speed_mean"],
+                "speed_max":   kp["speed_max"],
+                "speed_std":   kp["speed_std"],
+                "accel_abs":   kp["accel_abs"],
+                "accel_std":   kp["accel_std"],
+                "jerk_abs":    kp["jerk_abs"],
+                "turn_abs":    kp["turn_abs"],
                 "event_rate":  float((rews[:t_end, a] <= EVENT_REW).sum()
                                      / t_end * T),
                 # --- DELTA vs own human GT ---
-                "gt_speed":    float(g_spd.mean()),
-                "d_speed":     float(p_spd.mean() - g_spd.mean()),
-                "speed_ratio": float(p_spd.mean() / max(g_spd.mean(), 0.1)),
+                "gt_speed":    kg["speed_mean"],
+                "d_speed":     kp["speed_mean"] - kg["speed_mean"],
+                "speed_ratio": float(kp["speed_mean"] / max(kg["speed_mean"], 0.1)),
                 "ade":         ade,
-                "d_turn_rate": float(np.abs(p_dh).mean() - np.abs(g_dh).mean()),
-                "d_jerk":      float(p_acc.std() - g_acc.std())
-                               if len(p_acc) > 2 and len(g_acc) > 2 else np.nan,
+                "d_turn_rate": kp["turn_abs"] - kg["turn_abs"],
+                "d_jerk":      kp["accel_std"] - kg["accel_std"],
             }
             role_seg = rl[:t_end, a].mean(axis=0)
             for d in range(role_dim):
