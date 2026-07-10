@@ -80,7 +80,7 @@ def main():
     # conditions: "base" is alpha=0; "PC{d}|{alpha}" otherwise
     pcs = sorted({m.group(1) for c in df["cond"].unique()
                   for m in [re.match(r"(PC\d+)\|", str(c))] if m})
-    alphas = sorted({float(m.group(2)) for c in df["cond"].unique()
+    alphas = sorted({float(m.group(1)) for c in df["cond"].unique()
                      for m in [re.match(r"PC\d+\|([+-]?\d+\.?\d*)", str(c))]
                      if m} | {0.0})
     key = ["episode", "sid", "vid"]
