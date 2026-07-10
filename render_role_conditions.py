@@ -329,8 +329,13 @@ def scene_view(data, slots, sid):
 # ---------------------------------------------------------------------------
 
 def rollout_forced(env, policy, sid, focal_vid, cond_vec, device,
-                   max_tries=25):
+                   max_tries=25, shift=False):
     """One rollout with the focal agent's role forced.
+
+    shift=False (default): focal's role REPLACED by cond_vec (constant clamp,
+    the original conditions-video behavior). shift=True: cond_vec is ADDED to
+    the focal's own live per-step role (natural-offset scheme -- preserves the
+    agent's individuality/time-variation; used by render_role_alpha).
 
     env.reset() reshuffles the slot<->scenario allocation, so the target
     scene is re-located AFTER the reset: its slots by scenario_id, the focal
@@ -390,7 +395,10 @@ def rollout_forced(env, policy, sid, focal_vid, cond_vec, device,
                 # pass 1: natural roles for everyone (state NOT advanced)
                 _, _, _, ri = policy(obs, state)
                 forced = ri["role_z"].clone()
-                forced[focal] = cond
+                if shift:
+                    forced[focal] = forced[focal] + cond   # offset own role
+                else:
+                    forced[focal] = cond                   # constant clamp
                 # pass 2: same input state, focal role replaced
                 logits, _, state, _ = policy(obs, state, forced_role=forced)
         action = Categorical(logits=logits.float()).sample()

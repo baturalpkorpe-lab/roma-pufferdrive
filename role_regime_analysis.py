@@ -10,16 +10,15 @@ Pipeline per episode (reset batch, ~500 scenarios at once):
   2. roll the policy 91 steps, recording positions, per-step role_mean,
      per-step rewards (safety-penalty events)
   3. per agent: cut at the first respawn teleport, keep only timesteps where
-     the GT is valid, and compute GT-REFERENCED deltas:
-        d_speed      policy mean speed - human mean speed  (same seat!)
-        speed_ratio  policy / human mean speed
-        ade          mean distance to the human's path at the same timesteps
-        d_turn_rate  policy - human mean |dheading|/s
-        d_jerk       policy - human accel std
-        same_turn    did it take the turn the human took (only where the
-                     human turned >= ~30 degrees)
+     the GT is valid, and compute RAW ego kinematics (plausibility-masked;
+     the earlier GT-delta approach was dropped -- deltas carried no meaningful
+     role signal, see the role_direct_cluster eta^2 comparison):
+        speed_mean / speed_max   m/s
+        accel_abs / jerk_abs     m/s^2, m/s^3
+        turn_abs                 mean |dheading|/s
         event_rate   safety-penalty steps per 91 (collision+offroad combined:
                      both penalties are -0.5 so they are indistinguishable)
+     (gt_speed and ade are kept as CONTEXT columns only.)
   4. stratify by map regime (map_clusters.csv from Phase B): core maps only
      (margin > --min_margin), junk clusters excluded.
 
@@ -70,11 +69,11 @@ TELEPORT_M   = 4.0    # per-step jump above this = respawn -> cut segment.
 MIN_STEPS    = 10     # min overlapping valid steps for usable metrics
 GT_MOVE_MS   = 1.0    # human counterpart must actually drive
 EVENT_REW    = -0.4   # reward <= this counts as a safety penalty event
-TURN_NET_RAD = 0.5    # human net heading change >= this = "a turn happened"
 
-METRICS       = ["d_speed", "speed_ratio", "ade", "d_turn_rate", "d_jerk",
-                 "event_rate"]
-CORR_METRICS  = ["d_speed", "ade", "d_turn_rate", "d_jerk", "event_rate"]
+METRICS       = ["speed_mean", "speed_max", "accel_abs", "jerk_abs",
+                 "turn_abs", "event_rate"]
+CORR_METRICS  = ["speed_mean", "speed_max", "accel_abs", "jerk_abs",
+                 "turn_abs", "event_rate"]
 REGIME_NAMES_DEFAULT = ("0:quiet local,1:fast corridors,"
                         "2:parking/low-speed,4:congested urban")
 
@@ -251,29 +250,21 @@ def collect(args, device):
             ade  = float(np.mean(np.hypot(xs[vi, a] - gx[a, vi],
                                           ys[vi, a] - gy[a, vi])))
 
-            # same-turn: compare net heading change where the human turned
-            g_net = float(np.sum(g_dh)) / 10
-            p_net = float(np.sum(p_dh)) / 10
-            if abs(g_net) >= TURN_NET_RAD:
-                same_turn = float(np.sign(g_net) == np.sign(p_net)
-                                  and abs(p_net) >= TURN_NET_RAD / 2)
-            else:
-                same_turn = np.nan
-
             row = {
                 "scenario_id": sid[a],
                 "regime":      int(regime),
-                "n_steps":     int(pair.sum()),
-                "gt_speed":    kg["speed_mean"],
-                "policy_speed": kp["speed_mean"],
-                "d_speed":     kp["speed_mean"] - kg["speed_mean"],
-                "speed_ratio": float(kp["speed_mean"] / max(kg["speed_mean"], 0.1)),
-                "ade":         ade,
-                "d_turn_rate": kp["turn_abs"] - kg["turn_abs"],
-                "d_jerk":      kp["accel_std"] - kg["accel_std"],
-                "same_turn":   same_turn,
+                "n_steps":     int(kp["n_steps"]),
+                # RAW ego kinematics (plausibility-masked) -- the metrics
+                "speed_mean":  kp["speed_mean"],
+                "speed_max":   kp["speed_max"],
+                "accel_abs":   kp["accel_abs"],
+                "jerk_abs":    kp["jerk_abs"],
+                "turn_abs":    kp["turn_abs"],
                 "event_rate":  float((rews[:t_end, a] <= EVENT_REW).sum()
                                      / t_end * T),
+                # context only (not correlated against roles)
+                "gt_speed":    kg["speed_mean"],
+                "ade":         ade,
             }
             role_seg = rl[:t_end, a].mean(axis=0)
             for d in range(role_dim):
@@ -340,8 +331,7 @@ def analyse(df, role_dim, args):
         sub = df[df["regime"] == rg]
         print(f"[phaseC]   regime {rg} ({names.get(rg, '?')}): {len(sub)} agents, "
               f"human {sub['gt_speed'].mean():.1f} m/s, "
-              f"policy {sub['policy_speed'].mean():.1f} m/s, "
-              f"d_speed {sub['d_speed'].mean():+.2f} m/s")
+              f"policy {sub['speed_mean'].mean():.1f} m/s")
 
     # -- 1. per-regime correlation heatmaps ------------------------------------
     ncol = len(regimes)
@@ -352,7 +342,7 @@ def analyse(df, role_dim, args):
         m   = corr_matrix(sub, role_dim, CORR_METRICS)
         annotated_heatmap(ax, m, dim_labels, CORR_METRICS,
                           f"{names.get(rg, rg)} (n={len(sub)})")
-    fig.suptitle("Role dims vs GT-referenced deltas, per map regime "
+    fig.suptitle("Role dims vs raw ego kinematics, per map regime "
                  "(Pearson r)", fontsize=11)
     fig.tight_layout()
     fig.savefig(out / "phaseC_corr_by_regime.png", dpi=140)
@@ -378,7 +368,7 @@ def analyse(df, role_dim, args):
     # -- 3. within-scene z-scored correlations (strongest control) -------------
     z = df.copy()
     grp = z.groupby("scenario_id")
-    keep = grp["d_speed"].transform("count") >= 3
+    keep = grp["speed_mean"].transform("count") >= 3
     z = df[keep].copy()
     cols = [f"role_{d}" for d in range(role_dim)] + CORR_METRICS
     g2 = z.groupby("scenario_id")[cols]
@@ -394,7 +384,7 @@ def analyse(df, role_dim, args):
 
     # -- 4. variance decomposition: regime vs role vs residual -----------------
     role_cols = [f"role_{d}" for d in range(role_dim)]
-    var_metrics = ["policy_speed", "d_speed", "ade", "d_turn_rate"]
+    var_metrics = ["speed_mean", "accel_abs", "jerk_abs", "turn_abs"]
     shares = np.zeros((len(var_metrics), 3))
     for i, m in enumerate(var_metrics):
         sub = df[np.isfinite(df[m])]
@@ -433,7 +423,7 @@ def analyse(df, role_dim, args):
     ax.set_xticklabels(var_metrics)
     ax.set_ylabel("share of variance")
     ax.set_title("What explains behavioral variance: maps vs roles\n"
-                 "(regime share should collapse on the GT-referenced deltas)")
+                 "(raw ego kinematics, plausibility-masked)")
     ax.legend()
     fig.tight_layout()
     fig.savefig(out / "phaseC_variance.png", dpi=140)
@@ -443,17 +433,18 @@ def analyse(df, role_dim, args):
               f"role {shares[i,1]:.1%}  residual {shares[i,2]:.1%}")
 
     # -- 5. role clusters per regime: spider chart of mean delta profiles ------
-    # Clusters are ORDERED by their d_speed so the same color/name means the
+    # Clusters are ORDERED by their speed_mean so the same color/name means the
     # same personality in every regime: conformist (closest to the human),
     # middle, runaway (fastest over-speeder). Axes are min-max scaled across
-    # the clusters of that regime; legend shows the real-unit d_speed.
+    # the clusters of that regime; legend shows the real-unit speed_mean.
     from sklearn.cluster import KMeans
     K = args.kmeans_k
     CLUSTER_NAMES  = (["conformist", "middle", "runaway"] if K == 3 else
                       [f"cluster {c}" for c in range(K)])
     CLUSTER_COLORS = plt.get_cmap("tab10")(np.linspace(0, 1, 10))
-    prof_metrics = ["d_speed", "ade", "d_turn_rate", "d_jerk", "event_rate"]
-    prof_labels  = ["Δspeed", "path dev\n(ADE)", "Δturn", "Δjerk", "events"]
+    prof_metrics = ["speed_mean", "accel_abs", "jerk_abs", "turn_abs",
+                    "event_rate"]
+    prof_labels  = ["speed", "|accel|", "|jerk|", "|turn|", "events"]
     n_m    = len(prof_metrics)
     angles = np.linspace(0, 2 * np.pi, n_m, endpoint=False).tolist()
     angles += angles[:1]
@@ -470,7 +461,7 @@ def analyse(df, role_dim, args):
         lab = km.fit_predict(sub[role_cols].values)
         means = np.array([[sub[m][lab == c].mean() for m in prof_metrics]
                           for c in range(K)])              # (K, n_m)
-        order = np.argsort(means[:, 0])                    # by d_speed
+        order = np.argsort(means[:, 0])                    # by speed_mean
         lo, hi = means.min(axis=0), means.max(axis=0)
         rng    = np.where(hi - lo == 0, 1, hi - lo)
         normed = (means - lo) / rng
@@ -479,7 +470,7 @@ def analyse(df, role_dim, args):
             vals = normed[c].tolist() + [normed[c][0]]
             ax.plot(angles, vals, "o-", lw=2, color=CLUSTER_COLORS[rank],
                     label=f"{CLUSTER_NAMES[rank]} (n={(lab == c).sum()}, "
-                          f"Δv={means[c, 0]:+.1f} m/s)")
+                          f"v={means[c, 0]:.1f} m/s)")
             ax.fill(angles, vals, alpha=0.10, color=CLUSTER_COLORS[rank])
         ax.set_xticks(angles[:-1])
         ax.set_xticklabels(prof_labels, fontsize=8)
@@ -488,8 +479,8 @@ def analyse(df, role_dim, args):
         ax.set_title(f"{names.get(rg, rg)}  (n={len(sub)})",
                      fontsize=10, pad=16)
         ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.08), fontsize=7)
-    fig.suptitle("Role clusters per regime -- mean deviation from the human "
-                 "counterpart (axes min-max scaled per regime)",
+    fig.suptitle("Role clusters per regime -- raw ego kinematics "
+                 "(axes min-max scaled per regime)",
                  fontsize=12, y=1.06)
     fig.tight_layout()
     fig.savefig(out / "phaseC_role_clusters.png", dpi=140,
@@ -506,16 +497,16 @@ def analyse(df, role_dim, args):
     cen   = roles - roles.mean(axis=0)
     pc1   = np.linalg.svd(cen, full_matrices=False)[2][0]
     axis  = cen @ pc1
-    ok    = np.isfinite(df["d_speed"].values)
-    if np.corrcoef(axis[ok], df["d_speed"].values[ok])[0, 1] < 0:
-        axis = -axis                       # orient: + = over-speeding pole
+    ok    = np.isfinite(df["speed_mean"].values)
+    if np.corrcoef(axis[ok], df["speed_mean"].values[ok])[0, 1] < 0:
+        axis = -axis                       # orient: + = fast pole
     NQ    = 5
     edges = np.quantile(axis, np.linspace(0, 1, NQ + 1))
     qbin  = np.clip(np.searchsorted(edges, axis, side="right") - 1, 0, NQ - 1)
 
     fig, axs = plt.subplots(1, 2, figsize=(12, 4.5))
-    for ax, (met, lab) in zip(axs, [("d_speed", "faster than the human (m/s)"),
-                                    ("ade", "distance from human's path (m)")]):
+    for ax, (met, lab) in zip(axs, [("speed_mean", "mean speed (m/s)"),
+                                    ("turn_abs", "|turn rate| (rad/s)")]):
         for rg in regimes:
             m = (df["regime"].values == rg) & np.isfinite(df[met].values)
             ys, es, xs_ = [], [], []
@@ -534,8 +525,8 @@ def analyse(df, role_dim, args):
         ax.set_ylabel(lab, fontsize=9)
         ax.grid(alpha=0.3)
         ax.legend(fontsize=7)
-    fig.suptitle("Role axis (PC1) quintiles vs mean deviation from the human "
-                 "counterpart", fontsize=11)
+    fig.suptitle("Role axis (PC1) quintiles vs raw ego kinematics",
+                 fontsize=11)
     fig.tight_layout()
     fig.savefig(out / "phaseC_role_axis.png", dpi=140)
     plt.close(fig)

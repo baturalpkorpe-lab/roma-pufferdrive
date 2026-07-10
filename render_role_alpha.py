@@ -266,9 +266,13 @@ def main():
             # Phase 1: all alpha rollouts first (no partial files on failure)
             views, mets, ok = {}, {}, True
             for al in alphas:
-                vec = mu + al * sg * u
+                # natural-offset scheme (matches role_paired_sweep): the focal
+                # keeps its own live role, shifted by al*sigma along the axis;
+                # al=0 = fully natural (no forcing at all).
+                vec = None if al == 0.0 else al * sg * u
                 data = rollout_forced(env, policy, sid, focal_vid, vec,
-                                      device, max_tries=args.max_relocate)
+                                      device, max_tries=args.max_relocate,
+                                      shift=True)
                 if data is None:
                     print(f"  [skip] {sid[:10]} not re-dealt on α={al:+g}")
                     found[rg].remove(sid)
@@ -337,6 +341,16 @@ def main():
             break
 
     env.close()
+    missing = {rg: need[rg] - len(found[rg])
+               for rg in need if len(found[rg]) < need[rg]}
+    if missing:
+        print(f"\n[alpha] WARNING: regimes NOT filled after "
+              f"{args.max_resamples} resamples: {missing}. Causes: no scene of "
+              f"that regime passed --min_focal_drive ({args.min_focal_drive} m) "
+              f"in the {args.map_pool}-map pool, or the scene failed to re-deal "
+              f"within --max_relocate resets on some alpha (see '[skip]' lines "
+              f"above). Retry with --max_resamples 20 and/or "
+              f"--min_focal_drive 3.")
     if summary:
         pd.DataFrame(summary).to_csv(out_dir / "alpha_render_summary.csv",
                                      index=False)

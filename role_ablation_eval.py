@@ -24,6 +24,13 @@ Interpretation:
   natural > shuffled
       -> correct role ASSIGNMENT matters, not just diversity.
 
+INTERPRETATION CAVEAT (Jul 2026, user decision): natural winning is largely
+EXPECTED, not thesis-grade evidence -- the policy trained 3B steps WITH its
+natural roles, so any eval-time role perturbation is off-distribution and
+should degrade performance. "Collapsed roles score lower WOSAC" mostly
+confirms train/eval consistency. Kept for completeness; the rigorous causal
+role analysis is the paired forced-role sweep (role_paired_sweep.py).
+
 Usage (from /scratch/e452103/PufferDrive):
     PYTHONPATH=$HOME/roma_pufferdrive:/scratch/e452103/PufferDrive \
     python $HOME/roma_pufferdrive/role_ablation_eval.py \

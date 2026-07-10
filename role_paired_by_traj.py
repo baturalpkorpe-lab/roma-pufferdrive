@@ -84,11 +84,14 @@ def main():
                      for m in [re.match(r"PC\d+\|([+-]?\d+\.?\d*)", str(c))]
                      if m} | {0.0})
     key = ["episode", "sid", "vid"]
-    base = df[df["cond"] == "base"].set_index(key)
+    # alpha=0 baseline: old sweeps forced mu ("base"); the redesigned sweep
+    # shifts the focal's own role, so its alpha=0 baseline is "natural".
+    base_cond = "base" if (df["cond"] == "base").any() else "natural"
+    base = df[df["cond"] == base_cond].set_index(key)
 
     delta_rows, test_rows = [], []
     for pc in pcs:
-        cond_of = {al: (f"{pc}|{al:+g}" if al != 0.0 else "base")
+        cond_of = {al: (f"{pc}|{al:+g}" if al != 0.0 else base_cond)
                    for al in alphas}
         fig, axs = plt.subplots(1, len(METRICS),
                                 figsize=(3.1 * len(METRICS), 3.8))

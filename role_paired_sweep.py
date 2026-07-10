@@ -21,9 +21,13 @@ How the pairing works:
 Directions: PC1 and PC2 of the natural role distribution ONLY (no
 behavior-fitted directions -- those were confound-chasing and causally dead).
 
-Conditions per episode: natural (no forcing) + alpha in ALPHAS forced to
-mu + alpha*sigma_d*PC_d for each direction d (alpha=0 == mu is shared across
-directions and rolled once).
+FORCING SCHEME (redesigned): the focal is NOT clamped to a constant vector.
+Every step it keeps its OWN live encoder role (which varies over time and
+between agents) and a constant SHIFT of alpha*sigma_d*PC_d is ADDED to it:
+    z_focal(t) = z_natural(t) + alpha * sigma_d * PC_d
+So alpha=0 is exactly the natural policy (the shared baseline condition), and
+the dose-response measures "push this agent's own role along the axis",
+preserving individuality instead of replacing it with a shifted average.
 
 Outputs in --out_dir:
   role_paired_agent.csv    one row per (episode, condition, map, vehicle)
@@ -179,9 +183,11 @@ def select_focals(gt, regime_of):
     return out
 
 
-def rollout_condition(env, policy, device, regime_of, force_vec):
-    """reset -> pick focals (deterministic per scene) -> roll 91 steps forcing
-    every focal to force_vec (two-pass; None = natural, nobody forced).
+def rollout_condition(env, policy, device, regime_of, shift_vec):
+    """reset -> pick focals (deterministic per scene) -> roll 91 steps ADDING
+    shift_vec to every focal's OWN live role each step (two-pass; the focal's
+    natural role still varies per step/agent -- only the offset is constant).
+    shift_vec None = natural, nobody touched.
     Returns rows keyed by (scenario_id, vehicle_id)."""
     B = env.num_agents
     obs_np, _ = env.reset()
@@ -189,8 +195,8 @@ def rollout_condition(env, policy, device, regime_of, force_vec):
     focals = select_focals(gt, regime_of)
     slots  = np.array([f[0] for f in focals], dtype=int)
 
-    fv = (None if force_vec is None else
-          torch.as_tensor(force_vec, dtype=torch.float32, device=device))
+    fv = (None if shift_vec is None else
+          torch.as_tensor(shift_vec, dtype=torch.float32, device=device))
     torch.manual_seed(ROLLOUT_SEED)
     xs = np.zeros((T, B), np.float32); ys = np.zeros((T, B), np.float32)
     hs = np.zeros((T, B), np.float32); rews = np.zeros((T, B), np.float32)
@@ -207,7 +213,7 @@ def rollout_condition(env, policy, device, regime_of, force_vec):
             else:
                 _, _, _, ri0 = policy(obs, state)      # pass 1: natural roles
                 forced = ri0["role_z"].clone()
-                forced[slots] = fv                      # override focals only
+                forced[slots] = forced[slots] + fv      # SHIFT own role only
                 logits, _, state, ri = policy(obs, state, forced_role=forced)
         if ri.get("role_mean") is not None and ri["role_mean"].shape[-1]:
             rl[t] = ri["role_mean"].float().cpu().numpy()
@@ -304,18 +310,17 @@ def main():
 
     alphas = sorted(float(x) for x in args.alphas.split(","))
 
-    # Conditions: natural + shared alpha=0 (mu) + each (PCd, alpha!=0)
+    # Conditions: one shared natural baseline (= alpha 0 for every axis; the
+    # focal keeps its own role untouched) + each (PCd, alpha!=0) as a SHIFT
+    # of the focal's own live role along that axis.
     conds = [("natural", None)]
-    if 0.0 in alphas:
-        conds.append(("base", mu.copy()))
     for d in range(n_axes):
         for al in alphas:
             if al == 0.0:
                 continue
-            conds.append((f"PC{d+1}|{al:+g}",
-                          mu + al * axes_sg[d] * axes_u[d]))
+            conds.append((f"PC{d+1}|{al:+g}", al * axes_sg[d] * axes_u[d]))
     print(f"[paired] {len(conds)} conditions per episode x "
-          f"{args.episodes} episodes")
+          f"{args.episodes} episodes (natural-offset forcing)")
 
     # -- Paired sweep: SAME map pool serves every condition --------------------
     all_rows = []
@@ -336,7 +341,7 @@ def main():
 
     # -- Analysis: everything is a within-(episode,map,vehicle) paired delta --
     key = ["episode", "sid", "vid"]
-    base = df[df["cond"] == "base"].set_index(key)
+    base = df[df["cond"] == "natural"].set_index(key)
     regimes = sorted(df["regime"].unique())
 
     delta_rows, test_rows = [], []
@@ -344,7 +349,7 @@ def main():
         pcname = f"PC{d+1}"
         fig, axs = plt.subplots(1, len(METRICS),
                                 figsize=(3.1 * len(METRICS), 3.8))
-        cond_of = {al: (f"{pcname}|{al:+g}" if al != 0.0 else "base")
+        cond_of = {al: (f"{pcname}|{al:+g}" if al != 0.0 else "natural")
                    for al in alphas}
         for ax, met in zip(np.atleast_1d(axs), METRICS):
             xs_o, ys_o = [], []
