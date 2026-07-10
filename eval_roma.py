@@ -221,42 +221,6 @@ def _collect_role_data(policy, env, num_episodes, device, obs_agent_sample=256):
 
 
 # ---------------------------------------------------------------------------
-# Idea 5 — dead dimension detection
-# ---------------------------------------------------------------------------
-
-def _plot_dead_dims(role_means, role_dim, ckpt_name):
-    """Bar chart of per-dim std. Dead dims (red) never differentiate agents."""
-    import matplotlib.pyplot as plt
-
-    per_dim_std = role_means.std(axis=0)
-    threshold   = 0.05
-
-    fig, ax = plt.subplots(figsize=(max(6, role_dim * 0.9), 4))
-    colors  = ["#d73027" if s < threshold else "#1a9850" for s in per_dim_std]
-    bars    = ax.bar(range(role_dim), per_dim_std, color=colors,
-                     edgecolor="black", linewidth=0.5)
-    ax.axhline(threshold, color="orange", linestyle="--", linewidth=1.2,
-               label=f"dead threshold ({threshold})")
-    ax.set_xticks(range(role_dim))
-    ax.set_xticklabels([f"dim_{i}" for i in range(role_dim)])
-    ax.set_ylabel("Std across agents & episodes")
-    ax.set_title(f"Role dim utilisation  (red = dead)  [{ckpt_name}]")
-    ax.legend()
-
-    for bar, s in zip(bars, per_dim_std):
-        ax.text(bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + 0.005,
-                f"{s:.3f}", ha="center", va="bottom", fontsize=8)
-
-    n_dead = int((per_dim_std < threshold).sum())
-    print(f"  Dead dims (std<{threshold}): {n_dead}/{role_dim}  "
-          f"{'— collapse risk!' if n_dead > role_dim // 2 else '— healthy'}")
-
-    plt.tight_layout()
-    return fig
-
-
-# ---------------------------------------------------------------------------
 # Idea 6 — inter-dimension correlation matrix
 # ---------------------------------------------------------------------------
 
@@ -339,319 +303,39 @@ def _plot_pca_behavioral(role_means, stats, ckpt_name):
 
 
 # ---------------------------------------------------------------------------
-# Idea 8 — role cluster spider / radar chart
-# ---------------------------------------------------------------------------
-
-def _plot_cluster_spider(role_means, stats, labels, k, ckpt_name):
-    """Radar chart: one polygon per role cluster, axes = behavioral stats."""
-    import matplotlib.pyplot as plt
-
-    metric_keys  = ["mean_speed", "max_speed", "min_speed",
-                    "mean_accel", "jerk", "steering"]
-    metric_names = ["Mean Speed", "Max Speed", "Min Speed",
-                    "Mean Accel", "Jerk", "Steering"]
-    n_metrics    = len(metric_keys)
-
-    cluster_stats = np.zeros((k, n_metrics))
-    for c in range(k):
-        mask = labels == c
-        if not mask.any():
-            continue
-        for j, key in enumerate(metric_keys):
-            cluster_stats[c, j] = stats[key][mask].mean()
-
-    print(f"\n  Role cluster behavioral profiles (k={k}):")
-    header = f"  {'':14}" + "".join(f"{m:>13}" for m in metric_names)
-    print(header)
-    for c in range(k):
-        n_ag = int((labels == c).sum())
-        row  = f"  Cluster {c} ({n_ag:>5})" + \
-               "".join(f"{cluster_stats[c, j]:>13.3f}" for j in range(n_metrics))
-        print(row)
-
-    col_min = cluster_stats.min(axis=0)
-    col_max = cluster_stats.max(axis=0)
-    col_rng = col_max - col_min
-    col_rng[col_rng == 0] = 1
-    normed  = (cluster_stats - col_min) / col_rng
-
-    angles  = np.linspace(0, 2 * np.pi, n_metrics, endpoint=False).tolist()
-    angles += angles[:1]
-
-    fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
-    colors  = plt.cm.tab10(np.linspace(0, 1, k))
-
-    for c in range(k):
-        values = normed[c].tolist() + [normed[c][0]]
-        n_ag   = int((labels == c).sum())
-        ax.plot(angles, values, "o-", linewidth=2, color=colors[c],
-                label=f"Cluster {c}  (n={n_ag})")
-        ax.fill(angles, values, alpha=0.08, color=colors[c])
-
-    ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(metric_names, fontsize=9)
-    ax.set_ylim(0, 1)
-    ax.set_yticks([0.25, 0.5, 0.75, 1.0])
-    ax.set_yticklabels(["25%", "50%", "75%", "100%"], fontsize=7)
-    ax.set_title(
-        f"Role clusters — behavioral profiles  [{ckpt_name}]  k={k}",
-        pad=20, fontsize=11,
-    )
-    ax.legend(loc="upper right", bbox_to_anchor=(1.35, 1.15), fontsize=8)
-    return fig
-
-
-# ---------------------------------------------------------------------------
-# Idea 3 — action distribution sensitivity across real roles
-# ---------------------------------------------------------------------------
-
-def _plot_action_sensitivity(policy, rep_roles, obs_snaps, device, ckpt_name):
-    """Pairwise mean KL divergence of action distributions under K representative
-    real role vectors, averaged over many real observations.
-
-    High KL → role causally changes what the policy does.
-    KL ≈ 0  → policy ignores role (role encoder trains but decoder doesn't listen).
-    """
-    import matplotlib.pyplot as plt
-
-    K = len(rep_roles)
-    if not obs_snaps:
-        print("  [Action sensitivity] no obs snapshots — skipped")
-        return None
-
-    obs_cat = torch.cat(obs_snaps, dim=0).to(device)   # (N_total, obs_dim)
-    N       = obs_cat.shape[0]
-
-    # Zero hidden state — probing snapshot sensitivity, not sequential context.
-    role_h_z   = torch.zeros(N, policy.role_encoder.hidden_dim,   device=device)
-    policy_h_z = torch.zeros(N, policy.policy_hidden,             device=device)
-    emb_win_z  = torch.zeros(N, policy.obs_window_len, policy.env_embed_dim, device=device)
-    zero_state = (role_h_z, policy_h_z, emb_win_z)
-
-    probs = []
-    with torch.no_grad():
-        for role_vec in rep_roles:
-            forced = torch.tensor(role_vec, dtype=torch.float32, device=device) \
-                         .unsqueeze(0).expand(N, -1)
-            logits, _, _, _ = policy(obs_cat, zero_state, forced_role=forced)
-            probs.append(torch.softmax(logits.float(), dim=-1).cpu().numpy())
-
-    probs = np.array(probs)   # (K, N, action_dim)
-    eps   = 1e-8
-
-    kl_matrix = np.zeros((K, K))
-    for i in range(K):
-        for j in range(K):
-            if i != j:
-                p = probs[i] + eps
-                q = probs[j] + eps
-                kl_matrix[i, j] = (p * np.log(p / q)).sum(axis=-1).mean()
-
-    mean_kl = kl_matrix[kl_matrix > 0].mean() if (kl_matrix > 0).any() else 0.0
-    print(f"\n  Action sensitivity — mean pairwise KL = {mean_kl:.4f}")
-    if mean_kl < 0.001:
-        print("  *** WARNING: role has NO detectable effect on action distribution ***")
-    elif mean_kl < 0.05:
-        print("  role has a weak effect on actions")
-    else:
-        print("  role has a meaningful effect on actions")
-
-    fig, ax = plt.subplots(figsize=(K + 2, K + 1))
-    im = ax.imshow(kl_matrix, cmap="YlOrRd", vmin=0)
-    plt.colorbar(im, ax=ax, label="Mean KL divergence")
-    ax.set_xticks(range(K))
-    ax.set_yticks(range(K))
-    role_labels = [f"Role {i}" for i in range(K)]
-    ax.set_xticklabels(role_labels, fontsize=8)
-    ax.set_yticklabels(role_labels, fontsize=8)
-    for i in range(K):
-        for j in range(K):
-            ax.text(j, i, f"{kl_matrix[i, j]:.3f}",
-                    ha="center", va="center", fontsize=7,
-                    color="white" if kl_matrix.max() > 0 and
-                    kl_matrix[i, j] > kl_matrix.max() * 0.6 else "black")
-    ax.set_title(
-        f"Action KL divergence between role clusters  [{ckpt_name}]\n"
-        f"mean pairwise KL = {mean_kl:.4f}   (0=role ignored  >0.05=role matters)",
-        fontsize=9,
-    )
-    plt.tight_layout()
-    return fig
-
-
-# ---------------------------------------------------------------------------
-# Idea 2 — role intervention with real role values (Option B)
-# ---------------------------------------------------------------------------
-
-def _plot_role_intervention(policy, env, rep_roles, device, ckpt_name,
-                            n_rollouts=5, show_agents=4):
-    """Re-run n_rollouts episodes per representative real role, injecting that
-    role at every step.  Compare speed/steering profiles and 2D trajectories.
-
-    Causal test: if profiles are identical across roles, the policy ignores the
-    role vector regardless of what the encoder produces.
-    """
-    import matplotlib.pyplot as plt
-
-    K           = len(rep_roles)
-    B           = env.num_agents
-    T           = 91
-    colors      = plt.cm.tab10(np.linspace(0, 1, K))
-    show_agents = min(show_agents, B)
-
-    speed_per_role    = []
-    steering_per_role = []
-    trajs_per_role    = []
-
-    print("\n  Role intervention rollouts...")
-    for ki, role_vec in enumerate(rep_roles):
-        forced = torch.tensor(role_vec, dtype=torch.float32, device=device) \
-                     .unsqueeze(0).expand(B, -1)
-
-        ki_speeds, ki_steerings, ki_trajs = [], [], []
-
-        for r in range(n_rollouts):
-            obs_np, _ = env.reset()
-            obs   = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
-            state = policy.initial_state(B, device)
-
-            ep_x = np.zeros((T, B), dtype=np.float32)
-            ep_y = np.zeros((T, B), dtype=np.float32)
-            ep_h = np.zeros((T, B), dtype=np.float32)
-
-            for t in range(T):
-                ag = env.get_global_agent_state()
-                ep_x[t] = ag["x"]
-                ep_y[t] = ag["y"]
-                ep_h[t] = ag["heading"]
-
-                with torch.no_grad():
-                    logits, _, state, _ = policy(obs, state, forced_role=forced)
-                action = Categorical(logits=logits.float()).sample()
-                obs_np, _, _, _, _ = env.step(action.cpu().numpy().reshape(B, 1))
-                obs = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
-
-            dx = np.diff(ep_x, axis=0) * 10
-            dy = np.diff(ep_y, axis=0) * 10
-            dh = np.diff(ep_h, axis=0)
-            dh = (dh + np.pi) % (2 * np.pi) - np.pi
-
-            spd    = np.sqrt(dx**2 + dy**2)                 # (T-1, B)
-            ok     = spd <= 45.0                            # mask respawn teleports
-            spd_m  = np.where(ok, spd, np.nan)
-            moving = np.nanmax(spd_m, axis=0) > 1.0         # agents that actually drive
-            if not moving.any():
-                moving = np.ones(spd_m.shape[1], dtype=bool)
-            ki_speeds.append(np.nanmean(spd_m[:, moving], axis=1))   # (T-1,)
-            dh_m = np.where(ok, np.abs(dh), np.nan)
-            ki_steerings.append(np.nanmean(dh_m[:, moving], axis=1))
-            disp = np.nansum(np.where(ok, spd, 0.0), axis=0)  # distance driven per agent
-            top  = np.argsort(disp)[::-1][:show_agents]       # most-active agents
-            ki_trajs.append(
-                np.stack([ep_x[:, top],
-                          ep_y[:, top]], axis=-1)             # (T, show_agents, 2)
-            )
-            print(f"    role {ki+1}/{K}  rollout {r+1}/{n_rollouts}", end="\r", flush=True)
-
-        speed_per_role.append(ki_speeds)
-        steering_per_role.append(ki_steerings)
-        trajs_per_role.append(ki_trajs)
-
-    print()
-    ts = np.arange(T - 1)
-
-    # ── Plot 1: speed & steering profiles ────────────────────────────────────
-    fig_profiles, (ax_spd, ax_str) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-    for ki in range(K):
-        speeds = np.array(speed_per_role[ki])
-        steers = np.array(steering_per_role[ki])
-        m_s, s_s = speeds.mean(axis=0), speeds.std(axis=0)
-        m_h, s_h = steers.mean(axis=0), steers.std(axis=0)
-
-        ax_spd.plot(ts, m_s, color=colors[ki], linewidth=2, label=f"Role {ki}")
-        ax_spd.fill_between(ts, m_s - s_s, m_s + s_s, color=colors[ki], alpha=0.15)
-        ax_str.plot(ts, m_h, color=colors[ki], linewidth=2, label=f"Role {ki}")
-        ax_str.fill_between(ts, m_h - s_h, m_h + s_h, color=colors[ki], alpha=0.15)
-
-    ax_spd.set_ylabel("Mean speed  (m/s)")
-    ax_spd.set_title(f"Role intervention: speed profiles  [{ckpt_name}]  "
-                     f"(±1 std across {n_rollouts} rollouts)")
-    ax_spd.legend(fontsize=8)
-    ax_spd.grid(True, alpha=0.3)
-    ax_str.set_ylabel("Mean |Δheading|  (rad/step)")
-    ax_str.set_xlabel("Timestep")
-    ax_str.set_title("Role intervention: steering profiles")
-    ax_str.legend(fontsize=8)
-    ax_str.grid(True, alpha=0.3)
-    plt.tight_layout()
-
-    # ── Plot 2: 2D trajectories (first rollout, first show_agents agents) ─────
-    fig_traj, axes = plt.subplots(1, K, figsize=(4 * K, 5))
-    if K == 1:
-        axes = [axes]
-    for ki in range(K):
-        ax   = axes[ki]
-        traj = trajs_per_role[ki][0]   # (T, show_agents, 2)
-        for ag in range(show_agents):
-            ax.plot(traj[:, ag, 0], traj[:, ag, 1],
-                    alpha=0.75, linewidth=1.3, color=colors[ki])
-            ax.scatter(traj[0,  ag, 0], traj[0,  ag, 1], s=25, color="green", zorder=3)
-            ax.scatter(traj[-1, ag, 0], traj[-1, ag, 1], s=25, color="red",
-                       zorder=3, marker="x")
-        ax.set_title(f"Role {ki}", fontsize=10)
-        ax.set_aspect("equal")
-        ax.grid(True, alpha=0.2)
-    fig_traj.suptitle(
-        f"Role intervention: 2D trajectories  [{ckpt_name}]  "
-        f"(green=start  red=end)",
-        fontsize=10,
-    )
-    plt.tight_layout()
-    return fig_profiles, fig_traj
-
-
-# ---------------------------------------------------------------------------
 # Main role analysis orchestrator
 # ---------------------------------------------------------------------------
 
 def run_role_analysis(policy, env, num_episodes, role_dim, device,
                       out_dir, ckpt_name, wandb_run=None):
     """
-    Full role analysis suite.  Always called BEFORE WOSAC so results are
-    guaranteed even when the 24-hour training limit is hit mid-WOSAC.
+    SLIM role-health check (trimmed Jul 2026): only the two cheap metrics
+    worth auto-logging for every trained checkpoint.
 
-    Analyses produced
-    -----------------
-    dead_dims              Idea 5 — which dims are inactive
-    dim_correlations       Idea 6 — inter-dim redundancy
-    pca_behavioral         PCA scatter coloured by min_speed / max_speed / jerk
-    cluster_spider         Idea 8 — k-means clusters + radar behavioural profiles
-    action_kl              Idea 3 — does swapping roles change action distributions?
-    intervention_profiles  Idea 2 — speed & steering under injected real roles
-    intervention_trajs     Idea 2 — 2-D trajectory comparison per role
-    pca_scatter            Legacy — mean_speed / ang_speed / accel_std PCA
-    temporal               Legacy — mean role dim values over 91 timesteps
+    dim_correlations   inter-dim Pearson r heatmap (redundancy; for dim-2 the
+                       single off-diagonal number IS the readout)
+    pca_behavioral     PCA scatter + explained variance (intrinsic
+                       dimensionality) + wandb scalars pca_var_pc1/pc2 and
+                       max_offdiag_r
 
-    Wandb fix
-    ---------
-    Every figure is logged via wandb.Image(fig) BEFORE fig.savefig(), passing
-    the matplotlib Figure object directly.  This eliminates the "no matching
-    media" error that occurs when wandb reads a file path after plt.close().
+    The old suite (dead_dims, K=5 cluster spider, action-KL, clamp-style role
+    intervention, legacy PCA scatter, temporal dynamics) was removed: it
+    clustered the whole population with no map/trajectory stratification,
+    used constant-clamp forcing we have since rejected, and lacked the
+    plausibility mask. The rigorous role analysis lives in
+    role_paired_sweep.py / role_direct_cluster.py / render_role_alpha.py.
+    Still called BEFORE WOSAC so a wall-time kill cannot lose it.
     """
     print("\n" + "=" * 60)
-    print("  ROLE ANALYSIS")
+    print("  ROLE HEALTH CHECK (dim correlation + PCA)")
     print("=" * 60)
 
     try:
-        from sklearn.decomposition import PCA
-        from sklearn.cluster import KMeans
-        from scipy.stats import pearsonr
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError as e:
         print(f"  Skipped (missing library: {e})")
-        print("  Install with: pip install scikit-learn scipy matplotlib")
         return
 
     if num_episodes <= 0:
@@ -660,7 +344,6 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device,
 
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
-    K = 5   # clusters — covers main driving archetypes
 
     def _save_log(fig, name):
         """Save the figure to disk first, then log the saved PNG *file* to wandb.
@@ -690,18 +373,16 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device,
     # ── 2. Behavioral stats ───────────────────────────────────────────────────
     stats = _behavioral_stats(data["xs"], data["ys"], data["headings"])
 
-    # ── 2b. Drop non-active / artifact agents before clustering ───────────────
-    # Inactive padding slots (not real vehicles in the scene) carry placeholder
-    # positions that np.diff turns into impossible speeds (hundreds of m/s),
-    # forming a junk cluster. Keep only physically-plausible agents so roles are
-    # clustered over meaningful driving behaviour.
+    # ── 2b. Drop non-active / artifact agents ─────────────────────────────────
+    # Inactive padding slots carry placeholder positions that np.diff turns
+    # into impossible speeds; keep only physically-plausible moving agents.
     SPEED_CAP  = 45.0   # m/s -- above any real vehicle: teleport/respawn artifact
     MIN_MOTION = 1.0    # m/s -- below this the agent never really moved
     valid  = (np.isfinite(stats["max_speed"])
               & (stats["max_speed"] <= SPEED_CAP)
               & (stats["max_speed"] >  MIN_MOTION))
     n_drop = int((~valid).sum())
-    if valid.sum() >= K:
+    if valid.sum() >= 10:
         role_means = role_means[valid]
         stats      = {k: v[valid] for k, v in stats.items()}
         N          = len(role_means)
@@ -710,21 +391,16 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device,
     else:
         print(f"  [warn] only {int(valid.sum())} valid agents; skipping artifact filter")
 
-    # ── 3. k-means: K representative real roles ───────────────────────────────
-    print(f"\n  k-means (k={K})...")
-    km        = KMeans(n_clusters=K, random_state=42, n_init=10)
-    labels    = km.fit_predict(role_means)
-    rep_roles = km.cluster_centers_   # (K, role_dim)
+    # ── 3. Inter-dim correlation ──────────────────────────────────────────────
+    print("\n  [corr] Inter-dim correlation")
+    _save_log(_plot_dim_correlations(role_means, role_dim, ckpt_name),
+              "dim_correlations")
+    corr = np.corrcoef(role_means.T)
+    off  = np.abs(corr - np.eye(role_dim))
+    max_off = float(off.max()) if role_dim > 1 else 0.0
+    print(f"  max |off-diagonal r| = {max_off:.3f}")
 
-    # ── 4. Idea 5: dead dims ──────────────────────────────────────────────────
-    print("\n  [5] Dead dim detection")
-    _save_log(_plot_dead_dims(role_means, role_dim, ckpt_name), "dead_dims")
-
-    # ── 5. Idea 6: inter-dim correlation ─────────────────────────────────────
-    print("  [6] Inter-dim correlation")
-    _save_log(_plot_dim_correlations(role_means, role_dim, ckpt_name), "dim_correlations")
-
-    # ── 6. PCA behavioral scatter ─────────────────────────────────────────────
+    # ── 4. PCA behavioral scatter + variance ──────────────────────────────────
     print("  [PCA] Behavioral scatter (min/max speed + jerk)")
     fig_pca_beh, ev = _plot_pca_behavioral(role_means, stats, ckpt_name)
     _save_log(fig_pca_beh, "pca_behavioral")
@@ -733,106 +409,11 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device,
         try:
             import wandb as _wandb
             wandb_run.log({"role/pca_var_pc1": float(ev[0]),
-                           "role/pca_var_pc2": float(ev[1])})
+                           "role/pca_var_pc2": float(ev[1]),
+                           "role/max_offdiag_r": max_off})
         except Exception:
             pass
 
-    # ── 7. Idea 8: cluster spider ─────────────────────────────────────────────
-    print("  [8] Cluster spider chart")
-    _save_log(
-        _plot_cluster_spider(role_means, stats, labels, K, ckpt_name),
-        "cluster_spider",
-    )
-
-    # ── 8. Idea 3: action sensitivity ────────────────────────────────────────
-    print("  [3] Action distribution sensitivity")
-    try:
-        fig_kl = _plot_action_sensitivity(
-            policy, rep_roles, data["obs_snaps"], device, ckpt_name
-        )
-        if fig_kl is not None:
-            _save_log(fig_kl, "action_kl")
-    except Exception as e:
-        print(f"  [Action sensitivity skipped: {e}]")
-        import traceback; traceback.print_exc()
-
-    # ── 9. Idea 2: role intervention ──────────────────────────────────────────
-    print("  [2] Role intervention (injecting real role values)")
-    try:
-        fig_prof, fig_traj = _plot_role_intervention(
-            policy, env, rep_roles, device, ckpt_name, n_rollouts=5
-        )
-        _save_log(fig_prof, "intervention_profiles")
-        _save_log(fig_traj, "intervention_trajectories")
-    except Exception as e:
-        print(f"  [Role intervention skipped: {e}]")
-        import traceback; traceback.print_exc()
-
-    # ── 10. Legacy PCA scatter (mean_speed / ang_speed / accel_std) ──────────
-    print("  [Legacy PCA] mean_speed / angular_speed / accel_std")
-    try:
-        pca    = PCA(n_components=2)
-        role2d = pca.fit_transform(role_means)
-        ev2    = pca.explained_variance_ratio_
-        idx    = np.random.choice(N, min(N, 20_000), replace=False)
-
-        fig_leg, axes_leg = plt.subplots(1, 3, figsize=(18, 5))
-        for ax, (metric, label, cmap) in zip(axes_leg, [
-            (stats["mean_speed"],  "mean speed (m/s)",         "viridis"),
-            (stats["mean_ang_sp"], "angular speed (rad/step)", "plasma"),
-            (stats["accel_std"],   "accel std (m/s²)",         "inferno"),
-        ]):
-            sc = ax.scatter(role2d[idx, 0], role2d[idx, 1],
-                            c=metric[idx], cmap=cmap, alpha=0.25, s=4, rasterized=True)
-            plt.colorbar(sc, ax=ax, label=label, shrink=0.8)
-            ax.set_xlabel(f"PC1 ({ev2[0]:.1%})")
-            ax.set_ylabel(f"PC2 ({ev2[1]:.1%})")
-            ax.set_title(label)
-        fig_leg.suptitle(
-            f"ROMA role space (PCA) — {N:,} agent-episodes  [{ckpt_name}]",
-            fontsize=11,
-        )
-        plt.tight_layout()
-        _save_log(fig_leg, "pca_scatter")
-    except Exception as e:
-        print(f"  [Legacy PCA skipped: {e}]")
-
-    # ── 12. Legacy temporal dynamics ──────────────────────────────────────────
-    print("  [Legacy] Temporal role dynamics")
-    try:
-        role_seqs    = data["role_seqs"]                      # (N_ep, T, B, role_dim)
-        role_ot      = role_seqs.mean(axis=(0, 2))            # (T, role_dim)
-        temporal_std = role_seqs.std(axis=1).mean()
-        step_dist    = np.linalg.norm(np.diff(role_seqs, axis=1), axis=3).mean()
-
-        print(f"  Temporal role std  : {temporal_std:.4f}")
-        print(f"  Mean step L2 dist  : {step_dist:.4f}")
-
-        fig_tmp, ax_t = plt.subplots(figsize=(12, 4))
-        for d in range(role_dim):
-            ax_t.plot(np.arange(91), role_ot[:, d], label=f"dim_{d}", linewidth=1.2)
-        ax_t.set_xlabel("Timestep")
-        ax_t.set_ylabel("Mean role value")
-        ax_t.set_title(
-            f"Role dynamics over episode  [{ckpt_name}]  "
-            f"(temporal_std={temporal_std:.4f}  step_dist={step_dist:.4f})"
-        )
-        ax_t.legend(loc="upper right", fontsize=8, ncol=2)
-        ax_t.grid(True, alpha=0.3)
-        plt.tight_layout()
-        _save_log(fig_tmp, "temporal")
-
-        if wandb_run is not None:
-            try:
-                import wandb as _wandb
-                wandb_run.log({
-                    "role/temporal_std":      float(temporal_std),
-                    "role/mean_step_l2_dist": float(step_dist),
-                })
-            except Exception:
-                pass
-    except Exception as e:
-        print(f"  [Temporal skipped: {e}]")
 
     print("=" * 60)
 
