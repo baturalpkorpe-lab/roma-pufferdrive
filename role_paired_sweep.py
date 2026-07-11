@@ -117,6 +117,10 @@ def parse_args():
     p.add_argument("--regime_names", type=str, default="")
     p.add_argument("--n_axes",     type=int, default=2, help="PC1..PCn to sweep")
     p.add_argument("--alphas",     type=str, default="-2,-1,0,1,2")
+    p.add_argument("--observe_only", action="store_true",
+                   help="Stop after the warmup: writes the observational "
+                        "PC-vs-behavior scatter (plausibility-masked accel/"
+                        "jerk), warmup CSV and axes CSV. Cheap; no sweep.")
     p.add_argument("--device",     type=str, default="cuda")
     return p.parse_args()
 
@@ -232,7 +236,7 @@ def rollout_condition(env, policy, device, regime_of, shift_vec):
             continue
         m.update({"sid": sid, "vid": vid, "regime": rg})
         rows.append(m)
-    return rows, rl, xs, ys, gvalid
+    return rows, rl, xs, ys, hs, rews, gt
 
 
 # ---------------------------------------------------------------------------
@@ -270,23 +274,31 @@ def main():
         raise SystemExit("role_dim=0 checkpoint -- nothing to sweep")
     n_axes = min(args.n_axes, role_dim)
 
-    # -- Warmup: natural roles -> mu, PC axes, per-axis sigma ------------------
-    role_vecs = []
+    # -- Warmup: natural roles + behavior (ALL vehicle agents, plausibility-
+    #    masked) -> mu, PC axes, per-axis sigma + the observational pre-check --
+    role_vecs, beh_rows = [], []
     for ep in range(args.warmup_episodes):
         if ep > 0:
             env.resample_maps()
-        rows, rl, xs, ys, gvalid = rollout_condition(env, policy, device,
-                                                     regime_of, None)
-        T_gt = gvalid.shape[1]
+        rows, rl, xs, ys, hs, rews, gt = rollout_condition(
+            env, policy, device, regime_of, None)
+        gx, gy = _squeeze(gt["x"]), _squeeze(gt["y"])
+        gvalid = _squeeze(gt["valid"]).astype(bool)
+        is_veh = np.asarray(gt["is_vehicle"]).reshape(-1).astype(bool)
+        T_gt   = gx.shape[1]
         step_d = np.hypot(np.diff(xs, axis=0), np.diff(ys, axis=0))
         for a in range(env.num_agents):
+            if not is_veh[a]:
+                continue
+            m = focal_metrics(a, xs, ys, hs, rews, gx, gy, gvalid, T_gt)
+            if m is None:
+                continue
             jumps = np.where(step_d[:, a] > TELEPORT_M)[0]
             t_end = min(int(jumps[0] + 1) if len(jumps) else T, T_gt)
-            if t_end < MIN_STEPS + 1 or gvalid[a, :t_end].sum() < MIN_STEPS:
-                continue
             role_vecs.append(rl[:t_end, a].mean(axis=0))
+            beh_rows.append(m)
         print(f"[paired] warmup {ep+1}/{args.warmup_episodes}: "
-              f"{len(role_vecs)} role vectors", flush=True)
+              f"{len(role_vecs)} (role, behavior) pairs", flush=True)
 
     R = np.asarray(role_vecs)
     mu = R.mean(axis=0)
@@ -307,6 +319,52 @@ def main():
                         **{f"c{i}": float(axes_u[d][i])
                            for i in range(role_dim)}})
     pd.DataFrame(ax_rows).to_csv(out / "role_paired_axes.csv", index=False)
+
+    # -- Observational pre-check (plausibility-masked accel/jerk!) -------------
+    # Scatter of PC-projection vs each behavior over the natural warmup agents.
+    # Scene-confounded (NOT causal) -- it names candidate axes; the sweep tests
+    # them. Replaces the old role_axis_sweep observational figure, whose
+    # accel/jerk carried the impossible respawn artifacts.
+    Bdf = pd.DataFrame(beh_rows)
+    wdf = Bdf.copy()
+    for d in range(n_axes):
+        wdf[f"pc{d+1}"] = cen @ axes_u[d]
+    wdf.to_csv(out / "role_paired_warmup.csv", index=False)
+
+    fig, axs2 = plt.subplots(n_axes, len(METRICS),
+                             figsize=(3.0 * len(METRICS), 2.8 * n_axes),
+                             squeeze=False)
+    print("\n[paired] === observational r (natural, plausibility-masked) ===")
+    for d in range(n_axes):
+        proj = cen @ axes_u[d]
+        for j, met in enumerate(METRICS):
+            ax = axs2[d][j]
+            y  = Bdf[met].values.astype(float)
+            ok = np.isfinite(proj) & np.isfinite(y)
+            r  = (np.corrcoef(proj[ok], y[ok])[0, 1]
+                  if ok.sum() > 10 and proj[ok].std() > 0 and y[ok].std() > 0
+                  else np.nan)
+            ax.scatter(proj[ok], y[ok], s=3, alpha=0.12, color="#4477aa",
+                       rasterized=True)
+            if np.isfinite(r):
+                b  = np.polyfit(proj[ok], y[ok], 1)
+                xx = np.array([proj[ok].min(), proj[ok].max()])
+                ax.plot(xx, b[0] * xx + b[1], "r-", lw=1.5)
+            ax.set_title(f"PC{d+1} vs {met}\nr={r:+.2f}", fontsize=8)
+            ax.tick_params(labelsize=6)
+            print(f"[paired]   PC{d+1} vs {met:<11}: r={r:+.3f}")
+    fig.suptitle("Observational: role PCs vs behavior (natural rollouts, "
+                 "plausibility-masked; scene-confounded -- the causal test is "
+                 "the paired sweep)", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(out / "role_paired_observational.png", dpi=140)
+    plt.close(fig)
+
+    if args.observe_only:
+        env.close()
+        print(f"\n[paired] observe_only: wrote role_paired_observational.png, "
+              f"role_paired_warmup.csv, role_paired_axes.csv -> {out}")
+        return
 
     alphas = sorted(float(x) for x in args.alphas.split(","))
 
