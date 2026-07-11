@@ -22,10 +22,16 @@
 # 2-D role (a) decorrelates the dims and (b) keeps WOSAC parity.
 #
 # total_steps=3B: matches dim-8/4/3/0 for an apples-to-apples WOSAC table.
-# Mid-run WOSAC every 500M steps, lite (10 batches); post-training WOSAC full
-# (100 batches). --role_episodes 0 skips the old role suite; role analysis
-# (inter-dim correlation, PCA, paired sweep) runs separately on the final
-# checkpoint via role_direct_cluster.py / role_paired_sweep.py.
+# Mid-run WOSAC every 500M steps, lite (10 batches).
+#
+# NO --run_eval: the post-training in-process eval SEGFAULTS reproducibly
+# (signal 11, C binding) -- it is the ~8th Drive() instantiation in one
+# 18h process (1 training env + 6 mid-eval envs + final eval env) and the
+# binding does not survive that many create/close cycles. The final
+# checkpoint is saved BEFORE the eval, so nothing is lost. Run the full
+# 100-batch WOSAC + role health in a FRESH process instead:
+#   sbatch --export=ALL,CKPT=/scratch/e452103/checkpoints/roma_baseline_dim2/roma_dim2_final.pt,ROLE_DIM=2,OUT=/scratch/e452103/eval_results/dim2 \
+#       ~/roma_pufferdrive/slurm/eval_wosac.sbatch
 
 module purge
 module load miniconda3
@@ -47,7 +53,6 @@ python $HOME/roma_dim2/roma_pufferdrive/train_roma.py \
     --total_steps        3000000000 \
     --num_agents         3072 \
     --device             cuda \
-    --run_eval \
     --role_episodes      0 \
     --wosac_periodic     1 \
     --wosac_interval     500000000 \
