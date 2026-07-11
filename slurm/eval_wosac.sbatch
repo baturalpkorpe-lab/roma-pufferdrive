@@ -48,6 +48,7 @@ python $HOME/roma_pufferdrive/eval_roma.py \
     --wosac_num_maps    10000 \
     --wosac_max_batches 100 \
     --role_episodes     10 \
-    --output_dir        "$OUT"
+    --output_dir        "$OUT" \
+    --wandb
 
 echo "Done -> $OUT"
