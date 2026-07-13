@@ -158,8 +158,11 @@ def parse_args():
     # Note: reward/goal/resample env settings come from drive.ini via load_drive_config().
 
     # Role
-    p.add_argument("--role_dim",      type=int,   default=8,
-                   help="Role vector dimension. 1=original ROMA, 8=proposed extension.")
+    p.add_argument("--role_dim",      type=int,   default=1,
+                   help="Role vector dimension. This branch: 1 (the original "
+                        "ROMA scalar role; tests whether the ~1-D "
+                        "assertiveness axis found at dim-2/4/8 survives at "
+                        "minimal capacity and matches WOSAC parity).")
     p.add_argument("--role_hidden",   type=int,   default=64)
     p.add_argument("--policy_hidden", type=int,   default=128)
     p.add_argument("--var_floor",     type=float, default=1e-4)
