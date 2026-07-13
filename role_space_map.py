@@ -60,6 +60,11 @@ def main():
     evr = (svals ** 2) / (svals ** 2).sum()
     p1, p2 = cen @ vt[0], (cen @ vt[1] if R.shape[1] > 1
                            else np.zeros(len(cen)))
+    # Orient PC1 so + points to the fast/assertive end (SVD sign is arbitrary,
+    # esp. for dim-2) -- keeps red on the right and the dial reading correctly.
+    ok = np.isfinite(p1) & np.isfinite(spd)
+    if ok.sum() > 10 and np.corrcoef(p1[ok], spd[ok])[0, 1] < 0:
+        p1 = -p1
     s1, s2 = p1.std(), (p2.std() if R.shape[1] > 1 else 0.0)
     alphas = sorted(float(x) for x in args.alphas.split(","))
 
@@ -81,9 +86,11 @@ def main():
         ax.annotate(f"α={al:+g}", (al * s1, 0), xytext=(0, -18),
                     textcoords="offset points", ha="center", fontsize=9,
                     fontweight="bold")
-    ax.annotate(f"PC1 ({evr[0]:.0%} var) — the assertiveness dial",
-                (span1 * 1.05, 0), xytext=(6, 8),
-                textcoords="offset points", fontsize=10, fontweight="bold")
+    # label above the arrow, anchored at the tip and extending LEFT (into the
+    # plot) so it never collides with the colorbar
+    ax.annotate(f"PC1 — assertiveness dial ({evr[0]:.0%} var)",
+                (span1, 0), xytext=(-4, 12), textcoords="offset points",
+                fontsize=10, fontweight="bold", ha="right")
     if s2 > 0:
         span2 = max(abs(a) for a in alphas) * s2
         ax.annotate("", xy=(0, span2 * 1.08), xytext=(0, -span2 * 1.08),
