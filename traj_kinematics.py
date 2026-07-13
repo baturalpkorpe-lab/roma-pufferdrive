@@ -134,6 +134,9 @@ def gt_traj_features(gx, gy, gh, valid):
         "speed_max":  float(s.max()),
         "speed_min":  float(s.min()),
         "net_turn":   float(abs(dh[ok].sum())), # rad, absolute (no L/R split)
+        "stop_frac":  float((s < MOVE_MS).mean()),  # fraction of steps stopped
+                                                     # (bimodal: hit a queue/light
+                                                     # or free-flowed)
         "n_steps":    int(ok.sum()),
         "flag_frac":  round(flag_frac, 4),
     }

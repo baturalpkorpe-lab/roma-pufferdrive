@@ -31,8 +31,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-FEATURES     = ["distance", "speed_mean", "speed_max", "speed_min", "net_turn"]
-LOG_FEATURES = ["distance", "net_turn"]      # right-skewed
+FEATURES     = ["distance", "speed_mean", "speed_max", "speed_min", "net_turn",
+                "stop_frac"]
+LOG_FEATURES = ["distance", "net_turn"]      # right-skewed (stop_frac is 0-1)
 
 
 def parse_args():
@@ -70,7 +71,7 @@ def suggest_name(c, allc):
         tags.append("turning")
     elif tercile("net_turn") == 0:
         tags.append("straight")
-    if tercile("speed_min") == 0 and tercile("speed_max") >= 1:
+    if tercile("stop_frac") == 2:
         tags.append("stop&go")
     if tercile("distance") == 2:
         tags.append("long")

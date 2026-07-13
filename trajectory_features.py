@@ -41,7 +41,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from traj_kinematics import gt_traj_features
 
-FEATURES = ["distance", "speed_mean", "speed_max", "speed_min", "net_turn"]
+FEATURES = ["distance", "speed_mean", "speed_max", "speed_min", "net_turn",
+            "stop_frac"]
 EXTRAS   = ["n_steps", "flag_frac"]           # bookkeeping, not for clustering
 
 
