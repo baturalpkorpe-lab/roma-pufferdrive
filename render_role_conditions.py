@@ -352,7 +352,25 @@ def rollout_forced(env, policy, sid, focal_vid, cond_vec, device,
         cand = np.where(sids == sid)[0]
         hit  = cand[ids[cand] == focal_vid] if len(cand) else []
         if len(hit):
-            slots, focal = cand, int(hit[0])
+            focal = int(hit[0])
+            # DEDUP: the allocator can instantiate the SAME scenario in TWO
+            # env instances (instance count > map pool), so every vehicle --
+            # including the focal -- appears in the slot list twice. The
+            # duplicate focal is unforced and, drawn from GT, looks like a
+            # "clone" driving the focal's intended route. Keep, per vehicle
+            # id, the slot nearest the focal's (= its own instance block).
+            # Cross-instance vehicles are invisible to the ego's observations,
+            # so this is purely a view/rendering fix.
+            ids_c = ids[cand]
+            if len(np.unique(ids_c)) < len(ids_c):
+                keep = [int(cand[ids_c == u][
+                            np.argmin(np.abs(cand[ids_c == u] - focal))])
+                        for u in np.unique(ids_c)]
+                print(f"    (scene dealt into {len(cand)} slots -- duplicate "
+                      f"instance detected; keeping the focal's "
+                      f"{len(keep)}-slot copy)")
+                cand = np.array(sorted(keep), dtype=int)
+            slots = cand
             if attempt > 0:
                 print(f"    (scene re-dealt after {attempt + 1} resets)")
             break
