@@ -45,6 +45,10 @@ def parse_args():
     p.add_argument("--k",       type=int, default=0,
                    help="0 = best silhouette in --k_range")
     p.add_argument("--k_range", type=str, default="3,8")
+    p.add_argument("--edge_margin", type=float, default=1.2,
+                   help="margin (d2/d1) below this = an 'edge' trajectory "
+                        "sitting between two types (1.0 = exactly on the "
+                        "boundary; core trajectories are >1.5)")
     p.add_argument("--seed",    type=int, default=42)
     return p.parse_args()
 
@@ -115,14 +119,27 @@ def main():
 
     labels = km.labels_
     dists  = km.transform(Z)
-    d_sort = np.sort(dists, axis=1)
+    order  = np.argsort(dists, axis=1)         # cluster ids, nearest-first
+    d_sort = np.take_along_axis(dists, order, axis=1)
     margin = d_sort[:, 1] / np.maximum(d_sort[:, 0], 1e-9)
+    cluster2 = order[:, 1]                       # 2nd-nearest cluster
+    is_edge  = margin < args.edge_margin         # ambiguous / between two types
 
     pd.DataFrame({"scenario_id": df["scenario_id"].values,
                   "vehicle_id":  df["vehicle_id"].values,
-                  "cluster": labels, "margin": margin.round(3)}
+                  "cluster": labels, "margin": margin.round(3),
+                  "cluster2": cluster2, "is_edge": is_edge.astype(int)}
                  ).to_csv(out_dir / "trajectory_clusters.csv", index=False)
     print(f"[trajB] margin>1.5 (core trajectories): {(margin > 1.5).mean():.0%}")
+    print(f"[trajB] edge trajectories (margin<{args.edge_margin}): "
+          f"{is_edge.mean():.0%} ({int(is_edge.sum())})")
+    # which two types each edge sits between (unordered pair)
+    from collections import Counter
+    pair_ct = Counter(tuple(sorted((int(a), int(b))))
+                      for a, b in zip(labels[is_edge], cluster2[is_edge]))
+    for (a, b), n in sorted(pair_ct.items(), key=lambda kv: -kv[1]):
+        print(f"[trajB]   edge C{a}<->C{b}: {n}  "
+              f"({n/max(int(is_edge.sum()),1):.0%} of edges)")
 
     # -- centroid table + names ------------------------------------------------
     raw = df[FEATURES].groupby(labels).mean()
@@ -178,14 +195,19 @@ def main():
     show = rng.choice(len(Z), min(8000, len(Z)), replace=False)
     fig, ax = plt.subplots(figsize=(8, 6))
     cmap = plt.get_cmap("tab10")
+    core_show = show[~is_edge[show]]
     for c in range(K):
-        m = labels[show] == c
-        ax.scatter(Z2[show][m, 0], Z2[show][m, 1], s=4, alpha=0.4,
+        m = labels[core_show] == c
+        ax.scatter(Z2[core_show][m, 0], Z2[core_show][m, 1], s=4, alpha=0.4,
                    color=cmap(c % 10), label=f"C{c}: {names[c]} ({sizes[c]})")
+    # edge trajectories (between two types) overlaid in black
+    em = show[is_edge[show]]
+    ax.scatter(Z2[em, 0], Z2[em, 1], s=6, alpha=0.5, color="black",
+               label=f"edge (margin<{args.edge_margin}, {int(is_edge.sum())})")
     ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]:.0%})")
     ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]:.0%})")
     ax.legend(fontsize=8, markerscale=3)
-    ax.set_title("Trajectory types in feature space (PCA)")
+    ax.set_title("Trajectory types in feature space (PCA) — edges in black")
     fig.tight_layout()
     fig.savefig(out_dir / "tatlas_pca.png", dpi=140)
     plt.close(fig)
