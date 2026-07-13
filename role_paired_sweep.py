@@ -327,7 +327,9 @@ def main():
     # accel/jerk carried the impossible respawn artifacts.
     Bdf = pd.DataFrame(beh_rows)
     wdf = Bdf.copy()
-    for d in range(n_axes):
+    for i in range(role_dim):               # raw role vectors (role_space_map)
+        wdf[f"role_{i}"] = R[:, i]
+    for d in range(n_axes):                  # + their PC projections
         wdf[f"pc{d+1}"] = cen @ axes_u[d]
     wdf.to_csv(out / "role_paired_warmup.csv", index=False)
 

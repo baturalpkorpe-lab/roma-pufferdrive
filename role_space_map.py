@@ -43,33 +43,48 @@ def main():
     args = parse_args()
     import pandas as pd
     df = pd.read_csv(args.agent_csv)
-    role_cols = sorted([c for c in df.columns if c.startswith("role_")
-                        and c[5:].isdigit()], key=lambda c: int(c[5:]))
-    if not role_cols:
-        raise SystemExit(f"no role_* columns in {args.agent_csv}")
     if args.speed_col not in df.columns:
         raise SystemExit(f"no '{args.speed_col}' column; have {list(df.columns)}")
-    df = df.dropna(subset=role_cols + [args.speed_col])
-    print(f"[map] {len(df)} agents, role_dim={len(role_cols)}")
+    role_cols = sorted([c for c in df.columns if c.startswith("role_")
+                        and c[5:].isdigit()], key=lambda c: int(c[5:]))
+    lc = {c.lower(): c for c in df.columns}
 
-    R   = df[role_cols].values.astype(np.float64)
+    if role_cols:
+        # Preferred: compute PCA from the raw role vectors.
+        df = df.dropna(subset=role_cols + [args.speed_col])
+        R   = df[role_cols].values.astype(np.float64)
+        cen = R - R.mean(axis=0)
+        _, svals, vt = np.linalg.svd(cen, full_matrices=False)
+        evr = (svals ** 2) / (svals ** 2).sum()
+        p1 = cen @ vt[0]
+        p2 = cen @ vt[1] if R.shape[1] > 1 else np.zeros(len(cen))
+        print(f"[map] {len(df)} agents, role_dim={len(role_cols)} "
+              f"(PCA from role vectors)")
+    elif "pc1" in lc:
+        # Fallback: use precomputed pc1/pc2 projections (role_paired_warmup.csv).
+        need = [lc["pc1"]] + ([lc["pc2"]] if "pc2" in lc else []) + [args.speed_col]
+        df = df.dropna(subset=need)
+        p1 = df[lc["pc1"]].values.astype(np.float64)
+        p2 = (df[lc["pc2"]].values.astype(np.float64) if "pc2" in lc
+              else np.zeros(len(df)))
+        v1, v2 = p1.var(), p2.var()
+        evr = np.array([v1 / (v1 + v2 + 1e-12), v2 / (v1 + v2 + 1e-12)])
+        print(f"[map] {len(df)} agents (precomputed pc1/pc2; var% among the "
+              f"retained PCs)")
+    else:
+        raise SystemExit(f"need role_* or pc1/pc2 columns in {args.agent_csv}")
+
     spd = df[args.speed_col].values.astype(np.float64)
-    mu  = R.mean(axis=0)
-    cen = R - mu
-    _, svals, vt = np.linalg.svd(cen, full_matrices=False)
-    evr = (svals ** 2) / (svals ** 2).sum()
-    p1, p2 = cen @ vt[0], (cen @ vt[1] if R.shape[1] > 1
-                           else np.zeros(len(cen)))
-    # Orient PC1 so + points to the fast/assertive end (SVD sign is arbitrary,
-    # esp. for dim-2) -- keeps red on the right and the dial reading correctly.
+    # Orient PC1 so + points to the fast/assertive end (SVD/projection sign is
+    # arbitrary, esp. for dim-2) -- keeps red on the right, dial reading right.
     ok = np.isfinite(p1) & np.isfinite(spd)
     if ok.sum() > 10 and np.corrcoef(p1[ok], spd[ok])[0, 1] < 0:
         p1 = -p1
-    s1, s2 = p1.std(), (p2.std() if R.shape[1] > 1 else 0.0)
+    s1, s2 = p1.std(), p2.std()
     alphas = sorted(float(x) for x in args.alphas.split(","))
 
     rng = np.random.default_rng(0)
-    idx = rng.choice(len(R), min(args.max_points, len(R)), replace=False)
+    idx = rng.choice(len(p1), min(args.max_points, len(p1)), replace=False)
 
     fig, ax = plt.subplots(figsize=(9.5, 8))
     sc = ax.scatter(p1[idx], p2[idx], c=np.clip(spd[idx], 0, args.vmax),
