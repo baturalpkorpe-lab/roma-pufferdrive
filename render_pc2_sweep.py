@@ -77,9 +77,14 @@ def parse_args():
                    help="gt = grey cars on GT routes (compare-style); sim = "
                         "cars at their actual simulated positions")
     p.add_argument("--min_margin",    type=float, default=1.5)
-    p.add_argument("--map_pool",      type=int, default=128)
-    p.add_argument("--total_agents",  type=int, default=768)
-    p.add_argument("--max_relocate",  type=int, default=120)
+    p.add_argument("--map_pool",      type=int, default=10000,
+                   help="Maps LOADED. Must contain the target scenario, so we "
+                        "load the full set (a 128 pool would rarely include a "
+                        "named scene). reset/resample then deal it in.")
+    p.add_argument("--total_agents",  type=int, default=3072,
+                   help="More agents = more scenes live per reset = the target "
+                        "is re-dealt faster.")
+    p.add_argument("--max_relocate",  type=int, default=600)
     p.add_argument("--seed_start",    type=int, default=100)
     p.add_argument("--goal_radius",   type=float, default=2.0)
     p.add_argument("--device",        type=str, default="cpu")
@@ -108,9 +113,14 @@ def resolve_scene(tc, sid_prefix, traj_type, min_margin):
 
 
 def find_focal(env, sid, cand_vids, max_tries):
-    """Reset until the scene is dealt in; pick the candidate whose human GT
-    drives farthest (same rule the compare run used)."""
-    for _ in range(max_tries):
+    """Reset (and periodically resample the live map subset) until the scene is
+    dealt in; pick the candidate whose human GT drives farthest (same rule the
+    compare run used)."""
+    for attempt in range(max_tries):
+        if attempt > 0 and attempt % 25 == 0:
+            env.resample_maps()          # draw a fresh live subset from the pool
+            print(f"    (still locating {sid[:10]} -- {attempt} resets)",
+                  flush=True)
         env.reset()
         gt   = env.get_ground_truth_trajectories()
         sids = _squeeze(np.asarray(gt["scenario_id"]).astype(str))

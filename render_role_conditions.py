@@ -345,6 +345,8 @@ def rollout_forced(env, policy, sid, focal_vid, cond_vec, device,
     obs_np = gt = road = slots = None
     focal  = -1
     for attempt in range(max_tries):
+        if attempt > 0 and attempt % 25 == 0:
+            env.resample_maps()   # fresh live subset when the target is elusive
         obs_np, _ = env.reset()
         gt   = env.get_ground_truth_trajectories()
         sids = _squeeze(np.asarray(gt["scenario_id"]).astype(str))
