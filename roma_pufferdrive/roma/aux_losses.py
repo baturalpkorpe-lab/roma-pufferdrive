@@ -170,12 +170,19 @@ class RomaAuxLoss(nn.Module):
             return torch.tensor(0.0, device=role_mean.device)
 
         if self.role_dim == 1:
-            # For scalar roles: maximise variance across agents
-            # Normalise by mean abs value so scale doesn't depend on role magnitude
+            # For scalar roles: maximise the SPREAD across agents, but as a
+            # scale-INVARIANT quantity so it can't be gamed by inflating role
+            # magnitude. The old form -(var/scale) used variance (~magnitude^2)
+            # over mean|abs| (~magnitude^1), so the ratio grew linearly with
+            # magnitude -> the optimizer blew the role up to +/-inf (div_loss
+            # -> -1000s) and the MI target became unfittable. Using std (not
+            # var) makes numerator and denominator both ~magnitude^1, i.e. a
+            # coefficient of variation, bounded ~O(1) and magnitude-invariant
+            # like the cosine path for role_dim>=2.
             role_vals = role_mean.squeeze(-1)           # (B,)
-            var       = role_vals.var()
-            scale     = role_vals.abs().mean().detach() + 1e-8
-            return -(var / scale)                       # negative = we minimise this
+            std       = role_vals.std()
+            scale     = role_vals.abs().mean().detach() + 1e-6
+            return -(std / scale)                       # negative = we minimise this
 
         else:
             # For multidim roles: minimise average pairwise cosine similarity.
