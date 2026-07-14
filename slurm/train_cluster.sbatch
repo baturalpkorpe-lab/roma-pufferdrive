@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=roma_clX
+#SBATCH --job-name=roma_cl0
 #SBATCH --partition=gpu-a100
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -24,7 +24,7 @@
 # long process segfault the C binding (~8th instantiation). Run WOSAC
 # standalone afterwards via slurm/eval_wosac.sbatch (fresh process).
 
-CLUSTER=${CLUSTER:-}
+CLUSTER=${CLUSTER:-0}
 [ -n "$CLUSTER" ] || { echo "ERROR: set CLUSTER=0..3 (or submit from a cluster<K> branch)"; exit 1; }
 
 ROLE_DIM=${ROLE_DIM:-4}
