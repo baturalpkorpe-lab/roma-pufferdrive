@@ -140,3 +140,92 @@ def gt_traj_features(gx, gy, gh, valid):
         "n_steps":    int(ok.sum()),
         "flag_frac":  round(flag_frac, 4),
     }
+
+
+# ---------------------------------------------------------------------------
+# Spatio-temporal path crossings (interaction feature)
+# ---------------------------------------------------------------------------
+# A trajectory "interacts" (a conflict) with another when their GT PATHS cross
+# geometrically AND both cars pass the crossing point within CROSS_DT seconds
+# of each other. Direction-agnostic but temporally gated, so it excludes
+# oncoming/parallel cars (paths never cross) and same-lane followers (paths
+# overlap, don't cross) -- only genuine conflicts (intersections, turns across
+# traffic, merges) count. Likely bimodal (had a conflict or didn't).
+
+CROSS_DT_S = 1.0    # seconds -- max time gap at the crossing point
+
+
+def _time_segments(x, y, valid):
+    """Consecutive-in-time valid segments of one GT path: endpoints P1,P2 and
+    their integer step times t1,t2 (=step indices). None if too short."""
+    v = np.asarray(valid, bool)
+    seg = v[:-1] & v[1:]                          # consecutive valid steps
+    a = np.where(seg)[0]
+    if len(a) < 1:
+        return None
+    P1 = np.stack([x[a],   y[a]],   axis=1).astype(np.float64)   # (S,2)
+    P2 = np.stack([x[a+1], y[a+1]], axis=1).astype(np.float64)
+    return P1, P2, a.astype(np.float64), (a + 1).astype(np.float64)
+
+
+def _min_cross_dt(sa, sb, dt_steps):
+    """Min |t_a - t_b| over all geometric crossings of two time-tagged paths,
+    if any crossing is within dt_steps; else None. Vectorized over segment
+    pairs."""
+    P1, P2, ta1, _ = sa
+    Q1, Q2, tb1, _ = sb
+    # cheap bbox reject
+    if (max(P1[:, 0].max(), P2[:, 0].max()) < min(Q1[:, 0].min(), Q2[:, 0].min())
+        or min(P1[:, 0].min(), P2[:, 0].min()) > max(Q1[:, 0].max(), Q2[:, 0].max())
+        or max(P1[:, 1].max(), P2[:, 1].max()) < min(Q1[:, 1].min(), Q2[:, 1].min())
+        or min(P1[:, 1].min(), P2[:, 1].min()) > max(Q1[:, 1].max(), Q2[:, 1].max())):
+        return None
+    r = (P2 - P1)[:, None, :]                     # (Na,1,2)
+    s = (Q2 - Q1)[None, :, :]                      # (1,Nb,2)
+    denom = r[..., 0] * s[..., 1] - r[..., 1] * s[..., 0]     # (Na,Nb)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        qp = Q1[None, :, :] - P1[:, None, :]       # (Na,Nb,2)
+        t = (qp[..., 0] * s[..., 1] - qp[..., 1] * s[..., 0]) / denom
+        u = (qp[..., 0] * r[..., 1] - qp[..., 1] * r[..., 0]) / denom
+    hit = (denom != 0) & (t >= 0) & (t <= 1) & (u >= 0) & (u <= 1)
+    if not hit.any():
+        return None
+    tA = ta1[:, None] + t                          # crossing time on A (steps)
+    tB = tb1[None, :] + u
+    dt = np.abs(tA - tB)
+    dt = np.where(hit, dt, np.inf)
+    m = float(dt.min())
+    return m if m <= dt_steps else None
+
+
+def scene_crossings(gx, gy, valid, vids, dt_s=CROSS_DT_S, hz=10):
+    """Per-vehicle conflict-crossing features for one scene's GT.
+
+    gx, gy, valid: (V, T) arrays for the scene's vehicle slots; vids: (V,) ids.
+    Returns dict vid -> {n_cross, min_cross_dt (s)}: number of DISTINCT other
+    vehicles whose path this one crosses within dt_s, and the tightest timing.
+    """
+    dt_steps = dt_s * hz
+    segs = {}
+    for k in range(len(vids)):
+        s = _time_segments(gx[k], gy[k], valid[k])
+        if s is not None:
+            segs[k] = s
+    n     = {int(v): 0 for v in vids}
+    mindt = {int(v): np.inf for v in vids}
+    ks = list(segs)
+    for ii in range(len(ks)):
+        for jj in range(ii + 1, len(ks)):
+            i, j = ks[ii], ks[jj]
+            d = _min_cross_dt(segs[i], segs[j], dt_steps)
+            if d is not None:
+                vi, vj = int(vids[i]), int(vids[j])
+                n[vi] += 1
+                n[vj] += 1
+                d_s = d / hz
+                mindt[vi] = min(mindt[vi], d_s)
+                mindt[vj] = min(mindt[vj], d_s)
+    return {int(v): {"n_cross": n[int(v)],
+                     "min_cross_dt": (None if np.isinf(mindt[int(v)])
+                                      else round(mindt[int(v)], 3))}
+            for v in vids}

@@ -39,10 +39,10 @@ import numpy as np
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from traj_kinematics import gt_traj_features
+from traj_kinematics import gt_traj_features, scene_crossings
 
 FEATURES = ["distance", "speed_mean", "speed_max", "speed_min", "net_turn",
-            "stop_frac"]
+            "stop_frac", "n_cross", "has_cross", "min_cross_dt"]
 EXTRAS   = ["n_steps", "flag_frac"]           # bookkeeping, not for clustering
 
 
@@ -74,6 +74,9 @@ def parse_args():
     p.add_argument("--cache_per_batch", type=int, default=8,
                    help="Trajectories per batch whose raw path is cached "
                         "for the atlas example plots")
+    p.add_argument("--cross_dt", type=float, default=1.0,
+                   help="Max seconds between the two cars at a path crossing "
+                        "for it to count as a conflict interaction")
     return p.parse_args()
 
 
@@ -115,6 +118,18 @@ def main():
         sids   = _squeeze(np.asarray(gt["scenario_id"]).astype(str))
         vids   = _squeeze(np.asarray(gt["id"])).reshape(-1)
 
+        # per-scene conflict crossings (needs ALL of a scene's vehicles at once)
+        cross_of = {}
+        for sid in np.unique(sids):
+            if (not sid or sid in done_sids
+                    or str(sid).lower().startswith("map")):
+                continue
+            sl = np.where((sids == sid) & is_veh)[0]
+            if len(sl) >= 2:
+                cx = scene_crossings(gx[sl], gy[sl], valid[sl], vids[sl],
+                                     dt_s=args.cross_dt)
+                cross_of[sid] = cx
+
         new, cached = 0, 0
         for a in range(gx.shape[0]):
             sid = sids[a]
@@ -128,6 +143,12 @@ def main():
             if f is None:
                 n_dropped += 1
                 continue
+            cx = cross_of.get(sid, {}).get(int(vids[a]),
+                                           {"n_cross": 0, "min_cross_dt": None})
+            f["n_cross"]      = int(cx["n_cross"])
+            f["has_cross"]    = int(cx["n_cross"] > 0)
+            f["min_cross_dt"] = (cx["min_cross_dt"]
+                                 if cx["min_cross_dt"] is not None else -1.0)
             rows[key] = f
             new += 1
             if cached < args.cache_per_batch:

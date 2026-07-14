@@ -46,6 +46,10 @@ def parse_args():
     p.add_argument("--k",       type=int, default=0,
                    help="0 = best silhouette in --k_range")
     p.add_argument("--k_range", type=str, default="3,8")
+    p.add_argument("--features", type=str, default="",
+                   help="comma list overriding the clustering features "
+                        "(default = all 6). e.g. "
+                        "stop_frac,net_turn,speed_mean,speed_min,speed_max")
     p.add_argument("--edge_margin", type=float, default=1.2,
                    help="margin (d2/d1) below this = an 'edge' trajectory "
                         "sitting between two types (1.0 = exactly on the "
@@ -65,17 +69,19 @@ def suggest_name(c, allc):
             return 2
         return 1
 
-    speed = ["slow", "mid-speed", "fast"][tercile("speed_mean")]
-    tags = [speed]
-    if tercile("net_turn") == 2:
-        tags.append("turning")
-    elif tercile("net_turn") == 0:
-        tags.append("straight")
-    if tercile("stop_frac") == 2:
+    tags = []
+    if "speed_mean" in allc:
+        tags.append(["slow", "mid-speed", "fast"][tercile("speed_mean")])
+    if "net_turn" in allc:
+        if tercile("net_turn") == 2:
+            tags.append("turning")
+        elif tercile("net_turn") == 0:
+            tags.append("straight")
+    if "stop_frac" in allc and tercile("stop_frac") == 2:
         tags.append("stop&go")
-    if tercile("distance") == 2:
+    if "distance" in allc and tercile("distance") == 2:
         tags.append("long")
-    return " ".join(tags)
+    return " ".join(tags) or "cluster"
 
 
 def main():
@@ -88,6 +94,12 @@ def main():
     from sklearn.cluster import KMeans
     from sklearn.metrics import silhouette_score
     from sklearn.decomposition import PCA
+
+    global FEATURES, LOG_FEATURES
+    if args.features:
+        FEATURES = [f.strip() for f in args.features.split(",")]
+        LOG_FEATURES = [f for f in LOG_FEATURES if f in FEATURES]
+        print(f"[trajB] clustering on {FEATURES}")
 
     df = pd.read_csv(in_dir / "trajectory_features.csv")
     n0 = len(df)
