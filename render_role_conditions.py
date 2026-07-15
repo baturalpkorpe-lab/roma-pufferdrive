@@ -300,6 +300,73 @@ def hide_after_frame(view, keep_ghosts=False):
     return out
 
 
+def _obb_collision(x1, y1, h1, l1, w1, x2, y2, h2, l2, w2):
+    """Oriented-box overlap test for two vehicles. Reimplements the env's own
+    check_aabb_collision (drive.h) exactly: 4-axis SAT using each car's own
+    length/width directions."""
+    c1, s1 = np.cos(h1), np.sin(h1)
+    c2, s2 = np.cos(h2), np.sin(h2)
+    hl1, hw1 = l1 / 2, w1 / 2
+    hl2, hw2 = l2 / 2, w2 / 2
+    corners1 = np.array([
+        [x1 + hl1 * c1 - hw1 * s1, y1 + hl1 * s1 + hw1 * c1],
+        [x1 + hl1 * c1 + hw1 * s1, y1 + hl1 * s1 - hw1 * c1],
+        [x1 - hl1 * c1 - hw1 * s1, y1 - hl1 * s1 + hw1 * c1],
+        [x1 - hl1 * c1 + hw1 * s1, y1 - hl1 * s1 - hw1 * c1],
+    ])
+    corners2 = np.array([
+        [x2 + hl2 * c2 - hw2 * s2, y2 + hl2 * s2 + hw2 * c2],
+        [x2 + hl2 * c2 + hw2 * s2, y2 + hl2 * s2 - hw2 * c2],
+        [x2 - hl2 * c2 - hw2 * s2, y2 - hl2 * s2 + hw2 * c2],
+        [x2 - hl2 * c2 + hw2 * s2, y2 - hl2 * s2 - hw2 * c2],
+    ])
+    for ax in ((c1, s1), (-s1, c1), (c2, s2), (-s2, c2)):
+        ax = np.asarray(ax)
+        p1, p2 = corners1 @ ax, corners2 @ ax
+        if p1.max() < p2.min() or p2.max() < p1.min():
+            return False
+    return True
+
+
+def focal_collision_frames(data, end):
+    """Per-frame vehicle-collision flag for the focal agent over its
+    pre-respawn segment [0, end).
+
+    rollout_forced() discards env.step()'s reward/info -- the C reward is an
+    additive mix of collision/offroad/jerk/goal terms, so it can't be
+    disentangled into "did a collision happen this step" after the fact.
+    Instead this reimplements the env's own OBB/SAT test (drive.h
+    check_aabb_collision, incl. its 15m dist^2<225 prefilter) directly on the
+    x/y/heading/length/width the rollout already recorded for every agent --
+    no env access, no C changes.
+
+    Scoped to agents in this scene (data['slots']); does NOT detect offroad
+    events (those need road/lane geometry, out of scope here)."""
+    slots = data["slots"]
+    local_focal = int(np.where(slots == data["focal"])[0][0])
+    xs, ys, hs = data["xs"][:, slots], data["ys"][:, slots], data["hs"][:, slots]
+    length, width = data["length"][slots], data["width"][slots]
+    n = xs.shape[1]
+    flags = np.zeros(end, dtype=bool)
+    for t in range(end):
+        x1, y1, h1 = xs[t, local_focal], ys[t, local_focal], hs[t, local_focal]
+        if not (np.isfinite(x1) and np.isfinite(y1)):
+            continue
+        for a in range(n):
+            if a == local_focal:
+                continue
+            x2, y2, h2 = xs[t, a], ys[t, a], hs[t, a]
+            if not (np.isfinite(x2) and np.isfinite(y2)):
+                continue
+            if (x1 - x2) ** 2 + (y1 - y2) ** 2 > 225.0:
+                continue
+            if _obb_collision(x1, y1, h1, length[local_focal], width[local_focal],
+                              x2, y2, h2, length[a], width[a]):
+                flags[t] = True
+                break
+    return flags
+
+
 def scene_view(data, slots, sid):
     """Subset a full-allocation rollout to one scenario: its agent slots,
     its road polylines, its GT rows."""

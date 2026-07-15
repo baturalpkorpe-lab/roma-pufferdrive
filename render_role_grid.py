@@ -44,7 +44,7 @@ from render_role_alpha import load_axes, focal_numbers
 
 T = 91
 MET_COLS = ["speed_mean", "accel_abs", "jerk_abs", "turn_abs",
-            "goal_min_m", "reached"]
+            "event_rate", "goal_min_m", "reached"]
 
 
 def parse_args():
