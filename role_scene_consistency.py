@@ -102,8 +102,11 @@ def consistency_row(a, metric):
 
 def table_for(df, axis, metrics):
     a = df[df["axis"] == axis]
-    rows = [r for m in metrics
-            if (r := consistency_row(a, m)) is not None]
+    rows = []
+    for m in metrics:
+        r = consistency_row(a, m)
+        if r is not None:
+            rows.append(r)
     return pd.DataFrame(rows)
 
 
