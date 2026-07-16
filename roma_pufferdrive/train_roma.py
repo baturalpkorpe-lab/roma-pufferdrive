@@ -93,9 +93,11 @@ def init_wandb(args):
         run = wandb.init(
             project = args.wandb_project,
             entity  = args.wandb_entity or None,
-            name    = f"roma_dim{args.role_dim}_maps{args.num_maps}_{args.seed}",
+            name    = f"roma_mifutH{args.mi_horizon}_dim{args.role_dim}_"
+                      f"maps{args.num_maps}_{args.seed}",
             config  = vars(args),
-            tags    = [f"role_dim_{args.role_dim}", f"maps_{args.num_maps}"],
+            tags    = [f"role_dim_{args.role_dim}", f"maps_{args.num_maps}",
+                       "mi_future", f"mi_horizon_{args.mi_horizon}"],
         )
         print(f"[ROMA] wandb initialized: {run.url}")
         return run
@@ -158,8 +160,13 @@ def parse_args():
     # Note: reward/goal/resample env settings come from drive.ini via load_drive_config().
 
     # Role
-    p.add_argument("--role_dim",      type=int,   default=8,
-                   help="Role vector dimension. 1=original ROMA, 8=proposed extension.")
+    p.add_argument("--role_dim",      type=int,   default=4,
+                   help="Role vector dimension (mi-future branch default: 4).")
+    p.add_argument("--mi_horizon",    type=int,   default=8,
+                   help="Future-MI shift H: z_t predicts the behaviour summary "
+                        "of env embeddings t+H-7..t+H. H=8 (= the window "
+                        "length) makes the target the pure future t+1..t+8; "
+                        "H>8 predicts further ahead. Must be >= 8.")
     p.add_argument("--role_hidden",   type=int,   default=64)
     p.add_argument("--policy_hidden", type=int,   default=128)
     p.add_argument("--var_floor",     type=float, default=1e-4)
@@ -757,6 +764,17 @@ def train(args):
     print(f"[ROMA] total_steps   : {args.total_steps:,}")
     print(f"[ROMA] mi_weight     : {args.mi_weight}")
     print(f"[ROMA] div_weight    : {args.div_weight}")
+    # Future-MI: H < 8 would make the "future" window overlap the past one
+    # (the stored window at t+H covers t+H-7..t+H); H >= rollout_steps would
+    # mask every sample.
+    if args.mi_horizon < 8:
+        raise SystemExit(f"--mi_horizon {args.mi_horizon} < 8: the emb window "
+                         f"at t+H covers t+H-7..t+H, so H<8 overlaps the past")
+    if args.mi_horizon >= args.rollout_steps:
+        raise SystemExit(f"--mi_horizon {args.mi_horizon} >= rollout_steps "
+                         f"{args.rollout_steps}: every MI target would be masked")
+    print(f"[ROMA] mi_horizon    : {args.mi_horizon} (future MI: z_t predicts "
+          f"emb t+{args.mi_horizon - 7}..t+{args.mi_horizon})")
 
     # Init wandb (optional)
     wandb_run = init_wandb(args)
@@ -955,6 +973,29 @@ def train(args):
         for pg in optimizer.param_groups:
             pg["lr"] = lr_now
 
+        # ---- Future-MI target index (once per rollout) ----
+        # Buffer layout is flat index i = t*B + agent. The emb window STORED
+        # at step t+H holds embeddings t+H-7..t+H for that agent — with H=8
+        # (the window length) that is exactly the FUTURE t+1..t+8 of sample
+        # t. So the future target needs no extra rollout storage, only an
+        # index shift + validity mask:
+        #   invalid if t+H runs past the rollout tail, or if the episode
+        #   reset anywhere in [t, t+H-1] (the "future" would belong to a new
+        #   episode; b_don[u] marks a reset after step u).
+        H       = args.mi_horizon
+        i_all   = torch.arange(ptr, device=device)
+        t_of    = i_all // B
+        a_of    = i_all % B
+        fut_t   = t_of + H
+        don2d   = b_don[:ptr].reshape(T_steps, B)
+        dcum    = torch.cat([torch.zeros(1, B, device=device),
+                             don2d.cumsum(0)], dim=0)          # (T+1, B)
+        fut_ok  = fut_t < T_steps
+        n_reset = dcum[torch.clamp(fut_t, max=T_steps), a_of] - dcum[t_of, a_of]
+        fut_ok &= (n_reset == 0)
+        fut_idx = torch.clamp(fut_t, max=T_steps - 1) * B + a_of
+        mi_valid_frac = float(fut_ok.float().mean())
+
         # ---- PPO update ----
         policy.train()
         aux_loss_fn.train()
@@ -989,8 +1030,11 @@ def train(args):
                     # computation graph) — the rollout-buffer copies were created
                     # under no_grad, so the aux losses would otherwise send zero
                     # gradient to the role encoder.
+                    # FUTURE MI: the target window is the one stored at t+H
+                    # (embeddings t+1..t+H for H=8), masked where invalid.
                     aux = aux_loss_fn(role_info["role_z"], role_info["role_mean"],
-                                      role_info["role_log_var"], b_embwin[mb])
+                                      role_info["role_log_var"],
+                                      b_embwin[fut_idx[mb]], mi_mask=fut_ok[mb])
 
                     loss = (pl
                             + args.vf_coef * vl
@@ -1019,6 +1063,7 @@ def train(args):
                   f"policy_loss={pl.item():.4f}  "
                   f"value_loss={vl.item():.4f}  "
                   f"mi_loss={aux['mi_loss'].item():.4f}  "
+                  f"mi_valid={mi_valid_frac:.2f}  "
                   f"div_loss={aux['div_loss'].item():.4f}  "
                   f"kl_loss=0.0000 (disabled)  "
                   f"score={score:.3f}  return={ret:.3f}  "
@@ -1048,6 +1093,7 @@ def train(args):
                 "train/policy_loss":      pl.item(),
                 "train/value_loss":       vl.item(),
                 "train/mi_loss":          aux["mi_loss"].item(),
+                "train/mi_valid_frac":    mi_valid_frac,
                 "train/div_loss":         aux["div_loss"].item(),
                 "train/kl_loss":          0.0,  # kl disabled in baseline
                 "train/score":            score,

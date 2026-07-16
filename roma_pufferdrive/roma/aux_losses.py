@@ -3,22 +3,24 @@ roma/aux_losses.py
 ==================
 ROMA auxiliary losses: MI loss + diversity loss.
 
-MI Loss (Mutual Information):
-    Forces the role vector to encode meaningful behavioural information.
-    The role encoder predicts a behaviour summary extracted from the last
-    8 observations. If the role contains no behavioural information, this
-    loss is high.
+MI Loss (Mutual Information) — FUTURE-prediction variant (this branch):
+    Forces the role vector to be PREDICTIVE of the agent's upcoming
+    behaviour: z_t must predict a behaviour summary extracted from the
+    NEXT `window` env embeddings (t+1..t+window), not the past ones.
+    R3DM-inspired (Goel et al., ICML 2025): linking roles to FUTURE
+    expected behaviour improves role differentiation vs the original
+    past-window target (baseline branch), which risks encoding "what
+    already happened / what the scene looks like" instead of intent.
 
-    This is a simplified approximation of the full ROMA MI loss
+    Mechanically identical to the baseline loss except the caller passes
+    the future window (train_roma.py indexes the rollout buffer at t+H)
+    plus a validity mask: samples whose future crosses the rollout tail
+    or an episode reset are excluded from the loss.
+
+    This remains a simplified approximation of the full ROMA MI loss
     (Wang et al., ICML 2020), which uses a GRU trajectory encoder q_ξ
     to estimate I(ρ; τ | o). Our BehaviourExtractor + MIDecoder serves
     the same purpose with less complexity.
-
-    Future improvement (Phase 5):
-    R3DM (Goel et al., ICML 2025) shows that linking roles to FUTURE
-    expected behaviour via a learned dynamics model significantly improves
-    role differentiation. This would replace the current past-observation
-    based approach.
 
 Diversity Loss:
     Pushes agents to have different role vectors from each other.
@@ -134,15 +136,25 @@ class RomaAuxLoss(nn.Module):
         self.behaviour_extractor = BehaviourExtractor(emb_dim, behaviour_dim, window)
         self.mi_decoder          = MIDecoder(role_dim, behaviour_dim, hidden_dim)
 
-    def mi_loss(self, role_z, emb_window):
+    def mi_loss(self, role_z, emb_window, mi_mask=None):
         """
         MSE between predicted and actual behaviour summary.
         Forces role vector to encode real behavioural information.
         Range: [0, ∞) — lower is better.
+
+        mi_mask (B,) bool: samples to include. Future-window targets are
+        invalid where the future crosses the rollout tail or an episode
+        reset; those samples are excluded (loss averaged over valid only).
         """
         behaviour_target = self.behaviour_extractor(emb_window).detach()
         behaviour_pred   = self.mi_decoder(role_z)
-        return F.mse_loss(behaviour_pred, behaviour_target)
+        if mi_mask is None:
+            return F.mse_loss(behaviour_pred, behaviour_target)
+        if not bool(mi_mask.any()):
+            # keep graph + dtype/device; contributes zero gradient
+            return (behaviour_pred.sum() * 0.0)
+        per = ((behaviour_pred - behaviour_target) ** 2).mean(dim=-1)
+        return per[mi_mask].mean()
 
     def diversity_loss(self, role_mean):
         """
@@ -199,18 +211,22 @@ class RomaAuxLoss(nn.Module):
             total  = (s * s).sum() - B                   # sum of off-diagonal sims
             return total / (B * (B - 1))
 
-    def forward(self, role_z, role_mean, role_log_var, emb_window):
+    def forward(self, role_z, role_mean, role_log_var, emb_window,
+                mi_mask=None):
         """
         Args:
             role_z       : sampled role vector (B, role_dim)
             role_mean    : role distribution mean (B, role_dim)
             role_log_var : role distribution log variance (B, role_dim)
-            emb_window   : last 8 env embeddings (B, 8, emb_dim)
+            emb_window   : `window` env embeddings (B, window, emb_dim) —
+                           on this branch the FUTURE window t+1..t+window
+                           (the caller indexes the rollout buffer at t+H)
+            mi_mask      : (B,) bool — valid future targets (see mi_loss)
 
         Returns:
             dict with mi_loss, div_loss, aux_loss
         """
-        l_mi  = self.mi_loss(role_z, emb_window)
+        l_mi  = self.mi_loss(role_z, emb_window, mi_mask)
         l_div = self.diversity_loss(role_mean)
         aux   = self.mi_weight * l_mi + self.div_weight * l_div
 
