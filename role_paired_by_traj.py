@@ -79,6 +79,15 @@ def main():
     clusters = sorted(df["traj_cluster"].unique())
     print(f"[traj-strat] trajectory clusters present: {clusters}")
 
+    # Only plot metrics the agent CSV actually has: older sweeps (pre accel
+    # throttle/brake split) lack accel_pos/decel_abs, so intersect with the
+    # columns present instead of KeyError-ing on the global METRICS list.
+    metrics = [m for m in METRICS if m in df.columns]
+    missing = [m for m in METRICS if m not in df.columns]
+    if missing:
+        print(f"[traj-strat] note: {missing} absent from this CSV (older "
+              f"sweep) -- skipping them")
+
     # conditions: "base" is alpha=0; "PC{d}|{alpha}" otherwise
     pcs = sorted({m.group(1) for c in df["cond"].unique()
                   for m in [re.match(r"(PC\d+)\|", str(c))] if m})
@@ -95,9 +104,9 @@ def main():
     for pc in pcs:
         cond_of = {al: (f"{pc}|{al:+g}" if al != 0.0 else base_cond)
                    for al in alphas}
-        fig, axs = plt.subplots(1, len(METRICS),
-                                figsize=(3.1 * len(METRICS), 3.8))
-        for ax, met in zip(np.atleast_1d(axs), METRICS):
+        fig, axs = plt.subplots(1, len(metrics),
+                                figsize=(3.1 * len(metrics), 3.8))
+        for ax, met in zip(np.atleast_1d(axs), metrics):
             for tcid in clusters:
                 xr, yr, er = [], [], []
                 for al in alphas:
