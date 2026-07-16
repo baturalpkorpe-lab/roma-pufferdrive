@@ -50,7 +50,7 @@ from render_role_conditions import (rollout_forced, scan_allocation, scene_view,
                                     hide_after_frame, render_condition_video,
                                     scene_setup, bbox_of, include_point,
                                     first_segment, focal_goal,
-                                    focal_collision_frames)
+                                    focal_collision_frames, focal_offroad_frames)
 from role_regime_analysis import _squeeze
 from traj_kinematics import ego_kinematics
 
@@ -162,13 +162,15 @@ def focal_numbers(data):
     n   = min(len(spd), len(dh))
     k = ego_kinematics(spd[:n], dh[:n])           # plausibility-masked kinematics
     collided = focal_collision_frames(data, end)
+    offroad  = focal_offroad_frames(data, end)
     return {
-        "speed_mean": k["speed_mean"],
-        "accel_abs":  k["accel_abs"],
-        "jerk_abs":   k["jerk_abs"],
-        "turn_abs":   k["turn_abs"],
-        "event_rate": int(collided.sum()),   # vehicle-collision frames (of `end`); offroad not included
-        "seg_end":    end,
+        "speed_mean":   k["speed_mean"],
+        "accel_abs":    k["accel_abs"],
+        "jerk_abs":     k["jerk_abs"],
+        "turn_abs":     k["turn_abs"],
+        "event_rate":   int(collided.sum()),  # vehicle-collision frames (of `end`)
+        "offroad_rate": int(offroad.sum()),   # offroad frames (of `end`)
+        "seg_end":      end,
     }
 
 

@@ -357,6 +357,107 @@ def _scene_collision_frames(xs, ys, hs, length, width, focal, end):
     return flags
 
 
+def _segments_intersect(p1, p2, q1, q2):
+    """2D segment intersection, mirrors drive.h check_line_intersection
+    exactly (bbox reject + cross-product parametric test, s,t in [0,1])."""
+    if (max(p1[0], p2[0]) < min(q1[0], q2[0]) or min(p1[0], p2[0]) > max(q1[0], q2[0])
+            or max(p1[1], p2[1]) < min(q1[1], q2[1]) or min(p1[1], p2[1]) > max(q1[1], q2[1])):
+        return False
+    dx1, dy1 = p2[0] - p1[0], p2[1] - p1[1]
+    dx2, dy2 = q2[0] - q1[0], q2[1] - q1[1]
+    cross = dx1 * dy2 - dy1 * dx2
+    if cross == 0:
+        return False
+    dx3, dy3 = p1[0] - q1[0], p1[1] - q1[1]
+    s = (dx1 * dy3 - dy1 * dx3) / cross
+    t = (dx2 * dy3 - dy2 * dx3) / cross
+    return 0 <= s <= 1 and 0 <= t <= 1
+
+
+def _polylines_from_raw(road_edges):
+    """Raw {'x','y','lengths',...} (env.get_road_edge_polylines(), ROAD_EDGE
+    type only -- lane centerlines are a separate call) -> list of (N,2)
+    float arrays, one per polyline. Unfiltered by scenario; offroad
+    detection below spatially filters by proximity to the focal instead."""
+    if not isinstance(road_edges, dict) or "lengths" not in road_edges:
+        return []
+    x    = np.asarray(road_edges["x"]).reshape(-1)
+    y    = np.asarray(road_edges["y"]).reshape(-1)
+    lens = np.asarray(road_edges["lengths"]).reshape(-1)
+    out, i = [], 0
+    for n in lens:
+        n = int(n)
+        if n >= 2:
+            out.append(np.stack([x[i:i + n], y[i:i + n]], axis=-1))
+        i += n
+    return out
+
+
+def _scene_offroad_frames(xs, ys, hs, length, width, focal, end, road_polys):
+    """Per-frame offroad flag for `focal` over [0, end): True if any of the
+    focal's 4 oriented-box edges crosses a ROAD_EDGE polyline segment.
+    Mirrors drive.h's offroad check (check_line_intersection against
+    ROAD_EDGE geometry) directly on recorded trajectory + road data -- no
+    env access, no C changes. `road_polys` should already be spatially
+    filtered near the agent (see roads_for_scene / filter_polys_near) for
+    speed; a margin re-filter is applied here regardless for safety."""
+    flags = np.zeros(end, dtype=bool)
+    if not road_polys:
+        return flags
+    fx = xs[:end, focal].astype(np.float64)
+    fy = ys[:end, focal].astype(np.float64)
+    finite = np.isfinite(fx) & np.isfinite(fy)
+    if not finite.any():
+        return flags
+    x0, x1 = np.nanmin(fx[finite]) - 10, np.nanmax(fx[finite]) + 10
+    y0, y1 = np.nanmin(fy[finite]) - 10, np.nanmax(fy[finite]) + 10
+    nearby = filter_polys_near(road_polys, x0, x1, y0, y1, margin=0.0)
+    if not nearby:
+        return flags
+    l, w = length[focal], width[focal]
+    hl, hw = l / 2, w / 2
+    for t in range(end):
+        if not finite[t]:
+            continue
+        cx, cy, h = xs[t, focal], ys[t, focal], hs[t, focal]
+        c, s = np.cos(h), np.sin(h)
+        corners = [
+            (cx + hl * c - hw * s, cy + hl * s + hw * c),
+            (cx + hl * c + hw * s, cy + hl * s - hw * c),
+            (cx - hl * c - hw * s, cy - hl * s + hw * c),
+            (cx - hl * c + hw * s, cy - hl * s - hw * c),
+        ]
+        hit = False
+        for poly in nearby:
+            for k in range(len(poly) - 1):
+                seg = (poly[k], poly[k + 1])
+                for ci in range(4):
+                    if _segments_intersect(corners[ci], corners[(ci + 1) % 4],
+                                           seg[0], seg[1]):
+                        hit = True
+                        break
+                if hit:
+                    break
+            if hit:
+                break
+        flags[t] = hit
+    return flags
+
+
+def focal_offroad_frames(data, end):
+    """Per-frame offroad flag for the focal agent over its pre-respawn
+    segment [0, end). Uses data['road_edges'] (raw env.get_road_edge_
+    polylines(), unfiltered by scenario -- filtered here by proximity to the
+    focal's own trajectory instead, so no scenario_id plumbing is needed)."""
+    slots = data["slots"]
+    local_focal = int(np.where(slots == data["focal"])[0][0])
+    xs, ys, hs = data["xs"][:, slots], data["ys"][:, slots], data["hs"][:, slots]
+    length, width = data["length"][slots], data["width"][slots]
+    road_polys = _polylines_from_raw(data.get("road_edges"))
+    return _scene_offroad_frames(xs, ys, hs, length, width, local_focal, end,
+                                 road_polys)
+
+
 def focal_collision_frames(data, end):
     """Per-frame vehicle-collision flag for the focal agent over its
     pre-respawn segment [0, end).
@@ -655,6 +756,8 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi,
     end_c  = int(tp_c[0] + 1) if len(tp_c) else xs.shape[0]
     collided = _scene_collision_frames(xs, ys, hs, data["length"], data["width"],
                                        focal, end_c)
+    offroad = _scene_offroad_frames(xs, ys, hs, data["length"], data["width"],
+                                    focal, end_c, polys)
 
     w, h = x1 - x0, y1 - y0
     fw = 10.0 if w >= h else max(10.0 * w / h, 4)
@@ -702,7 +805,13 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi,
             data["length"][focal:focal+1] * 1.25,
             data["width"][focal:focal+1] * 1.25)))
         is_collision = t < len(collided) and collided[t]
-        focal_c.set_facecolor("#ff2222" if is_collision else color)
+        is_offroad   = t < len(offroad) and offroad[t]
+        if is_collision:
+            focal_c.set_facecolor("#ff2222")     # vehicle collision wins the color
+        elif is_offroad:
+            focal_c.set_facecolor("#ff9900")
+        else:
+            focal_c.set_facecolor(color)
         s = max(0, t - 40)
         px, py = longest_segment(xs[s:t+1, focal], ys[s:t+1, focal])
         trail.set_segments([np.stack([px, py], axis=-1)] if len(px) >= 2 else [])
@@ -713,8 +822,9 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi,
             gtxt = f"goal: {d:5.1f} m  REACHED"
         else:
             gtxt = f"goal: {d:5.1f} m"
-        ctxt = "  *** COLLISION ***" if is_collision else ""
-        txt.set_text(f"t = {t:2d}/{T-1}  ({t/10:.1f}s)\n{gtxt}{ctxt}")
+        etxt = ((" *** COLLISION ***" if is_collision else "")
+                + (" *** OFFROAD ***" if is_offroad else ""))
+        txt.set_text(f"t = {t:2d}/{T-1}  ({t/10:.1f}s)\n{gtxt}{etxt}")
         return others, focal_c, trail, txt
 
     ani = animation.FuncAnimation(fig, update, frames=T, blit=False)
@@ -730,8 +840,11 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi,
                  else f"closest {dmin:.1f} m @ frame {fmin} (never within "
                       f"{goal_radius:.0f} m)")
     n_collision = int(collided.sum())
+    n_offroad   = int(offroad.sum())
     coll_str = f"{n_collision} collision frame(s)" if n_collision else "no collisions"
-    print(f"  saved {out_path}  |  {reach_str}  |  {coll_str}", flush=True)
+    off_str  = f"{n_offroad} offroad frame(s)" if n_offroad else "no offroad"
+    print(f"  saved {out_path}  |  {reach_str}  |  {coll_str}  |  {off_str}",
+         flush=True)
     return dist, dmin, fmin, reached
 
 
