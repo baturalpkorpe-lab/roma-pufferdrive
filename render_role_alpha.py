@@ -166,6 +166,8 @@ def focal_numbers(data):
     return {
         "speed_mean":   k["speed_mean"],
         "accel_abs":    k["accel_abs"],
+        "accel_pos":    k["accel_pos"],
+        "decel_abs":    k["decel_abs"],
         "jerk_abs":     k["jerk_abs"],
         "turn_abs":     k["turn_abs"],
         "event_rate":   int(collided.sum()),  # vehicle-collision frames (of `end`)

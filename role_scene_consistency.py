@@ -43,7 +43,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-METRICS  = ["speed_mean", "accel_abs", "jerk_abs", "turn_abs", "event_rate"]
+METRICS  = ["speed_mean", "accel_abs", "accel_pos", "decel_abs", "jerk_abs",
+            "turn_abs", "event_rate"]
 KEY      = ["episode", "sid", "vid"]
 ALPHA_RE = re.compile(r"(PC\d+)\|([+-]?\d+\.?\d*)")
 

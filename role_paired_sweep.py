@@ -71,8 +71,10 @@ GT_MOVE_MS = 1.0
 EVENT_REW  = -0.4
 ROLLOUT_SEED = 1234
 
-METRICS = ["speed_mean", "accel_abs", "jerk_abs", "turn_abs", "event_rate"]
+METRICS = ["speed_mean", "accel_abs", "accel_pos", "decel_abs", "jerk_abs",
+           "turn_abs", "event_rate"]
 METRIC_LABEL = {"speed_mean": "speed (m/s)", "accel_abs": "|accel| (m/s2)",
+                "accel_pos": "throttle a+ (m/s2)", "decel_abs": "braking |a-| (m/s2)",
                 "jerk_abs": "|jerk| (m/s3)", "turn_abs": "|turn| (rad/s)",
                 "event_rate": "safety events / 91"}
 
@@ -153,6 +155,8 @@ def focal_metrics(a, xs, ys, hs, rews, gx, gy, gvalid, T_gt):
     return {
         "speed_mean": k["speed_mean"],
         "accel_abs":  k["accel_abs"],
+        "accel_pos":  k["accel_pos"],
+        "decel_abs":  k["decel_abs"],
         "jerk_abs":   k["jerk_abs"],
         "turn_abs":   k["turn_abs"],
         "event_rate": float((rews[:t_end, a] <= EVENT_REW).sum() / t_end * T),

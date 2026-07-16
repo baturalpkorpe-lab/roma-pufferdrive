@@ -31,8 +31,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-METRICS = ["speed_mean", "accel_abs", "jerk_abs", "turn_abs", "event_rate"]
+METRICS = ["speed_mean", "accel_abs", "accel_pos", "decel_abs", "jerk_abs",
+           "turn_abs", "event_rate"]
 METRIC_LABEL = {"speed_mean": "speed (m/s)", "accel_abs": "|accel| (m/s2)",
+                "accel_pos": "throttle a+ (m/s2)", "decel_abs": "braking |a-| (m/s2)",
                 "jerk_abs": "|jerk| (m/s3)", "turn_abs": "|turn| (rad/s)",
                 "event_rate": "safety events / 91"}
 

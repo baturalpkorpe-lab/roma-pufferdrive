@@ -71,6 +71,10 @@ def masked_kinematics(spd, dh, mask):
     acc = acc[np.abs(acc) <= ACCEL_MAX_MS2]
     jrk = np.diff(acc) * 10.0
     outm["accel_abs"] = float(np.abs(acc).mean()) if len(acc) else np.nan
+    # Split throttle vs braking: |a| conflates them, so accel_abs is a mushy
+    # signal. accel_pos + decel_abs == accel_abs exactly (|a|=max(a,0)+max(-a,0)).
+    outm["accel_pos"] = float(np.maximum(acc, 0).mean()) if len(acc) else np.nan
+    outm["decel_abs"] = float(np.maximum(-acc, 0).mean()) if len(acc) else np.nan
     outm["jerk_abs"]  = float(np.abs(jrk).mean()) if len(jrk) else np.nan
     return outm
 
@@ -79,7 +83,8 @@ def ego_kinematics(p_spd, p_dh):
     """Direct ego kinematics from a focal's per-step speed (m/s) and per-step
     heading-change RATE (rad/s), with physical plausibility masking applied --
     the shared fix for the impossible accel/jerk artifacts. Returns
-    speed_mean/max/min/std, accel_abs/std, jerk_abs, turn_abs, n_steps.
+    speed_mean/max/min/std, accel_abs/pos/std, decel_abs, jerk_abs, turn_abs,
+    n_steps (accel_pos=throttle, decel_abs=braking; accel_pos+decel_abs==accel_abs).
     Steps with speed > SPEED_MAX_MS are dropped; accels with |a| > ACCEL_MAX_MS2
     are dropped before jerk. Turn is NOT capped here (real sharp low-speed turns
     are legitimate; the caller filters corrupt GT separately)."""
@@ -95,6 +100,8 @@ def ego_kinematics(p_spd, p_dh):
         "speed_min":  float(s.min()) if len(s) else np.nan,
         "speed_std":  float(s.std()) if len(s) else np.nan,
         "accel_abs":  float(np.abs(acc).mean()) if len(acc) else np.nan,
+        "accel_pos":  float(np.maximum(acc, 0).mean()) if len(acc) else np.nan,
+        "decel_abs":  float(np.maximum(-acc, 0).mean()) if len(acc) else np.nan,
         "accel_std":  float(acc.std()) if len(acc) else np.nan,
         "jerk_abs":   float(np.abs(jrk).mean()) if len(jrk) else np.nan,
         "turn_abs":   float(np.abs(dh).mean()) if dh is not None and len(dh) else np.nan,
