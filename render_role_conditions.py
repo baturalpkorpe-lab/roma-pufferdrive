@@ -328,6 +328,35 @@ def _obb_collision(x1, y1, h1, l1, w1, x2, y2, h2, l2, w2):
     return True
 
 
+def _scene_collision_frames(xs, ys, hs, length, width, focal, end):
+    """Per-frame vehicle-collision flag for `focal` (an index already local to
+    xs/ys/hs/length/width) over [0, end). Reimplements the env's own OBB/SAT
+    test (drive.h check_aabb_collision, incl. its 15m dist^2<225 prefilter)
+    directly on recorded trajectory data -- no env access, no C changes.
+    Shared core for focal_collision_frames (CSV metric, full raw rollout
+    data) and render_condition_video (already scene-subsetted view, so the
+    video's on-screen collision flag matches the CSV number exactly)."""
+    n = xs.shape[1]
+    flags = np.zeros(end, dtype=bool)
+    for t in range(end):
+        x1, y1, h1 = xs[t, focal], ys[t, focal], hs[t, focal]
+        if not (np.isfinite(x1) and np.isfinite(y1)):
+            continue
+        for a in range(n):
+            if a == focal:
+                continue
+            x2, y2, h2 = xs[t, a], ys[t, a], hs[t, a]
+            if not (np.isfinite(x2) and np.isfinite(y2)):
+                continue
+            if (x1 - x2) ** 2 + (y1 - y2) ** 2 > 225.0:
+                continue
+            if _obb_collision(x1, y1, h1, length[focal], width[focal],
+                              x2, y2, h2, length[a], width[a]):
+                flags[t] = True
+                break
+    return flags
+
+
 def focal_collision_frames(data, end):
     """Per-frame vehicle-collision flag for the focal agent over its
     pre-respawn segment [0, end).
@@ -335,10 +364,6 @@ def focal_collision_frames(data, end):
     rollout_forced() discards env.step()'s reward/info -- the C reward is an
     additive mix of collision/offroad/jerk/goal terms, so it can't be
     disentangled into "did a collision happen this step" after the fact.
-    Instead this reimplements the env's own OBB/SAT test (drive.h
-    check_aabb_collision, incl. its 15m dist^2<225 prefilter) directly on the
-    x/y/heading/length/width the rollout already recorded for every agent --
-    no env access, no C changes.
 
     Scoped to agents in this scene (data['slots']); does NOT detect offroad
     events (those need road/lane geometry, out of scope here)."""
@@ -346,25 +371,7 @@ def focal_collision_frames(data, end):
     local_focal = int(np.where(slots == data["focal"])[0][0])
     xs, ys, hs = data["xs"][:, slots], data["ys"][:, slots], data["hs"][:, slots]
     length, width = data["length"][slots], data["width"][slots]
-    n = xs.shape[1]
-    flags = np.zeros(end, dtype=bool)
-    for t in range(end):
-        x1, y1, h1 = xs[t, local_focal], ys[t, local_focal], hs[t, local_focal]
-        if not (np.isfinite(x1) and np.isfinite(y1)):
-            continue
-        for a in range(n):
-            if a == local_focal:
-                continue
-            x2, y2, h2 = xs[t, a], ys[t, a], hs[t, a]
-            if not (np.isfinite(x2) and np.isfinite(y2)):
-                continue
-            if (x1 - x2) ** 2 + (y1 - y2) ** 2 > 225.0:
-                continue
-            if _obb_collision(x1, y1, h1, length[local_focal], width[local_focal],
-                              x2, y2, h2, length[a], width[a]):
-                flags[t] = True
-                break
-    return flags
+    return _scene_collision_frames(xs, ys, hs, length, width, local_focal, end)
 
 
 def scene_view(data, slots, sid):
@@ -638,6 +645,17 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi,
 
     dist, dmin, fmin, reached = goal_distance_track(data, focal, goal_radius)
 
+    # Same pre-respawn segment cut as goal_distance_track (JUMP_THRESH), same
+    # OBB/SAT test as the CSV's event_rate -- so the on-screen flag and the
+    # logged number always agree.
+    fx = xs[:, focal].astype(np.float64)
+    fy = ys[:, focal].astype(np.float64)
+    step_c = np.hypot(np.diff(fx), np.diff(fy))
+    tp_c   = np.where(step_c > JUMP_THRESH)[0]
+    end_c  = int(tp_c[0] + 1) if len(tp_c) else xs.shape[0]
+    collided = _scene_collision_frames(xs, ys, hs, data["length"], data["width"],
+                                       focal, end_c)
+
     w, h = x1 - x0, y1 - y0
     fw = 10.0 if w >= h else max(10.0 * w / h, 4)
     fh = 10.0 if h >= w else max(10.0 * h / w, 4)
@@ -683,6 +701,8 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi,
             xs[t, focal:focal+1], ys[t, focal:focal+1], hs[t, focal:focal+1],
             data["length"][focal:focal+1] * 1.25,
             data["width"][focal:focal+1] * 1.25)))
+        is_collision = t < len(collided) and collided[t]
+        focal_c.set_facecolor("#ff2222" if is_collision else color)
         s = max(0, t - 40)
         px, py = longest_segment(xs[s:t+1, focal], ys[s:t+1, focal])
         trail.set_segments([np.stack([px, py], axis=-1)] if len(px) >= 2 else [])
@@ -693,7 +713,8 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi,
             gtxt = f"goal: {d:5.1f} m  REACHED"
         else:
             gtxt = f"goal: {d:5.1f} m"
-        txt.set_text(f"t = {t:2d}/{T-1}  ({t/10:.1f}s)\n{gtxt}")
+        ctxt = "  *** COLLISION ***" if is_collision else ""
+        txt.set_text(f"t = {t:2d}/{T-1}  ({t/10:.1f}s)\n{gtxt}{ctxt}")
         return others, focal_c, trail, txt
 
     ani = animation.FuncAnimation(fig, update, frames=T, blit=False)
@@ -708,7 +729,9 @@ def render_condition_video(data, focal, color, title, out_path, fps, dpi,
     reach_str = (f"reached goal @ frame {fmin} ({dmin:.1f} m)" if reached
                  else f"closest {dmin:.1f} m @ frame {fmin} (never within "
                       f"{goal_radius:.0f} m)")
-    print(f"  saved {out_path}  |  {reach_str}", flush=True)
+    n_collision = int(collided.sum())
+    coll_str = f"{n_collision} collision frame(s)" if n_collision else "no collisions"
+    print(f"  saved {out_path}  |  {reach_str}  |  {coll_str}", flush=True)
     return dist, dmin, fmin, reached
 
 
