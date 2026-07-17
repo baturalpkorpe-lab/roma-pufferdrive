@@ -61,9 +61,15 @@ def parse_args():
     p.add_argument("--per_side",      type=int, default=1,
                    help="Agents to render per PC1 pole per cluster")
     p.add_argument("--warmup_episodes", type=int, default=4)
-    p.add_argument("--map_pool",      type=int, default=10000,
-                   help="Full set: named scenes must be re-locatable in "
-                        "phase B (the render_pc2_sweep lesson)")
+    p.add_argument("--map_pool",      type=int, default=256,
+                   help="Keep this <= the env instance count (~total_agents/6, "
+                        "so all maps are dealt with replacement EVERY reset). "
+                        "With a big pool (e.g. 10000) only ~3.4%% of maps are "
+                        "live at once and env.reset() re-deals, so Phase B can "
+                        "never re-locate a specific extreme agent's scene -- "
+                        "every cluster silently skipped. Small pool = the pre-"
+                        "picked extremes are always present -> re-deal on the "
+                        "first reset.")
     p.add_argument("--total_agents",  type=int, default=2048)
     p.add_argument("--min_margin",    type=float, default=1.5)
     p.add_argument("--min_speed",     type=float, default=0.5,
