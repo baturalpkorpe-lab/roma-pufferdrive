@@ -107,8 +107,15 @@ def natural_rollout(env, policy, device):
 
 def collect_naturals(env, policy, device, args, mu, u1, u2):
     """Phase A: (sid, vid) -> natural role stats + behavior, across
-    warmup_episodes resampled pools. Dedup keeps the first sighting."""
+    warmup_episodes resampled pools. Dedup keeps the first sighting.
+
+    Also returns the FINAL episode's scenario ids: env.reset() replays the
+    same allocation (only resample_maps() re-deals), so Phase B can only
+    reliably re-locate scenes still in the LAST deal -- picking extremes from
+    earlier (resampled-away) episodes made every re-deal fail (~3.4%/fresh
+    deal at 10k maps, and rollout_forced only resamples every 25 tries)."""
     rows, seen = [], set()
+    live_sids = set()
     for ep in range(args.warmup_episodes):
         if ep > 0:
             env.resample_maps()
@@ -143,9 +150,11 @@ def collect_naturals(env, policy, device, args, mu, u1, u2):
                          **{f"role_{i}": float(zbar[i])
                             for i in range(len(zbar))}})
             seen.add((sid, int(vids[a])))
+        live_sids = {str(s) for s in np.unique(sids)
+                     if s and not str(s).lower().startswith("map")}
         print(f"[nat] warmup {ep+1}/{args.warmup_episodes}: "
               f"{len(rows)} (scenario, vehicle) naturals", flush=True)
-    return rows
+    return rows, live_sids
 
 
 def contrast_figure(views, mets, picks, cname, out_path, dpi):
@@ -217,7 +226,7 @@ def main():
     u2, _ = axes.get("PC2", (np.zeros_like(u1), 0.0))
 
     # -- Phase A ---------------------------------------------------------------
-    rows = collect_naturals(env, policy, device, args, mu, u1, u2)
+    rows, live_sids = collect_naturals(env, policy, device, args, mu, u1, u2)
     df = pd.DataFrame(rows)
     df["cluster"] = [cluster_of.get((r.sid, r.vid), -1) for r in df.itertuples()]
     df.to_csv(out_dir / "natural_agents.csv", index=False)
@@ -227,7 +236,15 @@ def main():
     # -- Selection + Phase B renders --------------------------------------------
     selected = []
     for k in clusters:
-        sub = lab[lab["cluster"] == k].sort_values("pc1")
+        sub_all = lab[lab["cluster"] == k].sort_values("pc1")
+        # Prefer scenes still in the LIVE (final-episode) allocation so the
+        # Phase B re-deal succeeds on the first reset; fall back to the full
+        # candidate set only if the live subset is too thin.
+        sub = sub_all[sub_all["sid"].isin(live_sids)]
+        if len(sub) < 2 * args.per_side:
+            print(f"[nat] cluster {k}: only {len(sub)} LIVE labeled naturals; "
+                  f"falling back to all {len(sub_all)} (re-deal may be slow)")
+            sub = sub_all
         if len(sub) < 2 * args.per_side:
             print(f"[nat] cluster {k}: only {len(sub)} labeled naturals -- skipped")
             continue
