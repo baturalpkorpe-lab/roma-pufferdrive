@@ -1,7 +1,8 @@
 """
-role_force_targets.py -- force SPECIFIC (sid, vid) agents' roles by a chosen
-alpha along PC1 (natural-offset: z(t) = z_nat(t) + alpha*sigma*PC1) and render
-natural-vs-forced so the behavioural change is visible.
+role_force_targets.py -- force SPECIFIC (sid, vid) agents' roles across a full
+PC1 sweep (natural-offset: z(t) = z_nat(t) + alpha*sigma*PC1, default
+alphas=-2,-1,0,1,2) and render each condition + one fan overlay per target so
+the behavioural change across the whole dial is visible.
 
 Re-locating a specific scene in a 10k-map pool is a ~3.4%/deal lottery (the
 role_natural_extremes lesson). This sidesteps it: it SCANS the binaries for the
@@ -9,9 +10,11 @@ target scenes (each binary's 16-byte header IS the scenario_id), copies just
 those into a mini map dir, and runs the env on that -- so every target scene is
 always present and re-deal succeeds on the first reset.
 
-Usage (from PufferDrive; targets = 'sidprefix:vid:alpha' comma-separated):
+Usage (from PufferDrive; targets = 'sidprefix:vid' comma-separated, SAME
+alphas swept for every target):
   python role_force_targets.py \
-      --targets    "9b77f20fee:1746:-1,43a1ab3d25:2819:1,7f1fd16402:3:1" \
+      --targets    "9b77f20fee:1746,43a1ab3d25:2819,7f1fd16402:3" \
+      --alphas     "-2,-1,0,1,2" \
       --checkpoint /scratch/e452103/checkpoints/roma_baseline_dim2/roma_dim2_final.pt \
       --axes_csv   /scratch/e452103/role_paired/dim2/role_paired_axes.csv \
       --data_dir   pufferlib/resources/drive/binaries/training \
@@ -41,14 +44,14 @@ T = 91
 
 
 def parse_targets(s):
-    """'sidprefix:vid:alpha,...' -> [(prefix, vid, alpha)]."""
+    """'sidprefix:vid,...' -> [(prefix, vid)]."""
     out = []
     for item in s.split(","):
         item = item.strip()
         if not item:
             continue
-        sid, vid, alpha = item.split(":")
-        out.append((sid.strip(), int(vid), float(alpha)))
+        sid, vid = item.split(":")
+        out.append((sid.strip(), int(vid)))
     return out
 
 
@@ -69,30 +72,39 @@ def find_map_files(data_dir, prefixes):
     return found
 
 
-def overlay(views, mets, sid, vid, alpha, out_path, dpi):
-    """Natural (blue) vs forced (red) focal path on the SAME scene."""
-    nat, frc = views["natural"], views["forced"]
-    f = nat["focal"]
-    fig, ax = plt.subplots(figsize=(8, 8))
+def fan_overlay(views, mets, alphas, sid, vid, out_path, dpi):
+    """All PC1-sweep conditions' focal paths on ONE scene, coolwarm by alpha
+    (matches render_role_grid's PC1-fan convention: alpha=0 = light gray)."""
+    ref = views[alphas[0]]
+    f = ref["focal"]
+    fig, ax = plt.subplots(figsize=(8.5, 8.5))
     fig.patch.set_facecolor(BG)
-    px, py = first_segment(nat["xs"][:, f], nat["ys"][:, f])
-    x0, x1, y0, y1 = bbox_of(nat["road_polys"], px[:, None], py[:, None])
-    x0, x1, y0, y1 = include_point(x0, x1, y0, y1, focal_goal(nat["gt"], f))
-    scene_setup(ax, nat["road_polys"], nat["gt"], x0, x1, y0, y1, focal=f,
+    all_px, all_py = [], []
+    for al in alphas:
+        v = views[al]; fi = v["focal"]
+        px, py = first_segment(v["xs"][:, fi], v["ys"][:, fi])
+        all_px.append(px); all_py.append(py)
+    cat_x = np.concatenate(all_px) if all_px else np.array([0.0])
+    cat_y = np.concatenate(all_py) if all_py else np.array([0.0])
+    x0, x1, y0, y1 = bbox_of(ref["road_polys"], cat_x[:, None], cat_y[:, None])
+    x0, x1, y0, y1 = include_point(x0, x1, y0, y1, focal_goal(ref["gt"], f))
+    scene_setup(ax, ref["road_polys"], ref["gt"], x0, x1, y0, y1, focal=f,
                 focal_color="#dddddd")
-    for name, color in [("natural", "#4477dd"), ("forced", "#dd4444")]:
-        v = views[name]; fi = v["focal"]
-        qx, qy = first_segment(v["xs"][:, fi], v["ys"][:, fi])
-        m = mets[name]
-        ax.plot(qx, qy, color=color, lw=2.6, zorder=6,
-                label=f"{name}: v={m['speed_mean']:.1f}  turn={m['turn_abs']:.2f}  "
+
+    cmap = plt.get_cmap("coolwarm")
+    span = max(alphas) - min(alphas) or 1.0
+    for al, px, py in zip(alphas, all_px, all_py):
+        color = "#e8e8e8" if al == 0 else cmap((al - min(alphas)) / span)
+        m = mets[al]
+        ax.plot(px, py, color=color, lw=2.6, zorder=6,
+                label=f"α={al:+g}: v={m['speed_mean']:.1f}  turn={m['turn_abs']:.2f}  "
                       f"jerk={m['jerk_abs']:.1f}  coll={m['event_rate']}")
-        if len(qx):
-            ax.scatter(qx[-1], qy[-1], color=color, s=110, marker="X",
+        if len(px):
+            ax.scatter(px[-1], py[-1], color=color, s=100, marker="X",
                        zorder=7, edgecolors="white", linewidths=0.8)
-    ax.legend(fontsize=9, loc="best")
-    ax.set_title(f"{sid[:10]} v{vid} | PC1 forced α={alpha:+g} (natural-offset)\n"
-                 f"blue = its own natural role, red = role shifted {alpha:+g}σ along PC1",
+    ax.legend(fontsize=8, loc="best")
+    ax.set_title(f"{sid[:10]} v{vid} | PC1 fan (natural-offset), "
+                 f"α={alphas}\nblue-ish=timid pole  red-ish=assertive pole",
                  color="#e8e8f0", fontsize=10)
     fig.tight_layout()
     fig.savefig(out_path, dpi=dpi, facecolor=BG)
@@ -103,7 +115,9 @@ def overlay(views, mets, sid, vid, alpha, out_path, dpi):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--targets",    required=True,
-                    help="'sidprefix:vid:alpha,...' e.g. 9b77f20fee:1746:-1")
+                    help="'sidprefix:vid,...' e.g. 9b77f20fee:1746,43a1ab3d25:2819")
+    ap.add_argument("--alphas",     type=str, default="-2,-1,0,1,2",
+                    help="SAME PC1 sweep applied to every target")
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--axes_csv",   required=True)
     ap.add_argument("--data_dir",   required=True,
@@ -119,6 +133,7 @@ def main():
     device = torch.device(args.device)
     out = Path(args.out_dir); out.mkdir(parents=True, exist_ok=True)
     targets = parse_targets(args.targets)
+    alphas  = sorted(float(x) for x in args.alphas.split(","))
     prefixes = [t[0] for t in targets]
 
     # -- 1. find + copy target scenes into a mini map dir ----------------------
@@ -151,34 +166,40 @@ def main():
     u1, s1 = axes["PC1"]
     u1 = np.asarray(u1, dtype=np.float32)
 
-    # -- 3. per target: natural + forced render + overlay ----------------------
-    for pref, vid, alpha in targets:
+    # -- 3. per target: full PC1 sweep + fan overlay ----------------------------
+    for pref, vid in targets:
         sid = full_sid[pref]
-        cond = (alpha * s1 * u1).astype(np.float32)
-        print(f"\n[force] {sid[:10]} v{vid}: PC1 α={alpha:+g}  "
-              f"(shift {np.round(cond, 2)})", flush=True)
+        print(f"\n[force] {sid[:10]} v{vid}: PC1 sweep {alphas}", flush=True)
         views, mets, ok = {}, {}, True
-        for name, cvec in [("natural", None), ("forced", cond)]:
+        for al in alphas:
+            cvec = None if al == 0.0 else (al * s1 * u1).astype(np.float32)
             data = rollout_forced(env, policy, sid, vid, cvec, device,
                                   max_tries=args.max_relocate, shift=True)
             if data is None:
-                print(f"  [skip] {sid[:10]} v{vid} not re-dealt"); ok = False; break
+                print(f"  [skip] {sid[:10]} v{vid} not re-dealt at α={al:+g}")
+                ok = False
+                break
             m = focal_numbers(data)
             view = scene_view(data, data["slots"], sid)
             view["focal"] = int(np.where(data["slots"] == data["focal"])[0][0])
             view["hide_after"] = hide_after_frame(view)
-            views[name] = view; mets[name] = m
-            color = "#4477dd" if name == "natural" else "#dd4444"
-            fn = out / f"force_{sid[:10]}_v{vid}_{name}_a{alpha:+g}.mp4"
+            views[al] = view; mets[al] = m
+            cmap = plt.get_cmap("coolwarm")
+            span = max(alphas) - min(alphas) or 1.0
+            color = "#e8e8e8" if al == 0 else cmap((al - min(alphas)) / span)
+            fn = out / f"force_{sid[:10]}_v{vid}_a{al:+g}.mp4"
             render_condition_video(
                 view, view["focal"], color,
-                f"{sid[:10]} v{vid} | {name} | PC1 α={alpha:+g} | "
-                f"v={m['speed_mean']:.1f} turn={m['turn_abs']:.2f} "
-                f"jerk={m['jerk_abs']:.1f} coll={m['event_rate']}",
+                f"{sid[:10]} v{vid} | PC1 α={al:+g} | v={m['speed_mean']:.1f} "
+                f"turn={m['turn_abs']:.2f} jerk={m['jerk_abs']:.1f} "
+                f"coll={m['event_rate']}",
                 fn, args.fps, args.dpi, goal_radius=args.goal_radius)
-        if ok and len(views) == 2:
-            overlay(views, mets, sid, vid, alpha,
-                    out / f"force_overlay_{sid[:10]}_v{vid}_a{alpha:+g}.png", args.dpi)
+        if ok and len(views) == len(alphas):
+            fan_overlay(views, mets, alphas, sid, vid,
+                       out / f"force_fan_{sid[:10]}_v{vid}.png", args.dpi)
+        else:
+            print(f"  [incomplete] {sid[:10]} v{vid}: only {len(views)}/"
+                  f"{len(alphas)} conditions succeeded -- no fan overlay")
     env.close()
     print(f"\n[force] done -> {out}")
 
