@@ -16,8 +16,17 @@
 # filters the CSV instead of touching the script) and writes into its own
 # out_dir subfolder so the 4 runs never collide.
 #
+# Also usable for a PER-CLUSTER-trained checkpoint: point CKPT/AXES/DATA_DIR
+# at that cluster's own checkpoint/axes/maps (cluster_maps/cluster<K>) so the
+# rendered scenes only ever control genuinely-that-cluster vehicles -- e.g.
+# the stop&go-trained policy's own PC1=turning / PC2=braking-throttle effect.
+#
 #   sbatch --export=ALL,TYPE=0 slurm/render_role_grid_type.sbatch
 #   sbatch --export=ALL,TYPE=1 slurm/render_role_grid_type.sbatch
+#   sbatch --export=ALL,TYPE=1,DATA_DIR=/scratch/e452103/cluster_maps/cluster1,\
+#CKPT=/scratch/e452103/checkpoints/roma_cluster1_dim4/roma_dim4_final.pt,\
+#AXES=/scratch/e452103/role_paired/cluster1/role_paired_axes.csv,\
+#OUT_ROOT=/scratch/e452103/renders/role_grid_cluster1 slurm/render_role_grid_type.sbatch
 #   ... run one at a time, or queue all 4 -- they write disjoint out_dirs.
 
 TYPE=${TYPE:-}
@@ -26,6 +35,7 @@ TYPE=${TYPE:-}
 CKPT=${CKPT:-/scratch/e452103/checkpoints/roma_baseline_dim2/roma_dim2_final.pt}
 AXES=${AXES:-/scratch/e452103/role_paired/dim2/role_paired_axes.csv}
 TRAJ=${TRAJ:-/scratch/e452103/traj_atlas/trajectory_clusters_stopfrac.csv}
+DATA_DIR=${DATA_DIR:-pufferlib/resources/drive/binaries/training}
 OUT_ROOT=${OUT_ROOT:-/scratch/e452103/renders/role_grid_dim2}
 OUT=${OUT:-$OUT_ROOT/type${TYPE}}
 SCENES=${SCENES:-3}
@@ -68,7 +78,7 @@ python "$CODE_DIR/render_role_grid.py" \
     --checkpoint    "$CKPT" \
     --axes_csv      "$AXES" \
     --traj_clusters "$TRAJ_TYPE" \
-    --data_dir      pufferlib/resources/drive/binaries/training \
+    --data_dir      "$DATA_DIR" \
     --out_dir       "$OUT" \
     --alphas="-2,-1,0,1,2" --grid 1 \
     --scenes_per_type "$SCENES" \
