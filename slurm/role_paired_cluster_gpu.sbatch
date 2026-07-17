@@ -37,7 +37,13 @@ MAP_DIR=${MAP_DIR:-/scratch/e452103/cluster_maps/cluster${CLUSTER}}
 CKPT=${CKPT:-/scratch/e452103/checkpoints/roma_cluster${CLUSTER}_dim${ROLE_DIM}/roma_dim${ROLE_DIM}_final.pt}
 OUT=${OUT:-/scratch/e452103/role_paired/cluster${CLUSTER}}
 MAP_CLUSTERS=${MAP_CLUSTERS:-/scratch/e452103/map_atlas/k4/map_clusters.csv}
-TRAJ_CLUSTERS=${TRAJ_CLUSTERS:-/scratch/e452103/traj_atlas/trajectory_clusters.csv}
+# MUST be the SAME frozen clustering make_cluster_maps used to build the
+# per-cluster maps (trajectory_clusters_stopfrac.csv). Using the LIVE
+# trajectory_clusters.csv mislabels the focals -- atlas reruns reshuffle
+# cluster IDs, so a cluster<K> map's stop&go focals scatter across 0/1/2/3.
+# (For a single-cluster run the by_traj stratification is degenerate anyway --
+# all focals are one type; read the OVERALL dose-response + consistency ALL row.)
+TRAJ_CLUSTERS=${TRAJ_CLUSTERS:-/scratch/e452103/traj_atlas/trajectory_clusters_stopfrac.csv}
 EPISODES=${EPISODES:-10}
 WARMUP=${WARMUP:-3}
 
