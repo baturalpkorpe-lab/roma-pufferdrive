@@ -52,8 +52,12 @@ CODE_DIR=$HOME/roma_pufferdrive
 
 mkdir -p /scratch/e452103/logs "$OUT"
 [ -f "$CKPT" ] || { echo "ERROR: checkpoint not found: $CKPT"; exit 1; }
-ls "$MAP_DIR"/map_*.bin >/dev/null 2>&1 || { echo "ERROR: no maps in $MAP_DIR"; exit 1; }
-echo "cluster=$CLUSTER  role_dim=$ROLE_DIM  ckpt=$CKPT  maps=$MAP_DIR  episodes=$EPISODES"
+# The per-cluster dir has FEWER maps than the 10k default; role_paired_sweep.py
+# passes --num_maps straight into Drive(), which rejects num_maps > available.
+# Count the cluster's actual maps and cap num_maps to it.
+NUM_MAPS=$(ls "$MAP_DIR"/map_*.bin 2>/dev/null | wc -l)
+[ "$NUM_MAPS" -gt 0 ] || { echo "ERROR: no maps in $MAP_DIR"; exit 1; }
+echo "cluster=$CLUSTER  role_dim=$ROLE_DIM  ckpt=$CKPT  maps=$MAP_DIR ($NUM_MAPS)  episodes=$EPISODES"
 
 # C binding loads pufferlib/config/ocean/drive.ini via a relative path.
 cd /scratch/e452103/PufferDrive
@@ -63,6 +67,7 @@ python "$CODE_DIR/role_paired_sweep.py" \
     --checkpoint "$CKPT" \
     --clusters   "$MAP_CLUSTERS" \
     --data_dir   "$MAP_DIR" \
+    --num_maps   "$NUM_MAPS" \
     --out_dir    "$OUT" \
     --n_axes 2 --alphas="-2,-1,0,1,2" \
     --warmup_episodes "$WARMUP" --episodes "$EPISODES" || exit 1
