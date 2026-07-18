@@ -47,12 +47,14 @@ _SID_RE = re.compile(r'"scenario_id"\s*:\s*"([^"]+)"')
 # Pool worker globals (set by _init_worker; inherited via fork on Linux).
 _INDEX = None
 _OUT_ROOT = None
+_NEUTRALIZE_SDC = True
 
 
-def _init_worker(index, out_root):
-    global _INDEX, _OUT_ROOT
+def _init_worker(index, out_root, neutralize_sdc):
+    global _INDEX, _OUT_ROOT, _NEUTRALIZE_SDC
     _INDEX = index
     _OUT_ROOT = out_root
+    _NEUTRALIZE_SDC = neutralize_sdc
 
 
 def quick_sid(path):
@@ -95,6 +97,8 @@ def build_one(task):
         md = json.load(f)
     sid = str(md.get("scenario_id", ""))[:16]
     objects = md.get("objects", [])
+    meta = md.setdefault("metadata", {})
+    orig_sdc = meta.get("sdc_track_index", -1)
     rows = []
     for k, map_id in jobs:
         members = _INDEX[sid][k]
@@ -109,12 +113,28 @@ def build_one(task):
                 n_control += 1
             else:
                 obj["mark_as_expert"] = 1
+        # SDC (ego) leakage fix: the C env's set_active_agents() force-activates
+        # the scenario's sdc_track_index UNCONDITIONALLY -- it never checks
+        # mark_as_expert -- so a foreign-cluster ego is controlled anyway (~18%
+        # of controlled agents, verified). If the SDC is NOT a cluster-K member,
+        # blank its index so the env cannot force-control it. Kept per-k because
+        # a cluster-K ego is legitimately controllable.
+        sdc_flag = -1  # -1 = no sdc, 0 = foreign sdc neutralized, 1 = cluster-K sdc kept
+        if 0 <= orig_sdc < len(objects):
+            sdc_is_k = (_is_vehicle(objects[orig_sdc])
+                        and int(objects[orig_sdc].get("id", -1)) in members)
+            if sdc_is_k or not _NEUTRALIZE_SDC:
+                meta["sdc_track_index"] = orig_sdc
+                sdc_flag = 1 if sdc_is_k else 0
+            else:
+                meta["sdc_track_index"] = -1
+                sdc_flag = 0
         # ALWAYS write, even on an id mismatch (n_control == 0): the C binding
         # loads map_%03d.bin by index, so a hole in the numbering is a crash,
         # while a 0-controllable map is merely skipped by binding.shared().
         out = Path(_OUT_ROOT) / f"cluster{k}" / f"map_{map_id:03d}.bin"
         save_map_binary(md, str(out), map_id)
-        rows.append((k, map_id, sid, path.name, n_control))
+        rows.append((k, map_id, sid, path.name, n_control, sdc_flag))
     return rows
 
 
@@ -133,6 +153,11 @@ def main():
                     help="min cluster-K vehicles for a scene to enter cluster K's set")
     ap.add_argument("--drop_edge", action="store_true",
                     help="exclude is_edge==1 vehicles from the control sets")
+    ap.add_argument("--keep_foreign_sdc", action="store_true",
+                    help="OLD behaviour: leave each scene's ego (SDC) index "
+                         "intact even when the ego is not a cluster-K vehicle. "
+                         "Default (off) blanks the SDC index for foreign egos so "
+                         "the env can't force-control them (~18%% leakage fix).")
     ap.add_argument("--workers", type=int, default=16)
     args = ap.parse_args()
 
@@ -187,7 +212,7 @@ def main():
         (out_root / f"cluster{k}").mkdir(parents=True, exist_ok=True)
     rows = []
     with Pool(args.workers, initializer=_init_worker,
-              initargs=(index, str(out_root))) as pool:
+              initargs=(index, str(out_root), not args.keep_foreign_sdc)) as pool:
         for out in pool.imap_unordered(build_one, tasks, chunksize=16):
             rows.extend(out)
 
@@ -200,11 +225,13 @@ def main():
         rs = sorted(by_k[k], key=lambda r: r[1])
         with open(out_root / f"cluster{k}" / "manifest.csv", "w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["map_id", "scenario_id", "src_json", "n_control"])
-            for _, mid, sid, src, nc in rs:
-                w.writerow([mid, sid, src, nc])
+            w.writerow(["map_id", "scenario_id", "src_json", "n_control", "sdc_flag"])
+            for _, mid, sid, src, nc, sf in rs:
+                w.writerow([mid, sid, src, nc, sf])
         n_scenes = len(rs)
         n_ctl = sum(r[4] for r in rs)
+        n_sdc_neutralized = sum(1 for r in rs if r[5] == 0)
+        n_sdc_kept = sum(1 for r in rs if r[5] == 1)
         n_empty = sum(1 for r in rs if r[4] < args.min_control)
         if n_empty:
             print(f"[cmaps] WARNING cluster {k}: {n_empty} scenes have "
@@ -213,6 +240,12 @@ def main():
                   f"map numbering contiguous; the env skips them at sampling.")
         print(f"[cmaps] {k:>8} {n_scenes:>7} {n_ctl:>13} "
               f"{(n_ctl / max(n_scenes, 1)):>10.2f}")
+        sdc_msg = (f"kept {n_sdc_kept} cluster-{k} egos, neutralized "
+                   f"{n_sdc_neutralized} foreign egos"
+                   if not args.keep_foreign_sdc
+                   else f"kept ALL egos ({n_sdc_kept} cluster-{k} + "
+                        f"{n_sdc_neutralized} foreign; --keep_foreign_sdc)")
+        print(f"         SDC: {sdc_msg}")
         print(f"         -> sbatch --export=ALL,CLUSTER={k} slurm/train_cluster.sbatch"
               f"   (num_maps auto = {n_scenes})")
     print(f"\n[cmaps] done -> {out_root}/cluster<K>/map_XXX.bin + manifest.csv")
