@@ -50,8 +50,16 @@ PYEOF
 python "$CODE_DIR/role_scene_consistency.py" \
     --agent_csv "$OUT/role_paired_agent.csv" --out_dir "$OUT"
 
+# Regenerate the by-trajectory-type dose-response plot too: the copy already
+# in $IN was built by role_paired_cluster_gpu.sbatch straight from the RAW
+# (unfiltered) agent CSV, so it still shows all 4 traj types (the
+# select_focals leakage). On the FILTERED CSV every row already has
+# traj_cluster==CLUSTER, so this collapses to the one genuine line.
+python "$CODE_DIR/role_paired_by_traj.py" \
+    --in_dir "$OUT" --traj_clusters "$TRAJ"
+
 python "$CODE_DIR/role_space_map.py" \
     --agent_csv "$IN/role_paired_warmup.csv" \
     --out "$IN/role_space_map.png"
 
-echo "Done -> $OUT (consistency) + $IN/role_space_map.png"
+echo "Done -> $OUT (consistency + clean single-type role_paired_traj_PC1/2.png) + $IN/role_space_map.png"
