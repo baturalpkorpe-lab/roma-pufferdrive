@@ -37,13 +37,28 @@ TWO THINGS TO CHECK BEFORE TRUSTING ABSOLUTE NUMBERS
    alphas: the experts contribute the same constant to every condition, so the
    role effect survives, merely compressed. controlled_frac in the output says
    how much dilution there is.
-2. Control mode. This script verifies empirically rather than trusting the
-   config: expert agents replay GT deterministically and are therefore
-   bit-identical across all 32 rollouts, while controlled agents sample
-   actions and vary. n_controlled_detected counts the varying agents; compare
-   it against manifest.csv's n_control for the same maps. A large mismatch
-   means control_mode is selecting the wrong population -- rerun with
-   --control_mode control_agents (the mode training used).
+2. Control mode. USE control_agents, NOT drive.ini's eval default. From
+   drive.h should_control_agent():
+
+       case CONTROL_WOSAC:
+           // Valid types only, ignore expert flag and goal distance
+           return (is_vehicle || is_ped_or_bike);
+
+   CONTROL_WOSAC returns before the mark_as_expert check, so it controls EVERY
+   vehicle, pedestrian and cyclist in the scene -- 100% leakage, which would
+   make a per-cluster evaluation meaningless. control_agents falls through to
+   the default branch, which does test mark_as_expert, and is the mode
+   training used. control_sdc_only is worse still: it returns
+   agent_idx == sdc_track_index, and make_cluster_maps blanks that index for
+   foreign egos, so most maps would have nothing controlled at all.
+
+   Note that control_agents ALSO applies a goal-distance filter
+   (distance_to_goal >= MIN_DISTANCE_TO_GOAL) and an active_agent_count cap,
+   so the controlled count is legitimately somewhat BELOW manifest n_control.
+   Training used the same filter, so eval and training populations match.
+   Verified empirically at runtime anyway: expert agents replay GT
+   deterministically and are bit-identical across all 32 rollouts, while
+   controlled agents sample actions and vary.
 
 Usage:
     PYTHONPATH=$HOME/roma_pufferdrive:/scratch/$USER/PufferDrive \
@@ -124,10 +139,12 @@ def parse_args():
                    help="Map batches. COST IS 5x A NORMAL WOSAC RUN (one pass "
                         "per alpha), so 20 here costs about what 100 costs in "
                         "eval_wosac.sbatch. Raise only with the wall clock.")
-    p.add_argument("--control_mode", type=str, default="",
-                   help="Override the env control mode. Empty = drive.ini's "
-                        "eval.wosac_control_mode. Use control_agents if the "
-                        "controlled-agent check reports a mismatch.")
+    p.add_argument("--control_mode", type=str, default="control_agents",
+                   help="Env control mode. DEFAULTS TO control_agents, NOT to "
+                        "drive.ini's eval.wosac_control_mode: CONTROL_WOSAC "
+                        "ignores mark_as_expert and would control every agent "
+                        "in the scene, destroying the per-cluster population. "
+                        "Pass '' to fall back to the drive.ini eval value.")
     p.add_argument("--device",     type=str, default="cuda")
     return p.parse_args()
 
@@ -361,15 +378,19 @@ def main():
     print(f"  control_mode used        : {control_mode}")
     print(f"  agents per env           : {args.num_agents}")
     print(f"  detected as CONTROLLED   : {nd:.0f}  ({100*cf:.1f}%)")
-    print(f"  the rest replay GT exactly (bit-identical across 32 rollouts)")
-    print( "  -> compare the controlled count against manifest.csv n_control")
-    print( "     summed over the maps in a batch. A large mismatch means the")
-    print( "     control mode is picking the wrong population.")
+    print( "  the rest replay GT exactly (bit-identical across 32 rollouts)")
+    print( "  -> expect somewhat BELOW manifest.csv n_control: control_agents")
+    print( "     also applies the goal-distance filter and the active-agent cap,")
+    print( "     exactly as training did.")
+    if control_mode == "control_wosac":
+        print("\n  *** WRONG MODE ***  drive.h CONTROL_WOSAC returns before the")
+        print("      mark_as_expert check ('ignore expert flag'), so every")
+        print("      vehicle/ped/cyclist is controlled and the cluster")
+        print("      population is gone. Rerun with --control_mode control_agents.")
     if nd < 1:
-        print("  WARNING: NOTHING was controlled. If control_mode is")
-        print("           control_sdc_only this is expected -- make_cluster_maps")
-        print("           blanks sdc_track_index for foreign egos. Use")
-        print("           --control_mode control_agents.")
+        print("\n  WARNING: NOTHING was controlled. Expected if control_mode is")
+        print("           control_sdc_only -- make_cluster_maps blanks")
+        print("           sdc_track_index for foreign egos. Use control_agents.")
     print("\n" + "=" * 70)
     print(f"  RESULTS BY ALPHA  ({args.axis} natural-offset sweep)")
     print("=" * 70)

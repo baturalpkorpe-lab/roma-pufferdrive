@@ -16,13 +16,14 @@
 #   sbatch --export=ALL,CLUSTER=3 slurm/wosac_cluster.sbatch
 #
 # WALL CLOCK: cost is 5x a normal WOSAC run because every map batch is rolled
-# out once per alpha. BATCHES=20 lands near a normal 100-batch eval; 23h is
-# sized for that. Raise BATCHES only if a run finishes with time to spare.
+# out once per alpha. A 100-batch eval runs ~5h, so 70 batches x 5 conditions
+# is ~17h and fits 23h with margin. If it does hit the wall clock the metrics
+# written so far are still aggregated per batch, so a short run is not a lost
+# run -- it just has fewer scenarios.
 #
-# The evaluation population comes from the cluster map BINARIES
-# (mark_as_expert, set by make_cluster_maps.py), not from control_mode. If the
-# controlled-agent check in the log reports a mismatch against manifest.csv's
-# n_control, rerun with CONTROL_MODE=control_agents.
+# CONTROL MODE IS NOT THE DEFAULT ONE, on purpose -- see the CONTROL_MODE
+# comment below. drive.ini's eval.wosac_control_mode is control_wosac, which
+# ignores mark_as_expert entirely and would control every agent in the scene.
 
 set -u
 
@@ -41,9 +42,16 @@ OUT=${OUT:-$SCRATCH_ROOT/wosac_cluster/cluster${CLUSTER}}
 
 ALPHAS=${ALPHAS:--1,-0.5,0,0.5,1}
 AXIS=${AXIS:-PC1}
-BATCHES=${BATCHES:-20}
+BATCHES=${BATCHES:-70}
 ROLLOUTS=${ROLLOUTS:-32}
-CONTROL_MODE=${CONTROL_MODE:-}
+# MUST be control_agents, not drive.ini's eval default of control_wosac.
+# drive.h should_control_agent(): the CONTROL_WOSAC branch returns early on
+# "valid types only, ignore expert flag and goal distance", so it controls
+# EVERY vehicle/pedestrian/cyclist and never consults mark_as_expert -- which
+# would put 100% of the scene under policy control and destroy the per-cluster
+# evaluation. control_agents falls through to the default branch, which does
+# check mark_as_expert, and is the mode training used.
+CONTROL_MODE=${CONTROL_MODE:-control_agents}
 
 module purge
 module load miniconda3
