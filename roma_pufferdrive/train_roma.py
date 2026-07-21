@@ -174,6 +174,28 @@ def parse_args():
     p.add_argument("--div_weight",    type=float, default=0.1,
                    help="Weight on cosine diversity loss. Safe in [-1,+1] range.")
 
+    # Role input rebalancing (see policy.RomaPolicy). The POLICY always keeps
+    # the full 128-dim env embedding; these only resize the ROLE encoder's view.
+    p.add_argument("--role_partner_dim", type=int, default=None,
+                   help="Partner width in the role encoder's input. Default "
+                        "None = 32 (the partner encoder's own out_dim, i.e. "
+                        "unchanged). Raise it to make the role more relational.")
+    p.add_argument("--role_road_dim",    type=int, default=None,
+                   help="Road width in the role encoder's input. Default None "
+                        "= 64 (unchanged), which is half the role's input "
+                        "bandwidth and the main channel by which the map "
+                        "determines the role. 16 keeps the role road-aware "
+                        "without letting geometry dominate it; 0 removes road "
+                        "from the role entirely.")
+    p.add_argument("--mi_target", type=str, default="full",
+                   choices=["full", "ego_partner"],
+                   help="What the MI loss asks the role to predict. 'full' "
+                        "(default) = a summary of the whole env embedding, "
+                        "road included -- the role is rewarded for encoding "
+                        "the map. 'ego_partner' drops road from the TARGET "
+                        "only; the role can still see the road, it just is not "
+                        "rewarded for reciting it.")
+
     # PPO
     p.add_argument("--total_steps",   type=int,   default=1_000_000_000,
                    help="Total training steps. 1B for full run, 2M for CPU test.")
@@ -776,6 +798,7 @@ def train(args):
     print(f"[ROMA] total_steps   : {args.total_steps:,}")
     print(f"[ROMA] mi_weight     : {args.mi_weight}")
     print(f"[ROMA] div_weight    : {args.div_weight}")
+    print(f"[ROMA] mi_target     : {args.mi_target}")
 
     # Init wandb (optional)
     wandb_run = init_wandb(args)
@@ -798,20 +821,29 @@ def train(args):
 
     # Build policy using structured encoders from roma/policy.py
     policy = RomaPolicy(
-        obs_dim        = obs_dim,
-        action_dim     = action_dim,
-        role_dim       = args.role_dim,
-        role_hidden    = args.role_hidden,
-        policy_hidden  = args.policy_hidden,
-        var_floor      = args.var_floor,
-        obs_window_len = 8,
+        obs_dim          = obs_dim,
+        action_dim       = action_dim,
+        role_dim         = args.role_dim,
+        role_hidden      = args.role_hidden,
+        policy_hidden    = args.policy_hidden,
+        var_floor        = args.var_floor,
+        obs_window_len   = 8,
+        role_partner_dim = args.role_partner_dim,
+        role_road_dim    = args.role_road_dim,
     ).to(device)
+
+    # 'ego_partner' keeps only the [ego | partner] prefix of the env embedding
+    # in the MI target. Derived from the encoders rather than hardcoded to 64
+    # so it follows if their out_dims ever change.
+    mi_emb_dim = (None if args.mi_target == "full"
+                  else policy.ego_enc.out_dim + policy.partner_enc.out_dim)
 
     aux_loss_fn = RomaAuxLoss(
         role_dim   = args.role_dim,
         emb_dim    = policy.env_embed_dim,
         mi_weight  = args.mi_weight,
         div_weight = args.div_weight,
+        mi_emb_dim = mi_emb_dim,
     ).to(device)
 
     optimizer = Adam(
