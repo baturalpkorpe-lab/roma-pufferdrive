@@ -90,12 +90,19 @@ def init_wandb(args):
             os.environ["WANDB_MODE"] = "offline"
             print("[ROMA] wandb running in offline mode. Run 'wandb sync' later to upload.")
 
+        default_name = f"roma_dim{args.role_dim}_maps{args.num_maps}_{args.seed}"
+        tags = [f"role_dim_{args.role_dim}", f"maps_{args.num_maps}"]
+        # An ablation that changes a loss weight produces the SAME default name
+        # as its control run, which makes the two indistinguishable in the
+        # wandb sidebar. Tag div_weight so they always separate.
+        tags.append(f"div_weight_{args.div_weight:g}")
+
         run = wandb.init(
             project = args.wandb_project,
             entity  = args.wandb_entity or None,
-            name    = f"roma_dim{args.role_dim}_maps{args.num_maps}_{args.seed}",
+            name    = args.wandb_name or default_name,
             config  = vars(args),
-            tags    = [f"role_dim_{args.role_dim}", f"maps_{args.num_maps}"],
+            tags    = tags,
         )
         print(f"[ROMA] wandb initialized: {run.url}")
         return run
@@ -190,12 +197,24 @@ def parse_args():
                    help="Save checkpoint every N steps. 500M for 2B run, 1M for CPU test.")
     p.add_argument("--log_interval",  type=int,   default=50_000)
     p.add_argument("--seed",          type=int,   default=0)
+    p.add_argument("--resume",        type=str,   default=None,
+                   help="Checkpoint .pt to resume from: loads policy_state "
+                        "(+ aux_loss_state when present -- step checkpoints "
+                        "have it, final.pt does not) and continues "
+                        "global_step. Adam restarts fresh (moments were "
+                        "never saved). --total_steps must exceed the "
+                        "resumed step.")
 
     # Wandb
     p.add_argument("--wandb_project", type=str,   default=None,
                    help="Wandb project name. If not set, wandb is disabled.")
     p.add_argument("--wandb_entity",  type=str,   default=None,
                    help="Wandb username or team. Optional.")
+    p.add_argument("--wandb_name",    type=str,   default=None,
+                   help="Wandb run name. Default: "
+                        "roma_dim<D>_maps<N>_<seed>. Set it for ablations "
+                        "(e.g. div_weight=0), which otherwise collide with "
+                        "their control run's auto-generated name.")
     p.add_argument("--wandb_offline", action="store_true",
                    help="Run wandb in offline mode. Logs saved locally, sync later.")
 
@@ -801,21 +820,50 @@ def train(args):
     )
     Path(args.save_dir).mkdir(parents=True, exist_ok=True)
 
-    # CSV logger — always runs regardless of wandb
+    # ---- Resume (warm restart) ----
+    # Loads policy weights (+ MI/div critic weights when present) and
+    # continues global_step. Adam moments were never saved, so the optimizer
+    # restarts fresh -- expect a brief loss transient that settles within a
+    # few updates (constant lr, no scheduler).
+    resume_step = 0
+    if args.resume:
+        ck = torch.load(args.resume, map_location=device, weights_only=False)
+        policy.load_state_dict(ck["policy_state"])
+        loaded = "policy"
+        if "aux_loss_state" in ck:
+            aux_loss_fn.load_state_dict(ck["aux_loss_state"])
+            loaded += " + aux critics"
+        else:
+            print("[ROMA] WARNING: no aux_loss_state in this checkpoint "
+                  "(final.pt never saves it) -- MI/div critics restart "
+                  "fresh; prefer resuming from the last STEP checkpoint.")
+        resume_step = int(ck.get("global_step", 0))
+        print(f"[ROMA] Resumed {loaded} from {args.resume} "
+              f"@ step {resume_step:,} (fresh Adam)")
+        if resume_step >= args.total_steps:
+            raise SystemExit(
+                f"--total_steps {args.total_steps:,} <= resumed step "
+                f"{resume_step:,}: nothing to train. Raise --total_steps.")
+
+    # CSV logger — always runs regardless of wandb; appends on resume so the
+    # original training curve is preserved.
     log_csv = Path(args.save_dir) / "training_log.csv"
-    with open(log_csv, "w", newline="") as f:
-        csv.writer(f).writerow([
-            "step", "sps", "policy_loss", "value_loss",
-            "mi_loss", "div_loss", "kl_loss", "score", "mean_return",
-            "ego_enc_delta", "partner_enc_delta", "road_enc_delta",
-            "role_std", "role_norm",
-        ])
-    print(f"[ROMA] CSV log       : {log_csv}")
+    append_log = bool(args.resume) and log_csv.exists()
+    with open(log_csv, "a" if append_log else "w", newline="") as f:
+        if not append_log:
+            csv.writer(f).writerow([
+                "step", "sps", "policy_loss", "value_loss",
+                "mi_loss", "div_loss", "kl_loss", "score", "mean_return",
+                "ego_enc_delta", "partner_enc_delta", "road_enc_delta",
+                "role_std", "role_norm",
+            ])
+    print(f"[ROMA] CSV log       : {log_csv}"
+          + ("  (appending)" if append_log else ""))
 
     B           = args.num_agents
-    global_step = 0
-    next_save   = args.save_interval
-    next_wosac  = (args.wosac_interval
+    global_step = resume_step
+    next_save   = resume_step + args.save_interval
+    next_wosac  = (resume_step + args.wosac_interval
                    if (args.wosac_periodic and args.wosac_interval > 0)
                    else float("inf"))
     ep_scores   = deque(maxlen=100)
