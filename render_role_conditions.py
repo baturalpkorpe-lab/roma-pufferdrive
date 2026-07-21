@@ -335,15 +335,34 @@ def _scene_collision_frames(xs, ys, hs, length, width, focal, end):
     directly on recorded trajectory data -- no env access, no C changes.
     Shared core for focal_collision_frames (CSV metric, full raw rollout
     data) and render_condition_video (already scene-subsetted view, so the
-    video's on-screen collision flag matches the CSV number exactly)."""
+    video's on-screen collision flag matches the CSV number exactly).
+
+    Each PARTNER counts only during its FIRST life: a >JUMP_THRESH single-step
+    jump is a respawn teleport (the env re-deals the agent onto its own route
+    start, which can land ON the focal -- verified in scene 1abcfdd308: a
+    partner jumped 25.8 m in one step onto the goal area and flagged 13 red
+    frames). The renderer never draws that respawned body (gt_background draws
+    the human GT; trails are cut at the same threshold), so counting it
+    produced phantom "collisions with nothing". This mirrors the focal's own
+    pre-respawn cut (`end`), now applied per-partner."""
     n = xs.shape[1]
     flags = np.zeros(end, dtype=bool)
+    # per-partner first-respawn cut: frame index of its first >JUMP_THRESH jump
+    life_end = np.full(n, end, dtype=int)
+    for a in range(n):
+        dx = np.diff(xs[:end, a])
+        dy = np.diff(ys[:end, a])
+        with np.errstate(invalid="ignore"):
+            jump = np.sqrt(dx * dx + dy * dy) > JUMP_THRESH
+        j = np.where(jump)[0]
+        if len(j):
+            life_end[a] = int(j[0]) + 1     # first post-teleport frame
     for t in range(end):
         x1, y1, h1 = xs[t, focal], ys[t, focal], hs[t, focal]
         if not (np.isfinite(x1) and np.isfinite(y1)):
             continue
         for a in range(n):
-            if a == focal:
+            if a == focal or t >= life_end[a]:
                 continue
             x2, y2, h2 = xs[t, a], ys[t, a], hs[t, a]
             if not (np.isfinite(x2) and np.isfinite(y2)):

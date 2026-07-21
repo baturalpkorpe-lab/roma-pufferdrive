@@ -33,6 +33,14 @@ SAVE_DIR=${SAVE_DIR:-/scratch/e452103/checkpoints/roma_cluster${CLUSTER}_dim${RO
 TOTAL_STEPS=${TOTAL_STEPS:-2000000000}
 SAVE_INTERVAL=${SAVE_INTERVAL:-500000000}
 SEED=${SEED:-0}
+# Continue a finished/interrupted run: RESUME=<ckpt.pt> and RAISE TOTAL_STEPS
+# past the checkpoint's step. Prefer the last STEP checkpoint (it carries the
+# MI/div aux critic weights; final.pt does not). Back up the old final first:
+# it gets overwritten when the resumed run finishes.
+#   sbatch --export=ALL,CLUSTER=2,TOTAL_STEPS=3000000000,\
+#     RESUME=/scratch/e452103/checkpoints/roma_cluster2_dim4/roma_dim4_step<S>.pt \
+#     slurm/train_cluster.sbatch
+RESUME=${RESUME:-}
 
 module purge
 module load miniconda3
@@ -62,6 +70,9 @@ fi
 # C binding loads pufferlib/config/ocean/drive.ini via a relative path.
 cd /scratch/e452103/PufferDrive
 
+RESUME_ARGS=""
+[ -n "$RESUME" ] && RESUME_ARGS="--resume $RESUME"
+
 python "$CODE_DIR/roma_pufferdrive/train_roma.py" \
     --role_dim      "$ROLE_DIM" \
     --data_dir      "$MAP_DIR" \
@@ -73,6 +84,7 @@ python "$CODE_DIR/roma_pufferdrive/train_roma.py" \
     --save_dir      "$SAVE_DIR" \
     --seed          "$SEED" \
     --wosac_periodic 0 \
+    $RESUME_ARGS \
     $WANDB_ARGS
 
 echo "Done -> $SAVE_DIR"

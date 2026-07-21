@@ -114,7 +114,10 @@ def main():
                     j = sub.join(base, how="inner", lsuffix="", rsuffix="_b")
                     dd = (j[met] - j[f"{met}_b"])[j["traj_cluster"] == tcid]
                     dd = dd.dropna()
-                    if len(dd) < 5:
+                    # 3 (not 5): rare-focal types (stop&go barely ever wins the
+                    # farthest-driving focal pick) sit at ~4 pairs/alpha and
+                    # were silently dropped from the figure entirely.
+                    if len(dd) < 3:
                         continue
                     xr.append(al)
                     yr.append(float(dd.mean()))
@@ -136,7 +139,7 @@ def main():
             for tcid in clusters:
                 dd2 = (j2[met] - j2[f"{met}_lo"])[j2["traj_cluster"] == tcid]
                 dd2 = dd2.dropna()
-                if len(dd2) >= 5:
+                if len(dd2) >= 3:
                     test_rows.append({
                         "axis": pc, "metric": met, "traj_cluster": tcid,
                         "hi": hi, "lo": lo,
