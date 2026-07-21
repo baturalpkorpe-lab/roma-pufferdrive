@@ -47,7 +47,14 @@ for K in $(echo "$CLUSTERS" | tr ',' ' '); do
         [ -n "$val" ] && E="$E,$v=$val"
     done
     J=$(sbatch --parsable --export="$E" "$HERE/wosac_cluster.sbatch")
-    echo "cluster $K : $J   axes=$(basename "$(dirname "${AXES:-$(axes_for "$K")}")")  ckpt=$(basename "${CKPT:-$(ckpt_for "$K")}")"
+    # Print the PARENT DIR of each path, not just the basename: every cluster's
+    # checkpoint is named roma_dim<D>_final.pt and only the directory
+    # distinguishes them, so a basename-only echo looks like all four jobs
+    # share one checkpoint.
+    a="${AXES:-$(axes_for "$K")}"; c="${CKPT:-$(ckpt_for "$K")}"
+    echo "cluster $K : $J"
+    echo "    axes  $(basename "$(dirname "$a")")/$(basename "$a")"
+    echo "    ckpt  $(basename "$(dirname "$c")")/$(basename "$c")"
 done
 echo
 echo "results -> $SCRATCH_ROOT/wosac_cluster/cluster<K>/wosac_by_alpha.csv"
