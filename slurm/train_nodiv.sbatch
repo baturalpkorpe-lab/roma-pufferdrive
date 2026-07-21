@@ -98,7 +98,17 @@ RESUME_ARGS=""
 LATEST=$(ls "$SAVE_DIR"/roma_dim${ROLE_DIM}_step*.pt 2>/dev/null \
          | sed 's/.*_step\([0-9]*\)\.pt/\1 &/' | sort -k1,1n | tail -1 | cut -d' ' -f2-)
 if [ -n "$LATEST" ]; then
-    echo "[nodiv] resuming from $LATEST"
+    # Already finished? Exit 0, not 1. These jobs are submitted as a chain of
+    # 3 (--dependency=afterany) because 3B steps does not fit in one 24h
+    # allocation, and the eval job hangs off the last one with afterok. If the
+    # run completed early, train_roma.py would exit non-zero on
+    # "--total_steps <= resumed step" and take the eval down with it.
+    LATEST_STEP=$(echo "$LATEST" | sed 's/.*_step\([0-9]*\)\.pt/\1/')
+    if [ -f "$SAVE_DIR/roma_dim${ROLE_DIM}_final.pt" ] || [ "$LATEST_STEP" -ge "$TOTAL_STEPS" ]; then
+        echo "[nodiv] already at step $LATEST_STEP / $TOTAL_STEPS -- nothing to do"
+        exit 0
+    fi
+    echo "[nodiv] resuming from $LATEST (step $LATEST_STEP)"
     RESUME_ARGS="--resume $LATEST"
 else
     echo "[nodiv] no existing checkpoint in $SAVE_DIR -- fresh run"
