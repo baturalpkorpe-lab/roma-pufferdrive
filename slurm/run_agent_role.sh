@@ -4,13 +4,15 @@
 #   bash slurm/run_agent_role.sh          # dim 4, road 16, partner 64, MI ego_partner
 #   bash slurm/run_agent_role.sh 4        # explicit role_dim
 #
-# Submits three chained training jobs (3B steps does not fit one 24h
-# allocation, so each resumes from the previous one's last checkpoint; the
-# extras exit immediately once the run is complete) followed by the full
-# post-training eval: role health check + WOSAC at 100 batches.
+# Submits ONE training job (3B steps in the 24h allocation), then the full
+# post-training eval -- role health check + WOSAC at 100 batches -- and the
+# scene-ICC diagnostic, both chained afterok so the number this change is
+# aimed at lands without a second submission.
 #
-# Also queues the scene-ICC diagnostic on the finished checkpoint, so the
-# number this whole change is aimed at lands without a second submission.
+# Deliberately not a resume chain: checkpoints are written every 500M steps,
+# so a job that dies at 1.29B would resume from 1.0B and burn 290M steps over
+# again. If the wall clock does cut it short, just run this script again --
+# the sbatch auto-resumes from the last checkpoint in SAVE_DIR.
 #
 # Override any of ROLE_ROAD_DIM / ROLE_PARTNER_DIM / MI_TARGET / SEED /
 # SCRATCH_ROOT / PUFFER_DIR by exporting them first.
@@ -39,11 +41,7 @@ for v in ROLE_ROAD_DIM ROLE_PARTNER_DIM MI_TARGET SEED SCRATCH_ROOT PUFFER_DIR D
 done
 
 J=$(sbatch --parsable --export="$E" "$HERE/train_agent_role.sbatch")
-echo "train 1/3 : $J"
-for i in 2 3; do
-    J=$(sbatch --parsable --dependency=afterany:$J --export="$E" "$HERE/train_agent_role.sbatch")
-    echo "train $i/3 : $J"
-done
+echo "train     : $J"
 EV=$(sbatch --parsable --dependency=afterok:$J --export="$E" "$HERE/eval_final.sbatch")
 echo "eval      : $EV"
 IC=$(sbatch --parsable --dependency=afterok:$J \

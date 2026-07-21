@@ -41,10 +41,15 @@
 # or, for the whole chain in one line:
 #   bash slurm/run_agent_role.sh
 #
-# AUTO-RESUME + the 3-job chain + no --run_eval: same reasoning as
-# train_nodiv.sbatch. 3B does not fit one 24h allocation; the in-process
-# post-training eval segfaults in the C binding, so the full 100-batch WOSAC
-# and the role health check run separately via slurm/eval_final.sbatch.
+# Submitted as ONE job: 3B fits the 24h allocation. Not chained on purpose --
+# checkpoints land every 500M steps, so a resume after a job that died at
+# 1.29B would restart from 1.0B and redo 290M steps. AUTO-RESUME is still
+# here as a recovery path: if the wall clock does cut this short, resubmit and
+# it continues from the last checkpoint in SAVE_DIR.
+#
+# No --run_eval: the in-process post-training eval segfaults in the C binding
+# (repeated Drive() instantiations), so the full 100-batch WOSAC and the role
+# health check run separately via slurm/eval_final.sbatch.
 
 set -u
 
