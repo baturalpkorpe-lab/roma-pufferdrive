@@ -172,12 +172,71 @@ else
     echo "[nodiv_an] skip: $WARMUP missing"
 fi
 
+# --- Collect logs + write the folder index ---------------------------------
+# Everything lands under ONE root ($OUT_ROOT) so it can be zipped and sent as a
+# single archive. The chained render job (render_grid_traj) drops its videos in
+# $OUT_ROOT/renders/role_grid and makes the final zip.
+mkdir -p "$OUT_ROOT/logs"
+cp -f "$SLURM_SUBMIT_DIR/nodiv_an_${SLURM_JOB_ID}.out" "$OUT_ROOT/logs/" 2>/dev/null || true
+cp -f "$SLURM_SUBMIT_DIR/nodiv_an_${SLURM_JOB_ID}.err" "$OUT_ROOT/logs/" 2>/dev/null || true
+
+cat > "$OUT_ROOT/README.txt" <<READMEEOF
+Trajectory-cluster role analysis -- $TAG
+checkpoint: $CKPT
+trajectory clustering: $TRAJ  (0=mid-speed 1=fast 2=stop&go 3=turning)
+generated: $(date)
+
+EVERYTHING here is stratified by TRAJECTORY CLUSTER. No map-regime clustering.
+
+paired/                            role-pairing analysis
+  role_paired_agent.csv            one row per (episode, forced-role condition,
+                                   scene, focal vehicle): the alpha condition +
+                                   every measured behaviour metric. The raw table.
+  role_paired_deltas.csv           paired deltas vs alpha=0 (same map+vehicle),
+                                   per forcing direction x alpha.
+  role_paired_tests.csv            HEADLINE stats: alpha +2 vs -2 same-map paired
+                                   difference -- mean, sem, t, n -- per direction
+                                   x metric. "does forcing the role move behaviour?"
+  role_paired_PC1.png              dose-response of the paired deltas along PC1
+  role_paired_PC2.png              same along PC2 (0 at alpha=0 by construction)
+  role_paired_traj_PC1.png         *** THE distinction figure ***: the PC1
+  role_paired_traj_PC2.png         dose-response SPLIT BY TRAJECTORY CLUSTER --
+                                   one line per type. Shows the roles pull each
+                                   trajectory type differently.
+  role_paired_traj_deltas.csv      the numbers behind those two figures
+  role_paired_traj_tests.csv       per-trajectory-cluster significance
+  role_scene_consistency.csv       within-scene role consistency, per trajectory
+                                   cluster (does a scene's agents get consistent
+                                   roles?)
+  role_paired_warmup.csv           natural (UNFORCED) roles + behaviour per agent
+                                   -- the observational baseline
+  role_paired_observational.png    natural role-projection vs behaviour scatter
+  role_paired_axes.csv             the PC1/PC2 forcing directions + sigma (also
+                                   the input to the video grid)
+  role_space_map.png               2-D PCA of natural roles, coloured by speed,
+                                   with the PC1/PC2 dials + alpha tick marks
+  role_role_corr.png               role dims against each other (redundancy)
+  role_feature_corr.png            role dims against raw behaviour features
+  scenario_traj_scaffold.csv       internal: scene -> dominant trajectory cluster
+                                   (drives sweep scene-eligibility; not a result)
+
+renders/role_grid/                 trajectory-cluster VIDEOS (from the CPU job)
+  *.mp4                            scenes_per_type scenes PER TRAJECTORY CLUSTER,
+                                   each rendered across the PC1xPC2 forcing grid --
+                                   watch how mid-speed/fast/stop&go/turning each
+                                   respond to role forcing.
+  grid_summary.csv                 per-cell metric summary for the grid
+
+logs/                              the SLURM .out/.err of both jobs
+
+CAVEAT on the paired STATS (not the videos): the sweep picks one focal per
+scene = the farthest-driving vehicle, which skews toward fast/long trajectories.
+So the role_paired_traj_* lines are solid for mid-speed/fast but thin (small n)
+for stop&go/turning. The VIDEO grid does NOT have this bias -- it samples each
+trajectory cluster evenly. For statistically strong per-type dose-response, use
+the per-cluster-trained models instead.
+READMEEOF
+
 echo
-echo "[nodiv_an] DONE -> $OUT_ROOT"
-echo "  paired/  role_paired_{agent,deltas,tests,warmup,axes}.csv + PC plots"
-echo "           role_paired_traj_PC1/PC2.png  (dose-response PER trajectory cluster)"
-echo "           role_scene_consistency.csv + role_space_map.png + feature corr"
-echo
-echo "  NEXT: the trajectory-cluster VIDEO grid (separate CPU job):"
-echo "    sbatch --export=ALL,CKPT=$CKPT,AXES=$PAIRED/role_paired_axes.csv,\\"
-echo "      OUT=$OUT_ROOT/renders/role_grid,TRAJ=$TRAJ slurm/render_grid_traj.sbatch"
+echo "[nodiv_an] DONE -> $OUT_ROOT  (see README.txt for the file guide)"
+echo "[nodiv_an] the chained render job adds renders/role_grid/ and zips the folder"

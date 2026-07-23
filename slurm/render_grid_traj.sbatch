@@ -70,6 +70,30 @@ python "$CODE_DIR/render_role_grid.py" \
     --out_dir        "$OUT" \
     --alphas="$ALPHAS" --grid 1 \
     --scenes_per_type "$SCENES_PER_TYPE" \
-    --type_names     "$TYPE_NAMES"
+    --type_names     "$TYPE_NAMES" \
+  || echo "[grid_traj] WARNING: render exited nonzero -- zipping whatever exists"
+
+# --- Collect this job's log + zip the WHOLE analysis folder ----------------
+# ROOT is the single folder the analysis job + this render both write into, so
+# one zip is the complete deliverable to send.
+ROOT=${ROOT:-$SCRATCH_ROOT/analysis/$TAG}
+mkdir -p "$ROOT/logs"
+cp -f "$SLURM_SUBMIT_DIR/grid_traj_${SLURM_JOB_ID}.out" "$ROOT/logs/" 2>/dev/null || true
+cp -f "$SLURM_SUBMIT_DIR/grid_traj_${SLURM_JOB_ID}.err" "$ROOT/logs/" 2>/dev/null || true
+
+# Prefer zip; fall back to tar.gz if the node has no zip binary. Either way it
+# is ONE archive of the whole folder for the supervisor to send.
+base=$(basename "$ROOT"); parent=$(dirname "$ROOT")
+if command -v zip >/dev/null 2>&1; then
+    ARCHIVE="$SCRATCH_ROOT/analysis/${TAG}.zip"
+    echo "[grid_traj] zipping $ROOT -> $ARCHIVE  (videos dominate the size)"
+    ( cd "$parent" && rm -f "$ARCHIVE" && zip -r -q "$ARCHIVE" "$base" )
+else
+    ARCHIVE="$SCRATCH_ROOT/analysis/${TAG}.tar.gz"
+    echo "[grid_traj] no zip binary -- using tar: $ROOT -> $ARCHIVE"
+    ( cd "$parent" && tar -czf "$ARCHIVE" "$base" )
+fi \
+  && echo "[grid_traj] SEND THIS ONE FILE: $ARCHIVE ($(du -h "$ARCHIVE" 2>/dev/null | cut -f1))" \
+  || echo "[grid_traj] archive failed -- the folder is still complete at $ROOT"
 
 echo "[grid_traj] done -> $OUT"
