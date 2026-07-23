@@ -7,14 +7,18 @@ and joins it back to trajectory_features.csv. It never re-runs K-means, so the
 colors and cluster sizes match the tatlas_pca.png you already have exactly --
 this only re-draws the same labels on different axes.
 
-Two figures:
+Figures (choose with --plots, default "3d,examples"):
 
-  cluster_feature_space.png
+  cluster_3d.png   [default]
+      A 3D scatter of the clusters on three RAW feature axes -- by default
+      speed_mean x net_turn x stop_frac -- coloured by cluster. Static PNG from
+      one camera angle (--elev/--azim); re-run with a couple of azimuths to
+      "rotate" it.
+
+  cluster_feature_space.png   [--plots matrix]
       A scatter-matrix of the RAW features (original units, no PCA) coloured by
-      cluster, edges (is_edge==1) in black -- the same legend/colors as the PCA
-      figure. The diagonal holds each feature's per-cluster histograms, so you
-      see where the clusters actually separate (e.g. net_turn) and where they
-      overlap (e.g. speed_mean once mid-speed and turning have merged).
+      cluster, edges (is_edge==1) in black, per-cluster histograms on the
+      diagonal.
 
   cluster<K>_examples.png
       A grid of N real GT trajectories from ONE cluster (needs
@@ -54,10 +58,24 @@ def parse_args():
                    help="Frozen trajectory_clusters.csv from trajectory_atlas.py "
                         "(the K you want to view, e.g. k3/)")
     p.add_argument("--out_dir", type=str, required=True)
+    p.add_argument("--plots", type=str, default="3d,examples",
+                   help="Which figures to make (comma list of: 3d, matrix, "
+                        "examples). Default = the 3D scatter + the example "
+                        "grid.")
     p.add_argument("--features", type=str, default="speed_mean,net_turn,stop_frac,distance",
-                   help="Raw features for the scatter-matrix axes (comma list). "
-                        "Default = the interpretable 4. Use all 6 for the full "
-                        "matrix.")
+                   help="Raw features for the scatter-MATRIX axes (comma list). "
+                        "Only used when 'matrix' is in --plots.")
+    p.add_argument("--axes3d", type=str, default="speed_mean,net_turn,stop_frac",
+                   help="The three raw features for the 3D scatter axes "
+                        "(x,y,z). Default = speed_mean, net_turn, stop_frac.")
+    p.add_argument("--elev", type=float, default=22.0,
+                   help="3D camera elevation angle")
+    p.add_argument("--azim", type=float, default=-60.0,
+                   help="3D camera azimuth. Re-run with a few values to rotate "
+                        "the view (it is a static PNG, not interactive).")
+    p.add_argument("--edges3d", action="store_true",
+                   help="Also draw edge trajectories (is_edge==1) in black in "
+                        "the 3D scatter. Off by default -- clutters the cloud.")
     p.add_argument("--cluster", type=int, default=1,
                    help="Which cluster to dump examples from (1 = orange in the "
                         "tab10 palette, matching the PCA figure)")
@@ -110,7 +128,11 @@ def main():
     out = Path(args.out_dir); out.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(args.seed)
 
+    plots = [s.strip() for s in args.plots.split(",") if s.strip()]
     feats = [f.strip() for f in args.features.split(",")]
+    ax3 = [f.strip() for f in args.axes3d.split(",")]
+    if "3d" in plots and len(ax3) != 3:
+        raise SystemExit(f"--axes3d needs exactly 3 features, got {ax3}")
 
     # --- Join frozen labels back to the features ---------------------------
     cl = pd.read_csv(args.clusters_csv)
@@ -120,11 +142,13 @@ def main():
         raise SystemExit(f"{args.clusters_csv} missing {need - set(cl.columns)}")
     df = cl.merge(fe, on=["scenario_id", "vehicle_id"], how="left",
                   suffixes=("", "_f"))
-    missing = [f for f in feats + ALL_FEATURES if f not in df.columns]
-    if set(feats) & set(missing):
-        raise SystemExit(f"features {set(feats)&set(missing)} not in the "
-                         f"features CSV (have {list(fe.columns)})")
-    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=feats)
+    # Only the features the requested plots actually use must be present.
+    used = (feats if "matrix" in plots else []) + (ax3 if "3d" in plots else [])
+    missing = [f for f in used if f not in df.columns]
+    if missing:
+        raise SystemExit(f"features {missing} not in the features CSV "
+                         f"(have {list(fe.columns)})")
+    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=used or None)
     if "is_edge" not in df.columns:
         df["is_edge"] = 0
 
@@ -140,10 +164,9 @@ def main():
     print("[view] clusters:", {int(c): f"{names[int(c)]} ({sizes[int(c)]})"
                                for c in Ks})
 
-    # --- Fig 1: raw-feature scatter matrix ---------------------------------
+    # Stratified downsample per cluster so a small cluster is not swamped.
     core = df[df["is_edge"] == 0]
     edge = df[df["is_edge"] == 1]
-    # Stratified downsample per cluster so green (small) is not swamped.
     per = max(1, args.max_points // max(len(Ks), 1))
     show_idx = []
     for c in Ks:
@@ -154,48 +177,83 @@ def main():
                                  min(per, len(edge)), replace=False)] \
              if len(edge) else edge
 
-    n = len(feats)
-    fig, axs = plt.subplots(n, n, figsize=(2.6 * n, 2.6 * n), squeeze=False)
-    for i, fi in enumerate(feats):
-        for j, fj in enumerate(feats):
-            ax = axs[i][j]
-            if i == j:
-                # diagonal: per-cluster histogram of this feature
-                lo, hi = df[fi].quantile([0.01, 0.99])
-                bins = np.linspace(lo, hi, 40)
-                for c in Ks:
-                    v = df[df["cluster"] == c][fi]
-                    ax.hist(v, bins=bins, color=cmap(int(c) % 10), alpha=0.5,
-                            density=True)
-                ax.set_yticks([])
-            else:
-                for c in Ks:
-                    m = show["cluster"] == c
-                    ax.scatter(show[m][fj], show[m][fi], s=3, alpha=0.35,
-                               color=cmap(int(c) % 10), linewidths=0)
-                if len(e_show):
-                    ax.scatter(e_show[fj], e_show[fi], s=4, alpha=0.4,
-                               color="black", linewidths=0)
-            if i == n - 1:
-                ax.set_xlabel(fj, fontsize=9)
-            if j == 0:
-                ax.set_ylabel(fi, fontsize=9)
-            ax.tick_params(labelsize=7)
-    handles = [plt.Line2D([], [], marker="o", ls="", color=cmap(int(c) % 10),
-                          label=f"C{int(c)}: {names[int(c)]} ({sizes[int(c)]})")
-               for c in Ks]
-    handles.append(plt.Line2D([], [], marker="o", ls="", color="black",
-                              label=f"edge ({len(edge)})"))
-    fig.legend(handles=handles, loc="lower center", ncol=len(handles),
-               fontsize=9, markerscale=1.6, frameon=False)
-    fig.suptitle("Trajectory clusters in raw feature space (no PCA) — "
-                 "diagonal = per-cluster histograms", fontsize=12)
-    fig.tight_layout(rect=(0, 0.03, 1, 0.98))
-    fig.savefig(out / "cluster_feature_space.png", dpi=140)
-    plt.close(fig)
-    print(f"[view] wrote cluster_feature_space.png ({n}x{n} on {feats})")
+    def clabel(c):
+        return f"C{int(c)}: {names[int(c)]} ({sizes[int(c)]})"
 
-    # --- Fig 2: N examples from one cluster --------------------------------
+    # --- Fig: 3D scatter (speed_mean x net_turn x stop_frac) ---------------
+    if "3d" in plots:
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (registers 3d)
+        fx, fy, fz = ax3
+        fig = plt.figure(figsize=(11, 8.5))
+        ax = fig.add_subplot(111, projection="3d")
+        for c in Ks:
+            m = show["cluster"] == c
+            ax.scatter(show[m][fx], show[m][fy], show[m][fz],
+                       s=7, alpha=0.45, depthshade=True,
+                       color=cmap(int(c) % 10), edgecolors="none",
+                       label=clabel(c))
+        if args.edges3d and len(e_show):
+            ax.scatter(e_show[fx], e_show[fy], e_show[fz], s=8, alpha=0.5,
+                       color="black", edgecolors="none",
+                       label=f"edge ({len(edge)})")
+        ax.set_xlabel(fx, fontsize=10, labelpad=8)
+        ax.set_ylabel(fy, fontsize=10, labelpad=8)
+        ax.set_zlabel(fz, fontsize=10, labelpad=8)
+        ax.view_init(elev=args.elev, azim=args.azim)
+        ax.legend(loc="upper left", fontsize=9, markerscale=1.6)
+        ax.set_title(f"Trajectory clusters in 3D feature space  "
+                     f"(K={len(Ks)})", fontsize=12)
+        fig.tight_layout()
+        p3 = out / "cluster_3d.png"
+        fig.savefig(p3, dpi=145)
+        plt.close(fig)
+        print(f"[view] wrote {p3.name}  axes=({fx}, {fy}, {fz})  "
+              f"elev={args.elev} azim={args.azim}")
+
+    # --- Fig: raw-feature scatter matrix -----------------------------------
+    if "matrix" in plots:
+        n = len(feats)
+        fig, axs = plt.subplots(n, n, figsize=(2.6 * n, 2.6 * n), squeeze=False)
+        for i, fi in enumerate(feats):
+            for j, fj in enumerate(feats):
+                ax = axs[i][j]
+                if i == j:
+                    lo, hi = df[fi].quantile([0.01, 0.99])
+                    bins = np.linspace(lo, hi, 40)
+                    for c in Ks:
+                        v = df[df["cluster"] == c][fi]
+                        ax.hist(v, bins=bins, color=cmap(int(c) % 10),
+                                alpha=0.5, density=True)
+                    ax.set_yticks([])
+                else:
+                    for c in Ks:
+                        m = show["cluster"] == c
+                        ax.scatter(show[m][fj], show[m][fi], s=3, alpha=0.35,
+                                   color=cmap(int(c) % 10), linewidths=0)
+                    if len(e_show):
+                        ax.scatter(e_show[fj], e_show[fi], s=4, alpha=0.4,
+                                   color="black", linewidths=0)
+                if i == n - 1:
+                    ax.set_xlabel(fj, fontsize=9)
+                if j == 0:
+                    ax.set_ylabel(fi, fontsize=9)
+                ax.tick_params(labelsize=7)
+        handles = [plt.Line2D([], [], marker="o", ls="", color=cmap(int(c) % 10),
+                              label=clabel(c)) for c in Ks]
+        handles.append(plt.Line2D([], [], marker="o", ls="", color="black",
+                                  label=f"edge ({len(edge)})"))
+        fig.legend(handles=handles, loc="lower center", ncol=len(handles),
+                   fontsize=9, markerscale=1.6, frameon=False)
+        fig.suptitle("Trajectory clusters in raw feature space (no PCA) — "
+                     "diagonal = per-cluster histograms", fontsize=12)
+        fig.tight_layout(rect=(0, 0.03, 1, 0.98))
+        fig.savefig(out / "cluster_feature_space.png", dpi=140)
+        plt.close(fig)
+        print(f"[view] wrote cluster_feature_space.png ({n}x{n} on {feats})")
+
+    # --- Fig: N examples from one cluster ----------------------------------
+    if "examples" not in plots:
+        return
     try:
         with open(in_dir / "trajectory_cache.pkl", "rb") as f:
             cache = pickle.load(f)
