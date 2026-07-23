@@ -76,9 +76,9 @@ def parse_args():
     p.add_argument("--edges3d", action="store_true",
                    help="Also draw edge trajectories (is_edge==1) in black in "
                         "the 3D scatter. Off by default -- clutters the cloud.")
-    p.add_argument("--cluster", type=int, default=1,
-                   help="Which cluster to dump examples from (1 = orange in the "
-                        "tab10 palette, matching the PCA figure)")
+    p.add_argument("--cluster", type=str, default="1",
+                   help="Which cluster to dump examples from: an index (e.g. 1) "
+                        "or 'all' for one grid per cluster.")
     p.add_argument("--n_examples", type=int, default=20)
     p.add_argument("--ex_cols", type=int, default=5,
                    help="Columns in the example grid (rows derived from N)")
@@ -261,8 +261,22 @@ def main():
         print(f"[view] no trajectory_cache.pkl in {in_dir} -- skipping examples")
         return
 
-    C = args.cluster
+    # 'all' -> one grid per cluster; otherwise the single requested index.
+    if str(args.cluster).lower() == "all":
+        targets = list(Ks)
+    else:
+        targets = [int(args.cluster)]
+
+    for C in targets:
+        _example_grid(df, cache, C, names, out, args)
+
+
+def _example_grid(df, cache, C, names, out, args):
+    """One N-example grid for cluster C."""
     sub = df[df["cluster"] == C].copy()
+    if sub.empty:
+        print(f"[view] cluster {C}: no rows -- skipping")
+        return
     if args.pick == "core" and "margin" in sub.columns:
         sub = sub[sub["is_edge"] == 0].sort_values("margin", ascending=False)
     else:
@@ -287,7 +301,7 @@ def main():
                 break
     if not picked:
         print(f"[view] no cache entries matched cluster {C} "
-              f"(cache has {len(cache)} keys) -- skipping examples")
+              f"(cache has {len(cache)} keys) -- skipping")
         return
 
     ncol = args.ex_cols
