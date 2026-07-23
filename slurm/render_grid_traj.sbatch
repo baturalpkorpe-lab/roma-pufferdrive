@@ -36,7 +36,15 @@ DATA_DIR=${DATA_DIR:-$PUFFER_DIR/pufferlib/resources/drive/binaries/training}
 CKPT=${CKPT:-$SCRATCH_ROOT/checkpoints/roma_nodiv_dim4/roma_dim${ROLE_DIM}_final.pt}
 AXES=${AXES:-$SCRATCH_ROOT/analysis/$TAG/paired/role_paired_axes.csv}
 OUT=${OUT:-$SCRATCH_ROOT/analysis/$TAG/renders/role_grid}
-TRAJ=${TRAJ:-$SCRATCH_ROOT/traj_atlas/trajectory_clusters_stopfrac.csv}
+# TRAJ: this account's scratch copy, else the repo copy under data/ (ships with
+# the repo because the file cannot be regenerated without the raw Waymo cache).
+if [ -z "${TRAJ:-}" ]; then
+    if [ -f "$SCRATCH_ROOT/traj_atlas/trajectory_clusters_stopfrac.csv" ]; then
+        TRAJ="$SCRATCH_ROOT/traj_atlas/trajectory_clusters_stopfrac.csv"
+    else
+        TRAJ="$CODE_DIR/data/trajectory_clusters_stopfrac.csv"
+    fi
+fi
 TYPE_NAMES=${TYPE_NAMES:-0:mid-speed,1:fast,2:stop&go,3:turning}
 ALPHAS=${ALPHAS:--2,-1,0,1,2}
 SCENES_PER_TYPE=${SCENES_PER_TYPE:-6}
