@@ -10,13 +10,13 @@
 #SBATCH --output=wosac_mix_%j.out
 #SBATCH --error=wosac_mix_%j.err
 
-# Idea 2: MIXTURE-of-policies WOSAC. The full WOSAC population is controlled;
-# each vehicle is driven by the policy trained on ITS trajectory cluster, with
-# unlabelled/non-vehicle agents on a fallback policy. Standard WOSAC otherwise.
+# Idea 2: MIXTURE-of-policies WOSAC. Every VEHICLE is driven by the policy
+# trained on ITS trajectory cluster (peds/cyclists stay on the GT log via
+# control_vehicles); the rare unlabelled vehicle uses a fallback policy.
 #
 # Runs on the account that HOLDS the per-cluster checkpoints (defaults ->
-# /scratch/$USER). Cost is ~4x a normal WOSAC (4 policy forwards/step), so
-# BATCHES defaults to 50 -- raise if the wall clock allows.
+# /scratch/$USER). Agents are partitioned by policy, so the cost is the SAME as
+# a normal single-policy WOSAC -- BATCHES=100 fits, like a standard eval.
 #
 #   sbatch slurm/wosac_mixture.sbatch
 #   sbatch --export=ALL,FALLBACK_CKPT=/scratch/$USER/checkpoints/roma_baseline_dim4/roma_dim4_final.pt \
@@ -51,8 +51,7 @@ OUT=${OUT:-$SCRATCH_ROOT/wosac_mixture}
 
 FALLBACK_CKPT=${FALLBACK_CKPT:-}
 FALLBACK_CLUSTER=${FALLBACK_CLUSTER:-0}
-MIN_MARGIN=${MIN_MARGIN:-0}
-BATCHES=${BATCHES:-50}
+BATCHES=${BATCHES:-100}
 ROLLOUTS=${ROLLOUTS:-32}
 
 module purge
@@ -98,7 +97,6 @@ python "$CODE_DIR/role_mixture_wosac.py" \
     --out_dir           "$OUT" \
     --wosac_rollouts    "$ROLLOUTS" \
     --wosac_max_batches "$BATCHES" \
-    --min_margin        "$MIN_MARGIN" \
     $FB_ARG
 
 echo "[wosac_mix] done -> $OUT"

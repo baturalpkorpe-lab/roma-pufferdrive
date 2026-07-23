@@ -7,28 +7,34 @@ it. Then run the normal WOSAC procedure -- except the scene is now driven by
 four specialists at once instead of one generalist.
 
 How it differs from role_cluster_wosac.py (idea 1): idea 1 scored ONE cluster
-policy on ONLY its own cluster's vehicles (everyone else GT-replay). Here the
-FULL WOSAC population is controlled (control_wosac, the standard eval mode),
-and each agent is routed to the policy matching its trajectory type -- so the
-four policies interact in the same scene for the first time.
+policy on ONLY its own cluster's vehicles (everyone else GT-replay). Here every
+VEHICLE is controlled and routed to the policy matching its trajectory type --
+so the four policies interact in the same scene for the first time.
 
-Mechanics
----------
-All K policies run on the full agent batch every step (each keeps its own GRU
-state per agent, so each has tracked every agent's full history), and each
-agent's action is gathered from the policy it was assigned:
+Mechanics -- SAME cost as a normal single-policy WOSAC
+------------------------------------------------------
+Agents are PARTITIONED by their assigned policy. Each step, policy k runs on
+ONLY its own agents (a slice of the batch) and writes their actions back:
 
-    logits_k = policy_k(obs, state_k)  for k in 0..K-1     # (K, B, A)
-    action[i] = sample( logits[ assign[i], i ] )
+    for k: action[idx_k] = sample( policy_k(obs[idx_k], state_k) )
 
-Cost is K x a normal WOSAC forward; memory is trivial (K small GRU states).
+Every agent is processed by exactly one policy, so the total forward work per
+step is B rows -- identical to one policy driving all B agents. The policy
+forward is fully per-agent (no cross-agent op), so a slice gives bit-identical
+logits to the full batch. The partition is fixed within a map batch (assignment
+is rebuilt only when maps are re-dealt), so each policy keeps one GRU state for
+its own agents across the batch's rollouts.
 
-Assignment (rebuilt per map batch from the batch's GT):
-  - a vehicle with a trajectory-cluster label -> that cluster's policy
-  - an UNLABELLED vehicle, or a non-vehicle (ped/cyclist), or a below-margin
-    edge trajectory -> the FALLBACK policy (--fallback_ckpt if given, else the
-    --fallback_cluster policy). The fallback fraction is reported every run --
-    if it is large the mixture is really a fallback-policy eval, so watch it.
+Assignment (rebuilt per map batch from the batch's GT). EVERY clustered
+trajectory has a label -- no margin/confidence filter, a cluster is a cluster:
+  - a vehicle present in the trajectory clustering  -> that cluster's policy
+  - peds/cyclists                                    -> NOT policy-controlled;
+    with control_mode=control_vehicles the env leaves them to the log (GT),
+    which is what we want (we never clustered them)
+  - a vehicle NOT in the clustering CSV ("unlabelled": dropped during feature
+    extraction -- usually barely-moving/parked, and control_vehicles' goal
+    filter already excludes parked cars) -> the FALLBACK policy. Reported every
+    run; expected to be a small residual.
 
 THE SCIENTIFIC CAVEAT, on purpose: each cluster policy was trained in a world
 where every OTHER agent replays GT. In the mixture it drives among other
@@ -123,25 +129,21 @@ def parse_args():
     p.add_argument("--num_maps",     type=int, default=10000)
     p.add_argument("--wosac_rollouts",    type=int, default=32)
     p.add_argument("--wosac_max_batches", type=int, default=100)
-    p.add_argument("--min_margin",   type=float, default=0.0,
-                   help=">0 routes only CONFIDENT trajectories (margin>this) to "
-                        "their cluster policy; the rest go to fallback. 0 = use "
-                        "every labelled vehicle.")
-    p.add_argument("--control_mode", type=str, default="control_wosac",
-                   help="Standard WOSAC controls every valid agent -- that is "
-                        "the point here (the mixture drives the whole scene).")
+    p.add_argument("--control_mode", type=str, default="control_vehicles",
+                   help="control_vehicles: only VEHICLES are policy-controlled, "
+                        "so peds/cyclists (never clustered) stay on the GT log. "
+                        "control_wosac would additionally put peds/cyclists "
+                        "under policy control -- not wanted here.")
     p.add_argument("--device",       type=str, default="cuda")
     return p.parse_args()
 
 
-def load_traj_map(path, min_margin):
+def load_traj_map(path):
+    """Every clustered trajectory -> its cluster. No margin filter: a cluster
+    is a cluster even if the trajectory sits near a boundary."""
     import pandas as pd
     tc = pd.read_csv(path)
     tc.columns = [c.strip() for c in tc.columns]
-    if min_margin > 0 and "margin" in tc.columns:
-        n0 = len(tc)
-        tc = tc[tc["margin"] >= min_margin]
-        print(f"[mix] margin>={min_margin}: kept {len(tc)}/{n0} trajectories")
     # scenario_id truncated to 16 chars to match the binary header + GT.
     return {(str(s)[:16], int(v)): int(c)
             for s, v, c in zip(tc["scenario_id"], tc["vehicle_id"], tc["cluster"])}
@@ -171,7 +173,10 @@ def build_assignment(gt, traj_of, n_clusters, fallback_idx):
 
 def collect_mixture(env, policies, assign, num_rollouts, device):
     """num_rollouts of the current allocation, driven by the assigned mixture.
-    Returns (sim_traj, env_metrics)."""
+
+    Agents are PARTITIONED by assigned policy: policy k runs on only its own
+    agents each step, so the total forward work is B rows -- same as a single
+    policy. Returns (sim_traj, env_metrics)."""
     B = env.num_agents
     K = len(policies)
     traj = {k: np.zeros((B, num_rollouts, T), dtype=np.float32)
@@ -179,14 +184,19 @@ def collect_mixture(env, policies, assign, num_rollouts, device):
     traj["id"] = np.zeros((B, num_rollouts, T), dtype=np.int32)
     env_acc = {k: [] for k in ENV_KEYS}
 
-    assign_t = torch.as_tensor(assign, dtype=torch.long, device=device)
-    idxB     = torch.arange(B, device=device)
+    # Per-policy agent indices -- fixed for this whole batch (the allocation
+    # only changes on resample_maps, which happens between batches).
+    idx_by_pol = [torch.as_tensor(np.where(assign == k)[0],
+                                  dtype=torch.long, device=device)
+                  for k in range(K)]
 
     for r in range(num_rollouts):
         print(f"\r    rollout {r+1}/{num_rollouts}", end="", flush=True)
         obs_np, _ = env.reset()
-        obs    = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
-        states = [p.initial_state(B, device) for p in policies]
+        obs = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
+        # One GRU state per policy, sized to ITS agents only.
+        states = [policies[k].initial_state(int(idx_by_pol[k].numel()), device)
+                  if idx_by_pol[k].numel() else None for k in range(K)]
         for t in range(T):
             ag = env.get_global_agent_state()
             traj["x"][:, r, t]       = ag["x"]
@@ -194,14 +204,14 @@ def collect_mixture(env, policies, assign, num_rollouts, device):
             traj["z"][:, r, t]       = ag.get("z", np.zeros(B))
             traj["heading"][:, r, t] = ag["heading"]
             traj["id"][:, r, t]      = ag["id"]
+            action = torch.zeros(B, dtype=torch.long, device=device)
             with torch.no_grad():
-                logits = []
                 for k in range(K):
-                    lg, _, states[k], _ = policies[k](obs, states[k])
-                    logits.append(lg.float())
-                stacked = torch.stack(logits, dim=0)      # (K, B, A)
-                chosen  = stacked[assign_t, idxB]         # (B, A): each agent's policy
-            action = Categorical(logits=chosen).sample()
+                    idx = idx_by_pol[k]
+                    if idx.numel() == 0:
+                        continue
+                    lg, _, states[k], _ = policies[k](obs[idx], states[k])
+                    action[idx] = Categorical(logits=lg.float()).sample()
             obs_np, _, _, _, info = env.step(
                 action.cpu().numpy().reshape(B, 1))
             obs = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
@@ -273,7 +283,7 @@ def main():
         print(f"[mix] fallback: reuse cluster-{fallback_idx} policy for "
               f"unlabelled/non-vehicle agents")
 
-    traj_of = load_traj_map(args.traj_clusters, args.min_margin)
+    traj_of = load_traj_map(args.traj_clusters)
     print(f"[mix] {len(traj_of)} labelled (scenario,vehicle) trajectories")
     print(f"[mix] control_mode={args.control_mode}  "
           f"{args.wosac_max_batches} batches x {args.wosac_rollouts} rollouts")
