@@ -391,28 +391,73 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device,
     else:
         print(f"  [warn] only {int(valid.sum())} valid agents; skipping artifact filter")
 
-    # ── 3. Inter-dim correlation ──────────────────────────────────────────────
-    print("\n  [corr] Inter-dim correlation")
-    _save_log(_plot_dim_correlations(role_means, role_dim, ckpt_name),
-              "dim_correlations")
-    corr = np.corrcoef(role_means.T)
-    off  = np.abs(corr - np.eye(role_dim))
-    max_off = float(off.max()) if role_dim > 1 else 0.0
-    print(f"  max |off-diagonal r| = {max_off:.3f}")
+    if role_dim >= 2:
+        # ── 3. Inter-dim correlation ──────────────────────────────────────────
+        print("\n  [corr] Inter-dim correlation")
+        _save_log(_plot_dim_correlations(role_means, role_dim, ckpt_name),
+                  "dim_correlations")
+        corr = np.corrcoef(role_means.T)
+        off  = np.abs(corr - np.eye(role_dim))
+        max_off = float(off.max())
+        print(f"  max |off-diagonal r| = {max_off:.3f}")
 
-    # ── 4. PCA behavioral scatter + variance ──────────────────────────────────
-    print("  [PCA] Behavioral scatter (min/max speed + jerk)")
-    fig_pca_beh, ev = _plot_pca_behavioral(role_means, stats, ckpt_name)
-    _save_log(fig_pca_beh, "pca_behavioral")
-    print(f"  PCA variance: PC1={ev[0]:.1%}  PC2={ev[1]:.1%}  total={ev[:2].sum():.1%}")
-    if wandb_run is not None:
+        # ── 4. PCA behavioral scatter + variance ──────────────────────────────
+        print("  [PCA] Behavioral scatter (min/max speed + jerk)")
+        fig_pca_beh, ev = _plot_pca_behavioral(role_means, stats, ckpt_name)
+        _save_log(fig_pca_beh, "pca_behavioral")
+        print(f"  PCA variance: PC1={ev[0]:.1%}  PC2={ev[1]:.1%}  total={ev[:2].sum():.1%}")
+        if wandb_run is not None:
+            try:
+                import wandb as _wandb
+                wandb_run.log({"role/pca_var_pc1": float(ev[0]),
+                               "role/pca_var_pc2": float(ev[1]),
+                               "role/max_offdiag_r": max_off})
+            except Exception:
+                pass
+    else:
+        # role_dim == 1: inter-dim correlation and 2-D PCA are degenerate for a
+        # scalar role (PCA(n_components=2) even raises on 1 feature). The dim-1
+        # question is whether the scalar role is a smooth CONTINUUM or a
+        # collapsed BINARY switch -> Sarle bimodality coefficient (BC > 0.555 =
+        # bimodal/collapsed) + a histogram, plus how the scalar tracks speed.
+        import matplotlib.pyplot as plt
+        z = np.asarray(role_means[:, 0], dtype=np.float64)
+        z = z[np.isfinite(z)]
+        n = len(z)
+        m, sd = float(z.mean()), float(z.std())
+        if sd > 0 and n > 3:
+            zn  = (z - m) / sd
+            g1  = float((zn ** 3).mean())                       # skewness
+            kex = float((zn ** 4).mean() - 3.0)                 # excess kurtosis
+            bc  = (g1 ** 2 + 1.0) / (kex + 3.0 * (n - 1) ** 2 / ((n - 2) * (n - 3)))
+        else:
+            g1 = kex = bc = float("nan")
+        print("\n  [dim1] scalar role distribution (PCA/inter-dim corr skipped for 1-D)")
+        print(f"  role: mean={m:.3f} std={sd:.3f}  Sarle BC={bc:.3f}"
+              f"  ({'BIMODAL/collapsed' if bc > 0.555 else 'continuous-ish'})")
+        r_speed = float("nan")
+        if "mean_speed" in stats and n > 3:
+            sp = np.asarray(stats["mean_speed"], dtype=np.float64)
+            r  = np.asarray(role_means[:, 0], dtype=np.float64)
+            ok = np.isfinite(sp) & np.isfinite(r)
+            if ok.sum() > 3 and np.std(sp[ok]) > 0 and np.std(r[ok]) > 0:
+                r_speed = float(np.corrcoef(r[ok], sp[ok])[0, 1])
+        print(f"  corr(role, mean_speed) = {r_speed:.3f}")
         try:
-            import wandb as _wandb
-            wandb_run.log({"role/pca_var_pc1": float(ev[0]),
-                           "role/pca_var_pc2": float(ev[1]),
-                           "role/max_offdiag_r": max_off})
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.hist(z, bins=60, color="#4c72b0")
+            ax.set_title(f"dim-1 role distribution  BC={bc:.3f}  [{ckpt_name}]")
+            ax.set_xlabel("role value"); ax.set_ylabel("agent-episodes")
+            _save_log(fig, "dim1_role_hist")
         except Exception:
             pass
+        if wandb_run is not None:
+            try:
+                wandb_run.log({"role/bimodality_bc": bc,
+                               "role/scalar_std": sd,
+                               "role/corr_speed": r_speed})
+            except Exception:
+                pass
 
 
     print("=" * 60)
