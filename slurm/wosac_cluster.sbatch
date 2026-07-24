@@ -90,12 +90,12 @@ python "$CODE_DIR/role_cluster_wosac.py" \
     --data_dir          "$MAP_DIR" \
     --axes_csv          "$AXES" \
     --axis              "$AXIS" \
-    --alphas            "$ALPHAS" \
+    --alphas="$ALPHAS" \
     --role_dim          "$ROLE_DIM" \
     --out_dir           "$OUT" \
     --num_maps          "$NMAPS" \
     --wosac_rollouts    "$ROLLOUTS" \
     --wosac_max_batches "$BATCHES" \
-    $CM_ARG
+    $CM_ARG || { echo "[wosac_cl] FAILED (python exit $?)"; exit 1; }
 
 echo "[wosac_cl] done -> $OUT"
