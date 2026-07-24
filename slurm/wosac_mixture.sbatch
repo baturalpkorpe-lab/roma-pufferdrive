@@ -119,13 +119,13 @@ python "$CODE_DIR/role_mixture_wosac.py" \
     --axes              "$AXES" \
     --n_clusters        "$N_CLUSTERS" \
     --role_dim          "$ROLE_DIM" \
-    --alphas            "${ALPHAS:--1,-0.5,0,0.5,1}" \
+    --alphas="${ALPHAS:--1,-0.5,0,0.5,1}" \
     --control_mode      "${CONTROL_MODE:-control_vehicles}" \
     --traj_clusters     "$TRAJ" \
     --data_dir          "$DATA_DIR" \
     --out_dir           "$OUT" \
     --wosac_rollouts    "$ROLLOUTS" \
     --wosac_max_batches "$BATCHES" \
-    $FB_ARG
+    $FB_ARG || { echo "[wosac_mix] FAILED (python exit $?)"; exit 1; }
 
 echo "[wosac_mix] done -> $OUT"
