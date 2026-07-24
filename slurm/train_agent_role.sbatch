@@ -85,10 +85,12 @@ WANDB_PROJECT=${WANDB_PROJECT:-roma-pufferdrive}
 WANDB_ENTITY=${WANDB_ENTITY:-s-rahmani-tu-delft}
 WANDB_NAME=${WANDB_NAME:-roma_dim${ROLE_DIM}_agentrole_road${ROLE_ROAD_DIM}p${ROLE_PARTNER_DIM}_${MI_TARGET}_${SEED}}
 
+set +u   # conda compiler activation scripts (gcc_linux-64) are not set -u safe: SYS_SYSROOT/CONDA_BACKUP_CXX unbound
 module purge
 module load miniconda3
 source /apps/generic/miniforge3/25.11.0/etc/profile.d/conda.sh
 conda activate roma
+set -u
 
 export PYTHONPATH=$CODE_DIR:$PUFFER_DIR
 export PYTHONUNBUFFERED=1

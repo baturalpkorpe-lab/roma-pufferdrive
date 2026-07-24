@@ -41,10 +41,12 @@ TYPE_NAMES=${TYPE_NAMES:-0:mid-speed,1:fast,2:stop&go,3:turning}
 ALPHAS=${ALPHAS:--2,-1,0,1,2}
 SCENES_PER_TYPE=${SCENES_PER_TYPE:-6}
 
+set +u   # conda compiler activation scripts (gcc_linux-64) are not set -u safe: SYS_SYSROOT/CONDA_BACKUP_CXX unbound
 module purge
 module load miniconda3
 source /apps/generic/miniforge3/25.11.0/etc/profile.d/conda.sh
 conda activate roma
+set -u
 export PYTHONPATH=$CODE_DIR:$PUFFER_DIR
 export PYTHONUNBUFFERED=1
 
