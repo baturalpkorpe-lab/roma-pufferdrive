@@ -224,8 +224,8 @@ def rollout_batch(env, policy, device, num_rollouts, shift_vec):
     # is bit-identical across rollouts; a controlled agent samples actions and
     # moves differently every time. This is what verifies control_mode.
     spread = traj["x"].std(axis=1).max(axis=1) + traj["y"].std(axis=1).max(axis=1)
-    moved  = (np.abs(traj["x"][:, 0, :] - traj["x"][:, 0, 0]).max(axis=1)
-              + np.abs(traj["y"][:, 0, :] - traj["y"][:, 0, 0]).max(axis=1)) > 0.5
+    moved  = (np.abs(traj["x"][:, 0, :] - traj["x"][:, 0, :1]).max(axis=1)
+              + np.abs(traj["y"][:, 0, :] - traj["y"][:, 0, :1]).max(axis=1)) > 0.5
     ctrl = {
         "n_controlled_detected": int((spread > 1e-3).sum()),
         "n_moving": int(moved.sum()),
