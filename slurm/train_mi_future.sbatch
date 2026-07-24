@@ -21,13 +21,16 @@
 #   sbatch slurm/train_mi_future.sbatch
 #   sbatch --export=ALL,MI_HORIZON=16 slurm/train_mi_future.sbatch
 #
-# No --run_eval, --wosac_periodic 0: repeated Drive() instantiations in one
-# long process segfault the C binding. WOSAC runs standalone afterwards.
+# 3B steps. Mid-run WOSAC every 500M (lite, 10 batches). The FULL 100-batch
+# WOSAC + role analysis runs as a SEPARATE job (eval_mi_future.sbatch, chained
+# afterok via run_mi_future.sh) -- NOT --run_eval: the in-process post-training
+# eval plus 5 periodic Drive() instantiations would cross the ~8th-Drive C
+# binding segfault. 5 periodic evals alone (the terminal 3B tick is skipped in
+# train_roma.py) stay under that.
 #
-# 2B steps, single job, no auto-resume (this branch's train_roma.py has no
-# --resume). A dim-4 run reaches ~2B in one 24h allocation; if the wall clock
-# cuts it short the last checkpoint (every 100M) is still saved, but a rerun
-# starts fresh -- so keep TOTAL_STEPS at a value that fits 24h.
+# Single job, no auto-resume (this branch's train_roma.py has no --resume). If
+# the wall clock cuts 3B short, the last checkpoint (every 500M) is saved but a
+# rerun starts fresh -- lower TOTAL_STEPS if 3B does not fit your 24h.
 
 ROLE_DIM=${ROLE_DIM:-4}
 MI_HORIZON=${MI_HORIZON:-8}
@@ -39,10 +42,14 @@ CODE_DIR=${CODE_DIR:-$SLURM_SUBMIT_DIR}
 DATA_DIR=${DATA_DIR:-$PUFFER_DIR/pufferlib/resources/drive/binaries/training}
 SAVE_DIR=${SAVE_DIR:-$SCRATCH_ROOT/checkpoints/roma_mifuture_dim${ROLE_DIM}_H${MI_HORIZON}}
 
-TOTAL_STEPS=${TOTAL_STEPS:-2000000000}
-SAVE_INTERVAL=${SAVE_INTERVAL:-100000000}
+TOTAL_STEPS=${TOTAL_STEPS:-3000000000}
+SAVE_INTERVAL=${SAVE_INTERVAL:-500000000}
 SEED=${SEED:-0}
 NUM_MAPS=${NUM_MAPS:-10000}
+# Mid-run WOSAC every 500M (lite: 10 batches). The terminal 3B tick is skipped
+# in train_roma.py (redundant with the full 100-batch eval that follows).
+WOSAC_INTERVAL=${WOSAC_INTERVAL:-500000000}
+WOSAC_EVAL_BATCHES=${WOSAC_EVAL_BATCHES:-10}
 WANDB_PROJECT=${WANDB_PROJECT:-roma-pufferdrive}
 WANDB_ENTITY=${WANDB_ENTITY:-s-rahmani-tu-delft}
 
@@ -84,7 +91,11 @@ python "$CODE_DIR/roma_pufferdrive/train_roma.py" \
     --save_interval "$SAVE_INTERVAL" \
     --save_dir      "$SAVE_DIR" \
     --seed          "$SEED" \
-    --wosac_periodic 0 \
+    --wosac_periodic 1 \
+    --wosac_interval      "$WOSAC_INTERVAL" \
+    --wosac_eval_maps     10000 \
+    --wosac_eval_rollouts 32 \
+    --wosac_eval_batches  "$WOSAC_EVAL_BATCHES" \
     --wandb_project "$WANDB_PROJECT" \
     --wandb_entity  "$WANDB_ENTITY" \
   || { echo "[mifut] FAILED (python exit $?)"; exit 1; }

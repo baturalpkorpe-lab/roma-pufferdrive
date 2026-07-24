@@ -1120,7 +1120,13 @@ def train(args):
             next_save += args.save_interval
 
         # ---- Periodic WOSAC evaluation (lite) ----
-        if global_step >= next_wosac:
+        # Skip a periodic eval scheduled at/after the final step: the loop's
+        # last iteration lands at ~total_steps, and if a periodic tick falls
+        # there it fires a wasteful lite (10-batch) WOSAC right before the run
+        # ends -- redundant with the full 100-batch eval that runs afterwards
+        # (separate job or --run_eval). next_wosac < total_steps keeps every
+        # genuinely mid-run tick and drops only the terminal one.
+        if global_step >= next_wosac and next_wosac < args.total_steps:
             print(f"[ROMA] Periodic WOSAC eval at step {global_step:,} ...")
             run_wosac_eval(
                 args, policy, device, wandb_run,
