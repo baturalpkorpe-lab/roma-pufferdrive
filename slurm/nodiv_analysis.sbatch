@@ -123,8 +123,10 @@ python - "$TRAJ" "$SCAFFOLD" <<'PYEOF' || { echo "[nodiv_an] scaffold build fail
 import sys, pandas as pd
 tc = pd.read_csv(sys.argv[1])
 tc.columns = [c.strip() for c in tc.columns]
-scen = (tc.groupby("scenario_id")["cluster"]
-          .agg(lambda s: s.value_counts().idxmax()).reset_index())
+scen = (tc.groupby("scenario_id")
+          .agg(cluster=("cluster", lambda s: s.value_counts().idxmax()),
+               margin=("margin", "mean"))
+          .reset_index())
 scen.to_csv(sys.argv[2], index=False)
 print(f"[scaffold] {len(scen)} scenarios from {len(tc)} labeled trajectories; "
       f"cluster mix {scen['cluster'].value_counts().to_dict()}")
@@ -232,7 +234,8 @@ paired/                            role-pairing analysis
   role_role_corr.png               role dims against each other (redundancy)
   role_feature_corr.png            role dims against raw behaviour features
   scenario_traj_scaffold.csv       internal: scene -> dominant trajectory cluster
-                                   (drives sweep scene-eligibility; not a result)
+                                   + mean assignment margin (drives sweep
+                                   scene-eligibility; not a result)
 
 renders/role_grid/                 trajectory-cluster VIDEOS (from the CPU job)
   *.mp4                            scenes_per_type scenes PER TRAJECTORY CLUSTER,
