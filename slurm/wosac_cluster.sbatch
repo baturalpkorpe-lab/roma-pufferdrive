@@ -53,10 +53,12 @@ ROLLOUTS=${ROLLOUTS:-32}
 # check mark_as_expert, and is the mode training used.
 CONTROL_MODE=${CONTROL_MODE:-control_agents}
 
+set +u   # conda compiler activation scripts (gcc_linux-64) are not set -u safe: SYS_SYSROOT/CONDA_BACKUP_CXX unbound
 module purge
 module load miniconda3
 source /apps/generic/miniforge3/25.11.0/etc/profile.d/conda.sh
 conda activate roma
+set -u
 
 export PYTHONPATH=$CODE_DIR:$PUFFER_DIR
 export PYTHONUNBUFFERED=1

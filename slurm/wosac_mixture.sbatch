@@ -73,10 +73,12 @@ FALLBACK_CLUSTER=${FALLBACK_CLUSTER:-0}
 BATCHES=${BATCHES:-70}
 ROLLOUTS=${ROLLOUTS:-32}
 
+set +u   # conda compiler activation scripts (gcc_linux-64) are not set -u safe: SYS_SYSROOT/CONDA_BACKUP_CXX unbound
 module purge
 module load miniconda3
 source /apps/generic/miniforge3/25.11.0/etc/profile.d/conda.sh
 conda activate roma
+set -u
 export PYTHONPATH=$CODE_DIR:$PUFFER_DIR
 export PYTHONUNBUFFERED=1
 
