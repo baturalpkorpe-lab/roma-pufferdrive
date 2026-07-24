@@ -4,7 +4,7 @@
 #   bash slurm/run_agent_role.sh          # dim 4, road 16, partner 64, MI ego_partner
 #   bash slurm/run_agent_role.sh 4        # explicit role_dim
 #
-# Submits ONE training job (3B steps in the 24h allocation), then the full
+# Submits ONE training job (3B-step TARGET, 24h wall), then the full
 # post-training eval -- role health check + WOSAC at 100 batches -- and the
 # scene-ICC diagnostic, both chained afterok so the number this change is
 # aimed at lands without a second submission.
