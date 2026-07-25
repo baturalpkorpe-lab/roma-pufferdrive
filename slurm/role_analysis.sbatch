@@ -54,7 +54,18 @@ OUT_ROOT=${OUT_ROOT:-$SCRATCH_ROOT/analysis/$TAG}
 # K-means: scenario_id, vehicle_id -> cluster. Built once on the original
 # analysis account; the nodiv run trained on the SAME Waymo binaries, so it
 # applies unchanged -- copy it to this account's scratch if missing.
-TRAJ=${TRAJ:-$SCRATCH_ROOT/traj_atlas/trajectory_clusters_stopfrac.csv}
+# TRAJ: prefer this account's own scratch copy; otherwise fall back to the copy
+# committed in the repo under data/. trajectory_clusters_stopfrac.csv is a DATA
+# artifact of the trajectory-clustering pipeline -- it cannot be regenerated
+# without the raw Waymo feature cache, so it ships with the repo and an account
+# that never generated it still finds it after `git pull`.
+if [ -z "${TRAJ:-}" ]; then
+    if [ -f "$SCRATCH_ROOT/traj_atlas/trajectory_clusters_stopfrac.csv" ]; then
+        TRAJ="$SCRATCH_ROOT/traj_atlas/trajectory_clusters_stopfrac.csv"
+    else
+        TRAJ="$CODE_DIR/data/trajectory_clusters_stopfrac.csv"
+    fi
+fi
 # Verified against the K=4 centroid plot: 0=mid-speed 1=fast 2=stop&go 3=turning
 TYPE_NAMES=${TYPE_NAMES:-0:mid-speed,1:fast,2:stop&go,3:turning}
 
@@ -80,10 +91,11 @@ fail=0
     echo "ERROR: analysis code not under CODE_DIR=$CODE_DIR (wrong submit dir/branch?)"; fail=1; }
 if [ ! -f "$TRAJ" ]; then
     echo "ERROR: trajectory clustering not found: $TRAJ"
-    echo "       This is trajectory_clusters_stopfrac.csv (scenario_id,"
-    echo "       vehicle_id, cluster) from the original analysis account. Copy"
-    echo "       it to THIS account's scratch or point TRAJ= at it. Everything"
-    echo "       in this pipeline is keyed to it."
+    echo "       Expected data/trajectory_clusters_stopfrac.csv in the repo"
+    echo "       (ships via git pull) or a copy at"
+    echo "       \$SCRATCH_ROOT/traj_atlas/trajectory_clusters_stopfrac.csv."
+    echo "       If it is committed, 'git pull' fixes this. Everything in this"
+    echo "       pipeline is keyed to it."
     fail=1
 fi
 [ "$fail" -eq 0 ] || { echo "[role_an] preflight failed -- nothing submitted to the GPU."; exit 1; }
@@ -112,8 +124,10 @@ python - "$TRAJ" "$SCAFFOLD" <<'PYEOF' || { echo "[role_an] scaffold build faile
 import sys, pandas as pd
 tc = pd.read_csv(sys.argv[1])
 tc.columns = [c.strip() for c in tc.columns]
-scen = (tc.groupby("scenario_id")["cluster"]
-          .agg(lambda s: s.value_counts().idxmax()).reset_index())
+scen = (tc.groupby("scenario_id")
+          .agg(cluster=("cluster", lambda s: s.value_counts().idxmax()),
+               margin=("margin", "mean"))
+          .reset_index())
 scen.to_csv(sys.argv[2], index=False)
 print(f"[scaffold] {len(scen)} scenarios from {len(tc)} labeled trajectories; "
       f"cluster mix {scen['cluster'].value_counts().to_dict()}")
@@ -221,7 +235,8 @@ paired/                            role-pairing analysis
   role_role_corr.png               role dims against each other (redundancy)
   role_feature_corr.png            role dims against raw behaviour features
   scenario_traj_scaffold.csv       internal: scene -> dominant trajectory cluster
-                                   (drives sweep scene-eligibility; not a result)
+                                   + mean assignment margin (drives sweep
+                                   scene-eligibility; not a result)
 
 renders/role_grid/                 trajectory-cluster VIDEOS (from the CPU job)
   *.mp4                            scenes_per_type scenes PER TRAJECTORY CLUSTER,
