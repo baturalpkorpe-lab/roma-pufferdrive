@@ -40,7 +40,7 @@
 # experiment, and sharing a wandb name makes the two indistinguishable in the
 # sidebar. At the default 0.1 both the path and the name are unchanged, so the
 # div-on run stays bit-identical to what this file did before.
-#   bash slurm/run_mi_future_nodiv.sh          # div_weight 0
+#   DIV_WEIGHT=0 bash slurm/run_mi_future.sh   # div_weight 0, whole chain
 #   sbatch --export=ALL,DIV_WEIGHT=0 slurm/train_mi_future.sbatch
 
 ROLE_DIM=${ROLE_DIM:-4}
