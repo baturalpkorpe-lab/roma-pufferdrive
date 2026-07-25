@@ -95,7 +95,8 @@ class RomaPolicy(nn.Module):
     MAX_ROADS    = 128
 
     def __init__(self, obs_dim=1121, action_dim=91, role_dim=8, role_hidden=64,
-                 policy_hidden=128, var_floor=1e-4, obs_window_len=8, ego_dim=7):
+                 policy_hidden=128, var_floor=1e-4, obs_window_len=8, ego_dim=7,
+                 role_partner_dim=None, role_road_dim=None):
         super().__init__()
         self.obs_dim        = obs_dim
         self.action_dim     = action_dim
@@ -111,13 +112,48 @@ class RomaPolicy(nn.Module):
         env_embed_dim    = 32 + 32 + 64
         self.env_embed_dim = env_embed_dim
 
+        # --- The role encoder's own view of the three streams ---------------
+        # The POLICY GRU always receives the full 128-dim env embedding, so
+        # resizing here never costs the policy the road detail it needs to stay
+        # on the road. Only the role encoder's input is re-weighted.
+        #
+        # Why this exists: road is 64 of the 128 dims the role encoder reads,
+        # and road geometry is a near-deterministic function of the scene, so
+        # half the role's input bandwidth is a channel for "which map is this".
+        # That is the mechanism behind the scene-determined role the per-cluster
+        # training pivot was working around. Shrinking road here keeps the role
+        # road-AWARE (an agent should still be able to hold back on a curve)
+        # without letting the map dominate what the role is.
+        #
+        # The projections are plain Linear on purpose: the restriction that
+        # matters is one of rank/capacity, not of nonlinearity, and the role
+        # encoder's own fc_obs supplies the ReLU immediately after.
+        #
+        # Defaults (None) reproduce the original layout exactly and build no
+        # extra modules, so existing checkpoints load unchanged.
+        e_out = self.ego_enc.out_dim
+        p_out = self.partner_enc.out_dim
+        r_out = self.road_enc.out_dim
+        self.role_partner_dim = p_out if role_partner_dim is None else role_partner_dim
+        self.role_road_dim    = r_out if role_road_dim    is None else role_road_dim
+        if self.role_road_dim < 0 or self.role_partner_dim <= 0:
+            raise ValueError("role_partner_dim must be > 0 and role_road_dim >= 0 "
+                             f"(got {self.role_partner_dim}, {self.role_road_dim})")
+
+        self.role_partner_proj = (nn.Linear(p_out, self.role_partner_dim)
+                                  if self.role_partner_dim != p_out else None)
+        self.role_road_proj = (nn.Linear(r_out, self.role_road_dim)
+                               if self.role_road_dim > 0 and self.role_road_dim != r_out
+                               else None)
+        self.role_in_dim = e_out + self.role_partner_dim + self.role_road_dim
+
         # role_dim == 0 -> NO-ROLE ablation (ported from baseline_role_0_dim so
         # the baseline branch can LOAD dim-0 checkpoints, e.g. for side-by-side
         # renders): the role encoder is removed and the policy GRU sees only
         # the env embedding. role_dim > 0 behavior is unchanged.
         self.use_role = role_dim > 0
         if self.use_role:
-            self.role_encoder = RoleEncoder(env_embed_dim, role_dim, role_hidden, var_floor)
+            self.role_encoder = RoleEncoder(self.role_in_dim, role_dim, role_hidden, var_floor)
         else:
             self.role_encoder = None
         self.policy_gru   = nn.GRUCell(env_embed_dim + role_dim, policy_hidden)
@@ -141,18 +177,29 @@ class RomaPolicy(nn.Module):
         roads    = obs[:, p_end:p_end + self.MAX_ROADS * self.ROAD_FEAT]
         return ego, partners, roads
 
-    def _env_embed(self, obs):
+    def _env_parts(self, obs):
         ego, partners, roads = self._split_obs(obs)
-        e = self.ego_enc(ego)
-        p = self.partner_enc(partners)
-        r = self.road_enc(roads)
-        return torch.cat([e, p, r], dim=-1)
+        return self.ego_enc(ego), self.partner_enc(partners), self.road_enc(roads)
+
+    def _env_embed(self, obs):
+        # Concat order [ego | partner | road] is load-bearing: the MI loss
+        # slices this window by prefix to drop road from its target
+        # (aux_losses.RomaAuxLoss.mi_emb_dim). Do not reorder.
+        return torch.cat(self._env_parts(obs), dim=-1)
+
+    def _role_input(self, e, p, r):
+        parts = [e, p if self.role_partner_proj is None else self.role_partner_proj(p)]
+        if self.role_road_dim > 0:
+            parts.append(r if self.role_road_proj is None else self.role_road_proj(r))
+        return torch.cat(parts, dim=-1)
 
     def forward(self, obs, state, forced_role=None):
         role_h, policy_h, emb_win = state
-        env_emb  = self._env_embed(obs)
+        e, p, r  = self._env_parts(obs)
+        env_emb  = torch.cat([e, p, r], dim=-1)
         if self.use_role:
-            role_z, role_mean, role_log_var, new_role_h = self.role_encoder(env_emb, role_h)
+            role_in = self._role_input(e, p, r)
+            role_z, role_mean, role_log_var, new_role_h = self.role_encoder(role_in, role_h)
             if forced_role is not None:
                 role_z = forced_role
             policy_input = torch.cat([env_emb, role_z], dim=-1)

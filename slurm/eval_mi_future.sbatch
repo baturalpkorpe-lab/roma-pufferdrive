@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=eval_mifut
+#SBATCH --job-name=eval_mifua
 #SBATCH --partition=gpu-a100
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -7,8 +7,8 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --time=12:00:00
 #SBATCH --account=research-ceg-tp
-#SBATCH --output=eval_mifut_%j.out
-#SBATCH --error=eval_mifut_%j.err
+#SBATCH --output=eval_mifua_%j.out
+#SBATCH --error=eval_mifua_%j.err
 
 # Post-training eval for the future-MI run, in a FRESH process: small role
 # analysis (--role_episodes: per-dim behaviour correlations + role-space PCA)
@@ -22,15 +22,23 @@
 
 ROLE_DIM=${ROLE_DIM:-4}
 MI_HORIZON=${MI_HORIZON:-8}
-# Mirrors train_mi_future.sbatch: DIV_WEIGHT=0 lives in its own SAVE_DIR/OUT so
-# the ablation never scores the div-on checkpoint (or overwrites its results).
+# Mirrors train_mi_future.sbatch: the arch (role view + MI target) and the
+# DIV_WEIGHT ablation both live in SAVE_DIR/OUT, so no config ever scores
+# another config's checkpoint or overwrites its results. eval_roma.py rebuilds
+# the role encoder at the trained width from the args dict saved in the
+# checkpoint, so nothing arch-specific needs passing here.
+ROLE_ROAD_DIM=${ROLE_ROAD_DIM:-16}
+ROLE_PARTNER_DIM=${ROLE_PARTNER_DIM:-64}
+MI_TARGET=${MI_TARGET:-ego_partner}
+case "$MI_TARGET" in ego_partner) MI_TAG=ep ;; *) MI_TAG=$MI_TARGET ;; esac
+ARCH_TAG=_r${ROLE_ROAD_DIM}p${ROLE_PARTNER_DIM}_${MI_TAG}
 DIV_WEIGHT=${DIV_WEIGHT:-0.1}
 case "$DIV_WEIGHT" in 0|0.|0.0|0.00) DIV_TAG=_nodiv ;; *) DIV_TAG= ;; esac
 SCRATCH_ROOT=${SCRATCH_ROOT:-/scratch/$USER}
 PUFFER_DIR=${PUFFER_DIR:-$SCRATCH_ROOT/PufferDrive}
 CODE_DIR=${CODE_DIR:-$SLURM_SUBMIT_DIR}
-SAVE_DIR=${SAVE_DIR:-$SCRATCH_ROOT/checkpoints/roma_mifuture_dim${ROLE_DIM}_H${MI_HORIZON}${DIV_TAG}}
-OUT=${OUT:-$SCRATCH_ROOT/eval_results/mifuture_dim${ROLE_DIM}_H${MI_HORIZON}${DIV_TAG}}
+SAVE_DIR=${SAVE_DIR:-$SCRATCH_ROOT/checkpoints/roma_mifutagent_dim${ROLE_DIM}_H${MI_HORIZON}${ARCH_TAG}${DIV_TAG}}
+OUT=${OUT:-$SCRATCH_ROOT/eval_results/mifutagent_dim${ROLE_DIM}_H${MI_HORIZON}${ARCH_TAG}${DIV_TAG}}
 MAP_DIR=${MAP_DIR:-pufferlib/resources/drive/binaries/training}   # relative to PUFFER_DIR
 ROLE_EPISODES=${ROLE_EPISODES:-10}
 WOSAC_MAX_BATCHES=${WOSAC_MAX_BATCHES:-100}
@@ -76,7 +84,7 @@ python "$CODE_DIR/eval_roma.py" \
     --role_episodes     "$ROLE_EPISODES" \
     --output_dir        "$OUT" \
     --wandb \
-    --wandb_run_name    "eval_mifutH${MI_HORIZON}_dim${ROLE_DIM}${DIV_TAG}" \
+    --wandb_run_name    "eval_mifutagentH${MI_HORIZON}_dim${ROLE_DIM}${ARCH_TAG}${DIV_TAG}" \
   || { echo "[eval_mifut] FAILED (python exit $?)"; exit 1; }
 
 echo "[eval_mifut] done -> $OUT"

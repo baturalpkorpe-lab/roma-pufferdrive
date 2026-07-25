@@ -94,15 +94,22 @@ def init_wandb(args):
                         f"maps{args.num_maps}_{args.seed}")
         # An ablation that changes a loss weight produces the SAME default name
         # as its control run, which makes the two indistinguishable in the
-        # wandb sidebar. Tag div_weight so they always separate.
+        # wandb sidebar. Tag div_weight so they always separate. Same for the
+        # agent-centric role config: tag it whenever it deviates from the
+        # original layout.
+        tags = [f"role_dim_{args.role_dim}", f"maps_{args.num_maps}",
+                "mi_future", f"mi_horizon_{args.mi_horizon}",
+                f"div_weight_{args.div_weight:g}",
+                f"mi_target_{args.mi_target}"]
+        if args.role_road_dim is not None or args.role_partner_dim is not None:
+            tags.append(f"role_view_r{args.role_road_dim}"
+                        f"p{args.role_partner_dim}")
         run = wandb.init(
             project = args.wandb_project,
             entity  = args.wandb_entity or None,
             name    = args.wandb_name or default_name,
             config  = vars(args),
-            tags    = [f"role_dim_{args.role_dim}", f"maps_{args.num_maps}",
-                       "mi_future", f"mi_horizon_{args.mi_horizon}",
-                       f"div_weight_{args.div_weight:g}"],
+            tags    = tags,
         )
         print(f"[ROMA] wandb initialized: {run.url}")
         return run
@@ -178,6 +185,29 @@ def parse_args():
     p.add_argument("--mi_weight",     type=float, default=1.0)
     p.add_argument("--div_weight",    type=float, default=0.1,
                    help="Weight on cosine diversity loss. Safe in [-1,+1] range.")
+
+    # Role input rebalancing (see policy.RomaPolicy). The POLICY always keeps
+    # the full 128-dim env embedding; these only resize the ROLE encoder's view.
+    p.add_argument("--role_partner_dim", type=int, default=None,
+                   help="Partner width in the role encoder's input. Default "
+                        "None = 32 (the partner encoder's own out_dim, i.e. "
+                        "unchanged). Raise it to make the role more relational.")
+    p.add_argument("--role_road_dim",    type=int, default=None,
+                   help="Road width in the role encoder's input. Default None "
+                        "= 64 (unchanged), which is half the role's input "
+                        "bandwidth and the main channel by which the map "
+                        "determines the role. 16 keeps the role road-aware "
+                        "without letting geometry dominate it; 0 removes road "
+                        "from the role entirely.")
+    p.add_argument("--mi_target", type=str, default="full",
+                   choices=["full", "ego_partner"],
+                   help="What the (FUTURE-window) MI loss asks the role to "
+                        "predict. 'full' (default) = a summary of the whole "
+                        "upcoming env embedding, road included -- the role is "
+                        "rewarded for encoding the upcoming map. 'ego_partner' "
+                        "drops road from the TARGET only: the role must "
+                        "predict upcoming ego+partner dynamics, and can still "
+                        "see the road without being paid to recite it.")
 
     # PPO
     p.add_argument("--total_steps",   type=int,   default=1_000_000_000,
@@ -781,6 +811,10 @@ def train(args):
     print(f"[ROMA] total_steps   : {args.total_steps:,}")
     print(f"[ROMA] mi_weight     : {args.mi_weight}")
     print(f"[ROMA] div_weight    : {args.div_weight}")
+    print(f"[ROMA] mi_target     : {args.mi_target}")
+    print(f"[ROMA] role view     : road={args.role_road_dim if args.role_road_dim is not None else 64}"
+          f" partner={args.role_partner_dim if args.role_partner_dim is not None else 32}"
+          f" (policy GRU always sees the full 128)")
     # Future-MI: H < 8 would make the "future" window overlap the past one
     # (the stored window at t+H covers t+H-7..t+H); H >= rollout_steps would
     # mask every sample.
@@ -814,20 +848,31 @@ def train(args):
 
     # Build policy using structured encoders from roma/policy.py
     policy = RomaPolicy(
-        obs_dim        = obs_dim,
-        action_dim     = action_dim,
-        role_dim       = args.role_dim,
-        role_hidden    = args.role_hidden,
-        policy_hidden  = args.policy_hidden,
-        var_floor      = args.var_floor,
-        obs_window_len = 8,
+        obs_dim          = obs_dim,
+        action_dim       = action_dim,
+        role_dim         = args.role_dim,
+        role_hidden      = args.role_hidden,
+        policy_hidden    = args.policy_hidden,
+        var_floor        = args.var_floor,
+        obs_window_len   = 8,
+        role_partner_dim = args.role_partner_dim,
+        role_road_dim    = args.role_road_dim,
     ).to(device)
+
+    # 'ego_partner' keeps only the [ego | partner] prefix of the env embedding
+    # in the MI target -- here the FUTURE window, so the role must predict
+    # upcoming ego+partner dynamics rather than upcoming road geometry.
+    # Derived from the encoders rather than hardcoded to 64 so it follows if
+    # their out_dims ever change.
+    mi_emb_dim = (None if args.mi_target == "full"
+                  else policy.ego_enc.out_dim + policy.partner_enc.out_dim)
 
     aux_loss_fn = RomaAuxLoss(
         role_dim   = args.role_dim,
         emb_dim    = policy.env_embed_dim,
         mi_weight  = args.mi_weight,
         div_weight = args.div_weight,
+        mi_emb_dim = mi_emb_dim,
     ).to(device)
 
     optimizer = Adam(

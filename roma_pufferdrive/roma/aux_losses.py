@@ -128,12 +128,18 @@ class RomaAuxLoss(nn.Module):
         div_weight    : weight on the diversity loss (default 0.1)
     """
     def __init__(self, role_dim, emb_dim, behaviour_dim=32, hidden_dim=64,
-                 window=8, mi_weight=1.0, div_weight=0.1):
+                 window=8, mi_weight=1.0, div_weight=0.1, mi_emb_dim=None):
         super().__init__()
         self.role_dim   = role_dim
+        self.emb_dim    = emb_dim
         self.mi_weight  = mi_weight
         self.div_weight = div_weight
-        self.behaviour_extractor = BehaviourExtractor(emb_dim, behaviour_dim, window)
+        # mi_emb_dim < emb_dim keeps only a PREFIX of the env embedding in the
+        # MI target. policy._env_embed concatenates [ego 32 | partner 32 |
+        # road 64], so 64 means "ego + partner, no road". Default None = the
+        # full embedding, i.e. the original behaviour.
+        self.mi_emb_dim = emb_dim if mi_emb_dim is None else mi_emb_dim
+        self.behaviour_extractor = BehaviourExtractor(self.mi_emb_dim, behaviour_dim, window)
         self.mi_decoder          = MIDecoder(role_dim, behaviour_dim, hidden_dim)
 
     def mi_loss(self, role_z, emb_window, mi_mask=None):
@@ -145,7 +151,19 @@ class RomaAuxLoss(nn.Module):
         mi_mask (B,) bool: samples to include. Future-window targets are
         invalid where the future crosses the rollout tail or an episode
         reset; those samples are excluded (loss averaged over valid only).
+
+        The MI loss is the strongest single gradient on the role encoder
+        (mi_weight=1.0 vs div_weight=0.1), so whatever ends up in the target
+        is what the role is trained to encode. With the full env embedding,
+        64 of the target's 128 dims are road geometry — a near-deterministic
+        function of the scene — and the cheapest way to lower this MSE is
+        therefore to encode the map. mi_emb_dim=64 drops road from the TARGET
+        (here: the FUTURE window, so the role must predict upcoming ego +
+        partner dynamics, not upcoming road) while leaving road available to
+        the role encoder as input.
         """
+        if self.mi_emb_dim != emb_window.size(-1):
+            emb_window = emb_window[..., :self.mi_emb_dim]
         behaviour_target = self.behaviour_extractor(emb_window).detach()
         behaviour_pred   = self.mi_decoder(role_z)
         if mi_mask is None:

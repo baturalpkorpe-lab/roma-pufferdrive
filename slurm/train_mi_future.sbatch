@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=roma_mifut
+#SBATCH --job-name=roma_mifua
 #SBATCH --partition=gpu-a100
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -7,19 +7,32 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --time=24:00:00
 #SBATCH --account=research-ceg-tp
-#SBATCH --output=roma_mifut_%j.out
-#SBATCH --error=roma_mifut_%j.err
+#SBATCH --output=roma_mifua_%j.out
+#SBATCH --error=roma_mifua_%j.err
 
-# FUTURE-prediction MI training (mi-future branch, dim=4): z_t must predict the
-# behaviour summary of the NEXT 8 env embeddings (t+1..t+8) instead of the past
-# window -- R3DM-inspired; the role becomes an INTENT signal rather than a
-# recap of what already happened / what the scene looks like. Full 10k map set,
-# standard self-play (NOT per-cluster maps).
+# FUTURE-MI x AGENT-CENTRIC training (mi-future-agentcentric branch, dim=4):
+# the two role fixes COMBINED, each attacking a different leg of the
+# map-determined-role problem.
 #
-# Runs on the account that submits it (defaults resolve to /scratch/$USER), so
-# it works unchanged on any account -- just clone the mi-future branch and:
+#   WHEN the MI target is (mi-future): z_t must predict the behaviour summary
+#   of the NEXT 8 env embeddings (t+1..t+8) instead of the past window --
+#   R3DM-inspired; the role becomes an INTENT signal rather than a recap.
+#
+#   WHAT the role sees / is paid for (role-agent-centric):
+#     ROLE_ROAD_DIM=16 ROLE_PARTNER_DIM=64 -- road shrinks from 64/128 to
+#       16/112 of the role encoder's input, partner doubles; the POLICY GRU
+#       keeps the full 128 either way, so road-keeping is untouched.
+#     MI_TARGET=ego_partner -- road is dropped from the MI TARGET: the role
+#       must predict upcoming EGO+PARTNER dynamics, not upcoming road
+#       geometry (which is a near-deterministic function of the scene and
+#       was the cheapest thing to encode).
+#
+# Full 10k map set, standard self-play (NOT per-cluster maps). Runs on the
+# account that submits it (defaults resolve to /scratch/$USER):
 #   sbatch slurm/train_mi_future.sbatch
 #   sbatch --export=ALL,MI_HORIZON=16 slurm/train_mi_future.sbatch
+#   sbatch --export=ALL,MI_TARGET=full,ROLE_ROAD_DIM=64,ROLE_PARTNER_DIM=32 \
+#       slurm/train_mi_future.sbatch     # plain mi-future, for comparison
 #
 # 3B steps. Mid-run WOSAC every 500M (lite, 10 batches). The FULL 100-batch
 # WOSAC + role analysis runs as a SEPARATE job (eval_mi_future.sbatch, chained
@@ -40,11 +53,18 @@
 # experiment, and sharing a wandb name makes the two indistinguishable in the
 # sidebar. At the default 0.1 both the path and the name are unchanged, so the
 # div-on run stays bit-identical to what this file did before.
-#   bash slurm/run_mi_future_nodiv.sh          # div_weight 0
+#   DIV_WEIGHT=0 bash slurm/run_mi_future.sh   # div_weight 0, whole chain
 #   sbatch --export=ALL,DIV_WEIGHT=0 slurm/train_mi_future.sbatch
 
 ROLE_DIM=${ROLE_DIM:-4}
 MI_HORIZON=${MI_HORIZON:-8}
+
+# ---- The agent-centric role view (this branch's defaults) ------------------
+ROLE_ROAD_DIM=${ROLE_ROAD_DIM:-16}
+ROLE_PARTNER_DIM=${ROLE_PARTNER_DIM:-64}
+MI_TARGET=${MI_TARGET:-ego_partner}
+case "$MI_TARGET" in ego_partner) MI_TAG=ep ;; *) MI_TAG=$MI_TARGET ;; esac
+ARCH_TAG=_r${ROLE_ROAD_DIM}p${ROLE_PARTNER_DIM}_${MI_TAG}
 
 # ---- The ablation ---------------------------------------------------------
 DIV_WEIGHT=${DIV_WEIGHT:-0.1}                # 0 = diversity loss OFF
@@ -52,11 +72,15 @@ MI_WEIGHT=${MI_WEIGHT:-1.0}                  # MI loss stays ON either way
 case "$DIV_WEIGHT" in 0|0.|0.0|0.00) DIV_TAG=_nodiv ;; *) DIV_TAG= ;; esac
 
 # ---- Paths: default to the submitting account's own scratch ---------------
+# Both the arch and the ablation go in the path: auto-resume matches
+# checkpoints by filename, and a different role view builds a different-shaped
+# role encoder, so two configs sharing one SAVE_DIR would resume from weights
+# that cannot load (or silently continue the wrong experiment).
 SCRATCH_ROOT=${SCRATCH_ROOT:-/scratch/$USER}
 PUFFER_DIR=${PUFFER_DIR:-$SCRATCH_ROOT/PufferDrive}
 CODE_DIR=${CODE_DIR:-$SLURM_SUBMIT_DIR}
 DATA_DIR=${DATA_DIR:-$PUFFER_DIR/pufferlib/resources/drive/binaries/training}
-SAVE_DIR=${SAVE_DIR:-$SCRATCH_ROOT/checkpoints/roma_mifuture_dim${ROLE_DIM}_H${MI_HORIZON}${DIV_TAG}}
+SAVE_DIR=${SAVE_DIR:-$SCRATCH_ROOT/checkpoints/roma_mifutagent_dim${ROLE_DIM}_H${MI_HORIZON}${ARCH_TAG}${DIV_TAG}}
 
 TOTAL_STEPS=${TOTAL_STEPS:-3000000000}
 SAVE_INTERVAL=${SAVE_INTERVAL:-500000000}
@@ -68,7 +92,7 @@ WOSAC_INTERVAL=${WOSAC_INTERVAL:-500000000}
 WOSAC_EVAL_BATCHES=${WOSAC_EVAL_BATCHES:-10}
 WANDB_PROJECT=${WANDB_PROJECT:-roma-pufferdrive}
 WANDB_ENTITY=${WANDB_ENTITY:-s-rahmani-tu-delft}
-WANDB_NAME=${WANDB_NAME:-roma_mifutH${MI_HORIZON}_dim${ROLE_DIM}${DIV_TAG}_maps${NUM_MAPS}_${SEED}}
+WANDB_NAME=${WANDB_NAME:-roma_mifutagentH${MI_HORIZON}_dim${ROLE_DIM}${ARCH_TAG}${DIV_TAG}_maps${NUM_MAPS}_${SEED}}
 
 module purge
 module load miniconda3
@@ -92,7 +116,13 @@ grep -q -- "--mi_horizon" "$CODE_DIR/roma_pufferdrive/train_roma.py" || {
 # predates them and would die on an argparse error after the GPU is allocated.
 grep -q -- "--wandb_name" "$CODE_DIR/roma_pufferdrive/train_roma.py" || {
     echo "ERROR: this train_roma.py has no --resume/--wandb_name -- stale clone?"
-    echo "       git -C $CODE_DIR pull  (mi-future)"; exit 1; }
+    echo "       git -C $CODE_DIR pull  (mi-future-agentcentric)"; exit 1; }
+# --mi_target only exists on the mi-future-agentcentric branch: a plain
+# mi-future clone would run FUTURE-only and silently skip the agent-centric
+# half of this experiment.
+grep -q -- "--mi_target" "$CODE_DIR/roma_pufferdrive/train_roma.py" || {
+    echo "ERROR: this train_roma.py has no --mi_target -- wrong branch?"
+    echo "       clone mi-future-agentcentric and submit from that checkout."; exit 1; }
 mkdir -p "$SAVE_DIR"
 
 # ---- Auto-resume from the highest-step checkpoint in SAVE_DIR --------------
@@ -116,6 +146,7 @@ else
 fi
 
 echo "[mifut] role_dim=$ROLE_DIM  H=$MI_HORIZON  maps=$NUM_MAPS  total_steps=$TOTAL_STEPS"
+echo "[mifut] role view: road=$ROLE_ROAD_DIM partner=$ROLE_PARTNER_DIM  mi_target=$MI_TARGET"
 echo "[mifut] div_weight=$DIV_WEIGHT  mi_weight=$MI_WEIGHT  wandb_name=$WANDB_NAME"
 echo "[mifut] code=$CODE_DIR  save=$SAVE_DIR"
 echo "[mifut] branch=$(git -C "$CODE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ?) commit=$(git -C "$CODE_DIR" rev-parse --short HEAD 2>/dev/null || echo ?)"
@@ -126,6 +157,9 @@ cd "$PUFFER_DIR"
 python "$CODE_DIR/roma_pufferdrive/train_roma.py" \
     --role_dim      "$ROLE_DIM" \
     --mi_horizon    "$MI_HORIZON" \
+    --role_road_dim    "$ROLE_ROAD_DIM" \
+    --role_partner_dim "$ROLE_PARTNER_DIM" \
+    --mi_target        "$MI_TARGET" \
     --div_weight    "$DIV_WEIGHT" \
     --mi_weight     "$MI_WEIGHT" \
     --data_dir      "$DATA_DIR" \
