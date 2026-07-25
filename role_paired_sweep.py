@@ -62,7 +62,7 @@ from torch.distributions import Categorical
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from render_topdown import load_policy
-from traj_kinematics import ego_kinematics
+from traj_kinematics import ego_kinematics, event_kinematics
 
 T = 91
 TELEPORT_M = 4.0     # respawn discontinuity cut (validated by diag_speed_spikes)
@@ -71,12 +71,55 @@ GT_MOVE_MS = 1.0
 EVENT_REW  = -0.4
 ROLLOUT_SEED = 1234
 
-METRICS = ["speed_mean", "accel_abs", "accel_pos", "decel_abs", "jerk_abs",
-           "turn_abs", "event_rate"]
+# The time-averaged kinematics kept for continuity with earlier runs. They
+# cannot express aggression: over a fixed horizon mean|a| = 10*TV(speed)/N, so
+# a 12->0 m/s stop taken at -8 m/s2 over 1.5 s and the same stop taken at
+# -2 m/s2 over 6 s both score decel_abs = 1.33. See traj_kinematics.
+MEAN_METRICS = ["speed_mean", "accel_abs", "accel_pos", "decel_abs",
+                "jerk_abs", "turn_abs", "event_rate"]
+
+# Tail/shape and braking-EVENT statistics -- what actually separates the two
+# stops above (decel_p95 8.0 vs 2.0, hard_brake_rate 0.167 vs 0.0,
+# brake_dur_mean 1.5 s vs 6.0 s).
+TAIL_METRICS = ["decel_p95", "decel_max", "accel_p95", "accel_max",
+                "hard_brake_rate", "severe_brake_rate",
+                "jerk_p95", "jerk_rms", "jerk_spikiness", "accel_kurt"]
+EVENT_METRICS = ["n_brake_events", "brake_per_100m", "brake_peak_mean",
+                 "brake_peak_max", "brake_dur_mean", "brake_dv_mean",
+                 "brake_abrupt_mean"]
+# Not a behaviour: the fraction of accelerations killed by the |a|>10 m/s2
+# plausibility cap. Swept like everything else ON PURPOSE -- masking deletes
+# the largest samples, so if one alpha breaks the sim more often its tail is
+# truncated harder and biased low. A non-flat dose-response HERE invalidates
+# the tail metrics above, and no amount of within-(map,vehicle) pairing fixes
+# it. Check this panel first.
+AUDIT_METRICS = ["accel_mask_frac"]
+
+METRICS = MEAN_METRICS + TAIL_METRICS + EVENT_METRICS + AUDIT_METRICS
+
+# Everything above lands in the CSVs; only these get a figure panel, or the
+# dose-response grid would be ~25 panels wide and unreadable.
+PLOT_METRICS = ["speed_mean", "decel_p95", "decel_max", "hard_brake_rate",
+                "brake_peak_mean", "brake_dur_mean", "brake_per_100m",
+                "jerk_p95", "event_rate", "accel_mask_frac"]
+
 METRIC_LABEL = {"speed_mean": "speed (m/s)", "accel_abs": "|accel| (m/s2)",
                 "accel_pos": "throttle a+ (m/s2)", "decel_abs": "braking |a-| (m/s2)",
                 "jerk_abs": "|jerk| (m/s3)", "turn_abs": "|turn| (rad/s)",
-                "event_rate": "safety events / 91"}
+                "event_rate": "safety events / 91",
+                "decel_p95": "braking p95 (m/s2)", "decel_max": "braking max (m/s2)",
+                "accel_p95": "throttle p95 (m/s2)", "accel_max": "throttle max (m/s2)",
+                "hard_brake_rate": "steps |a-|>3 (frac)",
+                "severe_brake_rate": "steps |a-|>5 (frac)",
+                "jerk_p95": "|jerk| p95 (m/s3)", "jerk_rms": "jerk rms (m/s3)",
+                "jerk_spikiness": "jerk rms/mean", "accel_kurt": "accel kurtosis",
+                "n_brake_events": "brake events", "brake_per_100m": "brake events/100m",
+                "brake_peak_mean": "event peak, mean (m/s2)",
+                "brake_peak_max": "event peak, max (m/s2)",
+                "brake_dur_mean": "event duration (s)",
+                "brake_dv_mean": "event dv (m/s)",
+                "brake_abrupt_mean": "event peak/mean",
+                "accel_mask_frac": "AUDIT: accel masked (frac)"}
 
 
 def load_drive_config():
@@ -119,6 +162,12 @@ def parse_args():
     p.add_argument("--regime_names", type=str, default="")
     p.add_argument("--n_axes",     type=int, default=2, help="PC1..PCn to sweep")
     p.add_argument("--alphas",     type=str, default="-2,-1,0,1,2")
+    p.add_argument("--max_mask_frac", type=float, default=1.0,
+                   help="Drop an (episode,sid,vid) from EVERY condition when "
+                        "its accel mask rate exceeds this in ANY condition, so "
+                        "all alphas are compared on the same clean agents. "
+                        "1.0 = off (report only). Try 0.02 if the audit shows "
+                        "the mask rate is not flat across alphas.")
     p.add_argument("--observe_only", action="store_true",
                    help="Stop after the warmup: writes the observational "
                         "PC-vs-behavior scatter (plausibility-masked accel/"
@@ -149,10 +198,15 @@ def focal_metrics(a, xs, ys, hs, rews, gx, gy, gvalid, T_gt):
     p_dy = np.diff(ys[:t_end, a])[pair]
     p_spd = np.hypot(p_dx, p_dy) * 10.0
     p_dh  = wrap_angle(np.diff(hs[:t_end, a])[pair]) * 10.0
-    k = ego_kinematics(p_spd, p_dh)               # plausibility-masked kinematics
+    # `pair` already compacted the series, so the ORIGINAL step index of each
+    # speed sample has to travel with it -- otherwise the kinematics difference
+    # across the dropped steps as though they were 0.1 s apart and manufacture
+    # an acceleration at the boundary of every hole.
+    t_idx = np.flatnonzero(pair)
+    k = ego_kinematics(p_spd, p_dh, t_idx)        # plausibility-masked kinematics
     if k["n_steps"] < MIN_STEPS:
         return None
-    return {
+    m = {
         "speed_mean": k["speed_mean"],
         "accel_abs":  k["accel_abs"],
         "accel_pos":  k["accel_pos"],
@@ -161,6 +215,11 @@ def focal_metrics(a, xs, ys, hs, rews, gx, gy, gvalid, T_gt):
         "turn_abs":   k["turn_abs"],
         "event_rate": float((rews[:t_end, a] <= EVENT_REW).sum() / t_end * T),
     }
+    e = event_kinematics(p_spd, t_idx)            # tail + braking-event stats
+    m.update({kk: e[kk] for kk in TAIL_METRICS + EVENT_METRICS + AUDIT_METRICS})
+    m["n_accel"] = e["n_accel"]
+    m["distance_m"] = e["distance_m"]
+    return m
 
 
 def select_focals(gt, regime_of):
@@ -337,13 +396,13 @@ def main():
         wdf[f"pc{d+1}"] = cen @ axes_u[d]
     wdf.to_csv(out / "role_paired_warmup.csv", index=False)
 
-    fig, axs2 = plt.subplots(n_axes, len(METRICS),
-                             figsize=(3.0 * len(METRICS), 2.8 * n_axes),
+    fig, axs2 = plt.subplots(n_axes, len(PLOT_METRICS),
+                             figsize=(3.0 * len(PLOT_METRICS), 2.8 * n_axes),
                              squeeze=False)
     print("\n[paired] === observational r (natural, plausibility-masked) ===")
     for d in range(n_axes):
         proj = cen @ axes_u[d]
-        for j, met in enumerate(METRICS):
+        for j, met in enumerate(PLOT_METRICS):
             ax = axs2[d][j]
             y  = Bdf[met].values.astype(float)
             ok = np.isfinite(proj) & np.isfinite(y)
@@ -405,17 +464,60 @@ def main():
 
     # -- Analysis: everything is a within-(episode,map,vehicle) paired delta --
     key = ["episode", "sid", "vid"]
+
+    # -- Mask-rate audit: is the |a|>10 m/s2 cap firing EVENLY across alphas? --
+    # The cap deletes the largest accelerations, so a condition that breaks the
+    # sim more often (more collisions -> more respawns) has its tail truncated
+    # harder and biased low. Pairing does not fix that -- it is a property of
+    # the condition, not of the map. Read this before the tail metrics.
+    ms = (df.groupby("cond")["accel_mask_frac"]
+            .agg(["mean", "max", "count"]).sort_index())
+    print("\n[paired] === accel mask rate per condition (audit) ===")
+    for cond, r in ms.iterrows():
+        print(f"[paired]   {cond:>12}: mean={r['mean']:.4f}  "
+              f"max={r['max']:.3f}  n={int(r['count'])}")
+    spread = float(ms["mean"].max() - ms["mean"].min())
+    print(f"[paired]   spread across conditions: {spread:.4f}")
+    if spread > 0.01:
+        print("[paired]   WARNING: mask rate is NOT flat across conditions -- "
+              "tail metrics (decel_p95/max, brake_peak_*) are truncated by "
+              "different amounts per alpha. Prefer --max_mask_frac to equalise.")
+
+    # Optional symmetric drop: if an agent-episode is too broken in ANY
+    # condition, remove that (episode, sid, vid) from EVERY condition, so all
+    # alphas are compared on an identical set of clean agents rather than on
+    # differently-truncated versions of the same ones. Off by default (1.0) --
+    # it changes which agents enter the analysis, so it should be a deliberate
+    # choice, not a silent one.
+    if args.max_mask_frac < 1.0:
+        bad = df.loc[df["accel_mask_frac"] > args.max_mask_frac, key]
+        bad = set(map(tuple, bad.itertuples(index=False, name=None)))
+        if bad:
+            before = len(df)
+            keep = ~df[key].apply(tuple, axis=1).isin(bad)
+            df = df[keep]
+            print(f"[paired] --max_mask_frac {args.max_mask_frac}: dropped "
+                  f"{len(bad)} (episode,sid,vid) from ALL conditions "
+                  f"({before - len(df)} rows, {100*(before-len(df))/before:.1f}%)")
+        else:
+            print(f"[paired] --max_mask_frac {args.max_mask_frac}: "
+                  f"no agent exceeded it -- nothing dropped")
+
     base = df[df["cond"] == "natural"].set_index(key)
     regimes = sorted(df["regime"].unique())
 
     delta_rows, test_rows = [], []
     for d in range(n_axes):
         pcname = f"PC{d+1}"
-        fig, axs = plt.subplots(1, len(METRICS),
-                                figsize=(3.1 * len(METRICS), 3.8))
+        fig, axs = plt.subplots(1, len(PLOT_METRICS),
+                                figsize=(3.1 * len(PLOT_METRICS), 3.8))
+        # Every metric gets CSV rows and a headline test; only PLOT_METRICS
+        # get a panel. ax is None for the rest.
+        ax_of = dict(zip(PLOT_METRICS, np.atleast_1d(axs)))
         cond_of = {al: (f"{pcname}|{al:+g}" if al != 0.0 else "natural")
                    for al in alphas}
-        for ax, met in zip(np.atleast_1d(axs), METRICS):
+        for met in METRICS:
+            ax = ax_of.get(met)
             xs_o, ys_o = [], []
             for al in alphas:
                 sub = df[df["cond"] == cond_of[al]].set_index(key)
@@ -436,31 +538,33 @@ def main():
                                            "mean_delta": float(ddr.mean()),
                                            "sem": float(ddr.std()/len(ddr)**0.5),
                                            "n_pairs": int(len(ddr))})
-            # per-regime lines
-            for rg in regimes:
-                xr, yr, er = [], [], []
-                for al in alphas:
-                    hit = [r for r in delta_rows
-                           if r["axis"] == pcname and r["alpha"] == al
-                           and r["regime"] == rg and r["metric"] == met]
-                    if hit:
-                        xr.append(al); yr.append(hit[0]["mean_delta"])
-                        er.append(1.96 * hit[0]["sem"])
-                if xr:
-                    ax.errorbar(xr, yr, yerr=er, marker="o", ms=3, capsize=2,
-                                lw=1, alpha=0.7, label=names.get(rg, f"reg {rg}"))
-            if len(xs_o) >= 2:
-                ax.plot(xs_o, ys_o, "k-o", lw=2.2, ms=4, label="overall")
-                slope = float(np.polyfit(xs_o, ys_o, 1)[0])
-                yy = np.array(ys_o)[np.argsort(xs_o)]
-                mono = bool(np.all(np.diff(yy) >= -1e-9)
-                            or np.all(np.diff(yy) <= 1e-9))
-                ax.set_title(f"Δ {METRIC_LABEL[met]}\nslope={slope:+.2f}/σ"
-                             f"{'  (mono)' if mono else ''}", fontsize=8)
-            ax.axhline(0, color="grey", lw=0.7)
-            ax.axvline(0, color="grey", lw=0.7, ls=":")
-            ax.set_xlabel(f"{pcname} (σ)", fontsize=8)
-            ax.grid(alpha=0.3)
+            if ax is not None:
+                # per-regime lines
+                for rg in regimes:
+                    xr, yr, er = [], [], []
+                    for al in alphas:
+                        hit = [r for r in delta_rows
+                               if r["axis"] == pcname and r["alpha"] == al
+                               and r["regime"] == rg and r["metric"] == met]
+                        if hit:
+                            xr.append(al); yr.append(hit[0]["mean_delta"])
+                            er.append(1.96 * hit[0]["sem"])
+                    if xr:
+                        ax.errorbar(xr, yr, yerr=er, marker="o", ms=3, capsize=2,
+                                    lw=1, alpha=0.7,
+                                    label=names.get(rg, f"reg {rg}"))
+                if len(xs_o) >= 2:
+                    ax.plot(xs_o, ys_o, "k-o", lw=2.2, ms=4, label="overall")
+                    slope = float(np.polyfit(xs_o, ys_o, 1)[0])
+                    yy = np.array(ys_o)[np.argsort(xs_o)]
+                    mono = bool(np.all(np.diff(yy) >= -1e-9)
+                                or np.all(np.diff(yy) <= 1e-9))
+                    ax.set_title(f"Δ {METRIC_LABEL[met]}\nslope={slope:+.2f}/σ"
+                                 f"{'  (mono)' if mono else ''}", fontsize=8)
+                ax.axhline(0, color="grey", lw=0.7)
+                ax.axvline(0, color="grey", lw=0.7, ls=":")
+                ax.set_xlabel(f"{pcname} (σ)", fontsize=8)
+                ax.grid(alpha=0.3)
 
             # headline paired test: +2 vs -2 on the SAME maps
             lo, hi = min(alphas), max(alphas)
