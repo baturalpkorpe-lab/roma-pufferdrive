@@ -62,7 +62,14 @@ def load_policy(checkpoint_path, role_dim, obs_dim, device):
     from roma_pufferdrive.roma.policy import RomaPolicy
     ckpt   = torch.load(checkpoint_path, map_location=device, weights_only=False)
     key    = "policy_state" if "policy_state" in ckpt else "policy"
-    policy = RomaPolicy(obs_dim=obs_dim, role_dim=role_dim)
+    # Rebuild the role encoder at the width it was TRAINED with -- the
+    # rebalanced role view changes state-dict shapes, so the default layout
+    # cannot load those checkpoints. Absent from pre-rebalance checkpoints
+    # -> None -> original layout, unchanged.
+    saved  = ckpt.get("args", {}) or {}
+    policy = RomaPolicy(obs_dim=obs_dim, role_dim=role_dim,
+                        role_partner_dim=saved.get("role_partner_dim"),
+                        role_road_dim=saved.get("role_road_dim"))
     policy.load_state_dict(ckpt[key])
     policy.to(device)
     policy.eval()
