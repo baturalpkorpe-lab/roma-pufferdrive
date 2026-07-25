@@ -69,10 +69,17 @@ else
     echo "videos          : skipped (SKIP_RENDER=1)"
 fi
 
-I=$(sbatch --parsable \
-    --export="$E,OUT=$SCRATCH_ROOT/role_icc/$TAG" \
-    "$HERE/role_scene_icc.sbatch")
-echo "scene ICC (GPU) : $I   -> $SCRATCH_ROOT/role_icc/$TAG/"
+if [ "${SKIP_ICC:-0}" != "1" ]; then
+    I=$(sbatch --parsable \
+        --export="$E,OUT=$SCRATCH_ROOT/role_icc/$TAG" \
+        "$HERE/role_scene_icc.sbatch")
+    echo "scene ICC (GPU) : $I   -> $SCRATCH_ROOT/role_icc/$TAG/"
+else
+    # For runs whose training chain ALREADY submitted a scene-ICC job
+    # (run_agent_role.sh / the combined run_mi_future.sh chain it afterok) --
+    # resubmitting it here would burn a GPU on a duplicate.
+    echo "scene ICC       : skipped (SKIP_ICC=1 -- already chained to the training job)"
+fi
 
 echo
 echo "checkpoint -> $CKPT"
