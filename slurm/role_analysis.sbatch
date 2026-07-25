@@ -143,10 +143,24 @@ python "$CODE_DIR/role_paired_sweep.py" \
     --n_axes 2 --alphas="$ALPHAS" \
     --regime_names "$TYPE_NAMES" \
     --warmup_episodes "$WARMUP_EP" --episodes "$SWEEP_EP" \
-  || echo "[role_an] WARNING: sweep exited nonzero -- dependent steps may be partial"
+  || { echo "[role_an] FAILED: the sweep died -- steps 2-5 and the chained"
+       echo "          render all depend on it, so there is nothing to salvage."
+       echo "          Exiting NONZERO so sacct shows FAILED and the afterok"
+       echo "          render does not fire. (A bare '|| echo' here is what"
+       echo "          made job 10519981 report COMPLETED 0:0 after producing"
+       echo "          nothing at all.)"; exit 1; }
 
 AGENT="$PAIRED/role_paired_agent.csv"
 WARMUP="$PAIRED/role_paired_warmup.csv"
+# The sweep can exit 0 and still write nothing usable (e.g. zero eligible
+# scenes -> no observations). Everything downstream keys off these two files,
+# so treat their absence as a failure too rather than "skipping" five steps
+# and reporting success.
+[ -f "$AGENT" ] && [ -f "$WARMUP" ] || {
+    echo "[role_an] FAILED: sweep exited 0 but produced no $AGENT / $WARMUP"
+    echo "          -- check the '[paired] warmup N/M: X pairs' lines above;"
+    echo "          X=0 means no scene in the scaffold matched the loaded maps."
+    exit 1; }
 
 # --- 2. Dose-response SPLIT BY TRAJECTORY CLUSTER --------------------------
 step "2/5 role_paired_by_traj [cpu]"
