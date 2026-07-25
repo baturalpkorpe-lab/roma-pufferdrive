@@ -22,11 +22,15 @@
 
 ROLE_DIM=${ROLE_DIM:-4}
 MI_HORIZON=${MI_HORIZON:-8}
+# Mirrors train_mi_future.sbatch: DIV_WEIGHT=0 lives in its own SAVE_DIR/OUT so
+# the ablation never scores the div-on checkpoint (or overwrites its results).
+DIV_WEIGHT=${DIV_WEIGHT:-0.1}
+case "$DIV_WEIGHT" in 0|0.|0.0|0.00) DIV_TAG=_nodiv ;; *) DIV_TAG= ;; esac
 SCRATCH_ROOT=${SCRATCH_ROOT:-/scratch/$USER}
 PUFFER_DIR=${PUFFER_DIR:-$SCRATCH_ROOT/PufferDrive}
 CODE_DIR=${CODE_DIR:-$SLURM_SUBMIT_DIR}
-SAVE_DIR=${SAVE_DIR:-$SCRATCH_ROOT/checkpoints/roma_mifuture_dim${ROLE_DIM}_H${MI_HORIZON}}
-OUT=${OUT:-$SCRATCH_ROOT/eval_results/mifuture_dim${ROLE_DIM}_H${MI_HORIZON}}
+SAVE_DIR=${SAVE_DIR:-$SCRATCH_ROOT/checkpoints/roma_mifuture_dim${ROLE_DIM}_H${MI_HORIZON}${DIV_TAG}}
+OUT=${OUT:-$SCRATCH_ROOT/eval_results/mifuture_dim${ROLE_DIM}_H${MI_HORIZON}${DIV_TAG}}
 MAP_DIR=${MAP_DIR:-pufferlib/resources/drive/binaries/training}   # relative to PUFFER_DIR
 ROLE_EPISODES=${ROLE_EPISODES:-10}
 WOSAC_MAX_BATCHES=${WOSAC_MAX_BATCHES:-100}
@@ -72,7 +76,7 @@ python "$CODE_DIR/eval_roma.py" \
     --role_episodes     "$ROLE_EPISODES" \
     --output_dir        "$OUT" \
     --wandb \
-    --wandb_run_name    "eval_mifutH${MI_HORIZON}_dim${ROLE_DIM}" \
+    --wandb_run_name    "eval_mifutH${MI_HORIZON}_dim${ROLE_DIM}${DIV_TAG}" \
   || { echo "[eval_mifut] FAILED (python exit $?)"; exit 1; }
 
 echo "[eval_mifut] done -> $OUT"
