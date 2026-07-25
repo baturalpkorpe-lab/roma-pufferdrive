@@ -62,7 +62,12 @@ from torch.distributions import Categorical
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from render_topdown import load_policy
-from traj_kinematics import ego_kinematics, event_kinematics
+from traj_kinematics import (ego_kinematics, event_kinematics,
+                             METRICS as TK_METRICS,
+                             PLOT_METRICS as TK_PLOT_METRICS,
+                             METRIC_LABEL as TK_METRIC_LABEL,
+                             MEAN_METRICS, TAIL_METRICS,
+                             EVENT_METRICS, AUDIT_METRICS)
 
 T = 91
 TELEPORT_M = 4.0     # respawn discontinuity cut (validated by diag_speed_spikes)
@@ -71,55 +76,11 @@ GT_MOVE_MS = 1.0
 EVENT_REW  = -0.4
 ROLLOUT_SEED = 1234
 
-# The time-averaged kinematics kept for continuity with earlier runs. They
-# cannot express aggression: over a fixed horizon mean|a| = 10*TV(speed)/N, so
-# a 12->0 m/s stop taken at -8 m/s2 over 1.5 s and the same stop taken at
-# -2 m/s2 over 6 s both score decel_abs = 1.33. See traj_kinematics.
-MEAN_METRICS = ["speed_mean", "accel_abs", "accel_pos", "decel_abs",
-                "jerk_abs", "turn_abs", "event_rate"]
-
-# Tail/shape and braking-EVENT statistics -- what actually separates the two
-# stops above (decel_p95 8.0 vs 2.0, hard_brake_rate 0.167 vs 0.0,
-# brake_dur_mean 1.5 s vs 6.0 s).
-TAIL_METRICS = ["decel_p95", "decel_max", "accel_p95", "accel_max",
-                "hard_brake_rate", "severe_brake_rate",
-                "jerk_p95", "jerk_rms", "jerk_spikiness", "accel_kurt"]
-EVENT_METRICS = ["n_brake_events", "brake_per_100m", "brake_peak_mean",
-                 "brake_peak_max", "brake_dur_mean", "brake_dv_mean",
-                 "brake_abrupt_mean"]
-# Not a behaviour: the fraction of accelerations killed by the |a|>10 m/s2
-# plausibility cap. Swept like everything else ON PURPOSE -- masking deletes
-# the largest samples, so if one alpha breaks the sim more often its tail is
-# truncated harder and biased low. A non-flat dose-response HERE invalidates
-# the tail metrics above, and no amount of within-(map,vehicle) pairing fixes
-# it. Check this panel first.
-AUDIT_METRICS = ["accel_mask_frac"]
-
-METRICS = MEAN_METRICS + TAIL_METRICS + EVENT_METRICS + AUDIT_METRICS
-
-# Everything above lands in the CSVs; only these get a figure panel, or the
-# dose-response grid would be ~25 panels wide and unreadable.
-PLOT_METRICS = ["speed_mean", "decel_p95", "decel_max", "hard_brake_rate",
-                "brake_peak_mean", "brake_dur_mean", "brake_per_100m",
-                "jerk_p95", "event_rate", "accel_mask_frac"]
-
-METRIC_LABEL = {"speed_mean": "speed (m/s)", "accel_abs": "|accel| (m/s2)",
-                "accel_pos": "throttle a+ (m/s2)", "decel_abs": "braking |a-| (m/s2)",
-                "jerk_abs": "|jerk| (m/s3)", "turn_abs": "|turn| (rad/s)",
-                "event_rate": "safety events / 91",
-                "decel_p95": "braking p95 (m/s2)", "decel_max": "braking max (m/s2)",
-                "accel_p95": "throttle p95 (m/s2)", "accel_max": "throttle max (m/s2)",
-                "hard_brake_rate": "steps |a-|>3 (frac)",
-                "severe_brake_rate": "steps |a-|>5 (frac)",
-                "jerk_p95": "|jerk| p95 (m/s3)", "jerk_rms": "jerk rms (m/s3)",
-                "jerk_spikiness": "jerk rms/mean", "accel_kurt": "accel kurtosis",
-                "n_brake_events": "brake events", "brake_per_100m": "brake events/100m",
-                "brake_peak_mean": "event peak, mean (m/s2)",
-                "brake_peak_max": "event peak, max (m/s2)",
-                "brake_dur_mean": "event duration (s)",
-                "brake_dv_mean": "event dv (m/s)",
-                "brake_abrupt_mean": "event peak/mean",
-                "accel_mask_frac": "AUDIT: accel masked (frac)"}
+# Metric vocabulary lives in traj_kinematics (single source of truth --
+# role_paired_by_traj and role_scene_consistency read the same lists).
+METRICS      = TK_METRICS
+PLOT_METRICS = TK_PLOT_METRICS
+METRIC_LABEL = TK_METRIC_LABEL
 
 
 def load_drive_config():

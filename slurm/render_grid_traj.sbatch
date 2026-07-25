@@ -16,9 +16,9 @@
 # to role forcing. CPU (compute partition) on purpose -- headless matplotlib,
 # no GPU, so it does not eat the supervisor's GPU allocation for 16h.
 #
-# Reads the axes from role_paired_axes.csv (from nodiv_analysis.sbatch) so the
+# Reads the axes from role_paired_axes.csv (from role_analysis.sbatch) so the
 # forcing directions match the statistics. Usually launched chained afterok
-# via slurm/run_nodiv_analysis.sh; standalone:
+# via slurm/run_role_analysis.sh; standalone:
 #   sbatch --export=ALL,CKPT=/scratch/$USER/checkpoints/roma_nodiv_dim4/roma_dim4_final.pt,\
 #     AXES=/scratch/$USER/analysis/nodiv_dim4/paired/role_paired_axes.csv,\
 #     OUT=/scratch/$USER/analysis/nodiv_dim4/renders/role_grid \
@@ -27,17 +27,20 @@
 set -u
 
 ROLE_DIM=${ROLE_DIM:-4}
-TAG=${TAG:-nodiv_dim4}
+TAG=${TAG:-role_dim4}
 SCRATCH_ROOT=${SCRATCH_ROOT:-/scratch/$USER}
 PUFFER_DIR=${PUFFER_DIR:-$SCRATCH_ROOT/PufferDrive}
 CODE_DIR=${CODE_DIR:-$SLURM_SUBMIT_DIR}
 DATA_DIR=${DATA_DIR:-$PUFFER_DIR/pufferlib/resources/drive/binaries/training}
 
-CKPT=${CKPT:-$SCRATCH_ROOT/checkpoints/roma_nodiv_dim4/roma_dim${ROLE_DIM}_final.pt}
+CKPT=${CKPT:-}
+[ -n "$CKPT" ] || { echo "ERROR: set CKPT=<checkpoint.pt>"; exit 1; }
 AXES=${AXES:-$SCRATCH_ROOT/analysis/$TAG/paired/role_paired_axes.csv}
 OUT=${OUT:-$SCRATCH_ROOT/analysis/$TAG/renders/role_grid}
-# TRAJ: this account's scratch copy, else the repo copy under data/ (ships with
-# the repo because the file cannot be regenerated without the raw Waymo cache).
+# Prefer this account's own scratch copy; otherwise the copy committed under
+# data/. trajectory_clusters_stopfrac.csv cannot be regenerated (K-means
+# reshuffles labels), so it ships with the repo and an account that never
+# generated it still finds it after `git pull`.
 if [ -z "${TRAJ:-}" ]; then
     if [ -f "$SCRATCH_ROOT/traj_atlas/trajectory_clusters_stopfrac.csv" ]; then
         TRAJ="$SCRATCH_ROOT/traj_atlas/trajectory_clusters_stopfrac.csv"

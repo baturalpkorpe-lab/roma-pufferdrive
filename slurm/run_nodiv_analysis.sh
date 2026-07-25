@@ -13,6 +13,8 @@ set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 TAG=${TAG:-nodiv_dim4}
+# nodiv default; role_analysis.sbatch itself requires CKPT.
+CKPT=${CKPT:-$SCRATCH_ROOT/checkpoints/roma_nodiv_dim4/roma_dim${ROLE_DIM:-4}_final.pt}
 SCRATCH_ROOT=${SCRATCH_ROOT:-/scratch/$USER}
 
 E="ALL,TAG=$TAG,SCRATCH_ROOT=$SCRATCH_ROOT"
@@ -21,7 +23,7 @@ for v in CKPT TRAJ PUFFER_DIR DATA_DIR ROLE_DIM ALPHAS SCENES_PER_TYPE TYPE_NAME
     [ -n "$val" ] && E="$E,$v=$val"
 done
 
-A=$(sbatch --parsable --export="$E" "$HERE/nodiv_analysis.sbatch")
+A=$(sbatch --parsable --export="$E" "$HERE/role_analysis.sbatch")
 echo "analysis (GPU) : $A"
 # AXES lands in the analysis output; pass it explicitly so the render does not
 # depend on default-path guessing.
