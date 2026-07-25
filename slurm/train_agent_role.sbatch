@@ -36,10 +36,17 @@
 # the comparison is clean: same 3B steps, same div_weight 0.1, same mi_weight,
 # same map pool, same seed. The ONLY differences are the three flags above.
 #
+# DIVERSITY ABLATION: DIV_WEIGHT=0 turns the cosine diversity loss off (MI stays
+# on). It gets its own SAVE_DIR suffix and wandb name -- sharing a SAVE_DIR with
+# the div-on run would have auto-resume continue the WRONG experiment, and
+# sharing a wandb name makes the two indistinguishable in the sidebar. At the
+# default 0.1 both the path and the name are byte-identical to before.
+#
 # Usage:
 #   sbatch --export=ALL,ROLE_DIM=4 slurm/train_agent_role.sbatch
 # or, for the whole chain in one line:
 #   bash slurm/run_agent_role.sh
+#   DIV_WEIGHT=0 bash slurm/run_agent_role.sh      # the no-diversity arm
 #
 # Submitted as ONE job: 3B fits the 24h allocation. Not chained on purpose --
 # checkpoints land every 500M steps, so a resume after a job that died at
@@ -80,10 +87,11 @@ SEED=${SEED:-0}
 # so sharing one SAVE_DIR across configs would have job 2 of a chain try to
 # resume from weights that cannot load.
 case "$MI_TARGET" in ego_partner) MI_TAG=ep ;; *) MI_TAG=$MI_TARGET ;; esac
-SAVE_DIR=${SAVE_DIR:-$SCRATCH_ROOT/checkpoints/roma_agentrole_dim${ROLE_DIM}_r${ROLE_ROAD_DIM}p${ROLE_PARTNER_DIM}_${MI_TAG}}
+case "$DIV_WEIGHT" in 0|0.|0.0|0.00) DIV_TAG=_nodiv ;; *) DIV_TAG= ;; esac
+SAVE_DIR=${SAVE_DIR:-$SCRATCH_ROOT/checkpoints/roma_agentrole_dim${ROLE_DIM}_r${ROLE_ROAD_DIM}p${ROLE_PARTNER_DIM}_${MI_TAG}${DIV_TAG}}
 WANDB_PROJECT=${WANDB_PROJECT:-roma-pufferdrive}
 WANDB_ENTITY=${WANDB_ENTITY:-s-rahmani-tu-delft}
-WANDB_NAME=${WANDB_NAME:-roma_dim${ROLE_DIM}_agentrole_road${ROLE_ROAD_DIM}p${ROLE_PARTNER_DIM}_${MI_TARGET}_${SEED}}
+WANDB_NAME=${WANDB_NAME:-roma_dim${ROLE_DIM}_agentrole${DIV_TAG}_road${ROLE_ROAD_DIM}p${ROLE_PARTNER_DIM}_${MI_TARGET}_${SEED}}
 
 set +u   # conda compiler activation scripts (gcc_linux-64) are not set -u safe: SYS_SYSROOT/CONDA_BACKUP_CXX unbound
 module purge
@@ -157,6 +165,10 @@ python "$CODE_DIR/roma_pufferdrive/train_roma.py" \
     --wandb_project       "$WANDB_PROJECT" \
     --wandb_entity        "$WANDB_ENTITY" \
     --wandb_name          "$WANDB_NAME" \
-    $RESUME_ARGS
+    $RESUME_ARGS \
+  || { echo "[agentrole] FAILED (python exit $?)"; exit 1; }
+# The guard matters: without it the trailing echo below is the last command, so
+# the job exits 0 on a python crash and sacct reports COMPLETED 0:0 -- and the
+# afterok eval fires on a run that produced nothing.
 
 echo "[agentrole] done -> $SAVE_DIR"

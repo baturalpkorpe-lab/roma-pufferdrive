@@ -86,6 +86,9 @@ python "$CODE_DIR/eval_roma.py" \
     --role_episodes     "$ROLE_EPISODES" \
     --output_dir        "$OUT" \
     --wandb \
-    --wandb_run_name    "eval_dim${ROLE_DIM}_${TAG}"
+    --wandb_run_name    "eval_dim${ROLE_DIM}_${TAG}" \
+  || { echo "[eval_final] FAILED (python exit $?)"; exit 1; }
+# Without the guard the trailing echo is the last command, so a python crash
+# still exits 0 and sacct reports COMPLETED 0:0 for a job that wrote nothing.
 
 echo "[eval_final] done -> $OUT"
