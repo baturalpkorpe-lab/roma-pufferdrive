@@ -138,6 +138,10 @@ def load_policy(ckpt_path, obs_dim, device):
         role_hidden=saved.get("role_hidden", 64),
         policy_hidden=saved.get("policy_hidden", 128),
         var_floor=saved.get("var_floor", 1e-4), obs_window_len=8,
+        # Rebuild the role encoder at the width it was TRAINED with; absent
+        # from pre-rebalance checkpoints -> None -> original layout.
+        role_partner_dim=saved.get("role_partner_dim"),
+        role_road_dim=saved.get("role_road_dim"),
     ).to(device)
     key = "policy_state" if "policy_state" in ckpt else "policy"
     policy.load_state_dict(ckpt[key])
