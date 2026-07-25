@@ -43,8 +43,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-METRICS  = ["speed_mean", "accel_abs", "accel_pos", "decel_abs", "jerk_abs",
-            "turn_abs", "event_rate"]
+# Metric vocabulary from traj_kinematics (single source of truth). This
+# script writes CSV only, so it takes the FULL list -- no figure to widen.
+from traj_kinematics import METRICS
+
 KEY      = ["episode", "sid", "vid"]
 ALPHA_RE = re.compile(r"(PC\d+)\|([+-]?\d+\.?\d*)")
 
@@ -102,8 +104,11 @@ def consistency_row(a, metric):
 
 def table_for(df, axis, metrics):
     a = df[df["axis"] == axis]
-    rows = [r for m in metrics
-            if (r := consistency_row(a, m)) is not None]
+    rows = []
+    for m in metrics:
+        r = consistency_row(a, m)
+        if r is not None:
+            rows.append(r)
     return pd.DataFrame(rows)
 
 
