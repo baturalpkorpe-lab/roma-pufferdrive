@@ -52,6 +52,14 @@ python "$CODE_DIR/role_scene_icc.py" \
     --checkpoint "$CKPT" \
     --data_dir   "$DATA_DIR" \
     --out_dir    "$OUT" \
-    --episodes   "$EPISODES"
+    --episodes   "$EPISODES"   || { echo "[icc] FAILED (python exit $?) -- see the traceback above"; exit 1; }
+
+# The ICC is a single python call, so a bare trailing echo here made every
+# crash look like success: jobs 10515777 / 10519983 / 10520165 all reported
+# COMPLETED 0:0 after dying in ~30s, and the scene-ICC number -- the
+# pre-registered metric this branch is aimed at -- was silently missing.
+[ -s "$OUT/role_scene_icc.csv" ] || {
+    echo "[icc] FAILED: python exited 0 but wrote no role_scene_icc.csv in $OUT"
+    exit 1; }
 
 echo "[icc] done -> $OUT"

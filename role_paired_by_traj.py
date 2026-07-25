@@ -31,12 +31,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-METRICS = ["speed_mean", "accel_abs", "accel_pos", "decel_abs", "jerk_abs",
-           "turn_abs", "event_rate"]
-METRIC_LABEL = {"speed_mean": "speed (m/s)", "accel_abs": "|accel| (m/s2)",
-                "accel_pos": "throttle a+ (m/s2)", "decel_abs": "braking |a-| (m/s2)",
-                "jerk_abs": "|jerk| (m/s3)", "turn_abs": "|turn| (rad/s)",
-                "event_rate": "safety events / 91"}
+# Metric vocabulary from traj_kinematics (single source of truth -- shared
+# with role_paired_sweep and role_scene_consistency).
+from traj_kinematics import METRICS, PLOT_METRICS, METRIC_LABEL
 
 
 def parse_args():
@@ -79,6 +76,15 @@ def main():
     clusters = sorted(df["traj_cluster"].unique())
     print(f"[traj-strat] trajectory clusters present: {clusters}")
 
+    # Only plot metrics the agent CSV actually has: older sweeps (pre accel
+    # throttle/brake split) lack accel_pos/decel_abs, so intersect with the
+    # columns present instead of KeyError-ing on the global METRICS list.
+    metrics = [m for m in METRICS if m in df.columns]
+    missing = [m for m in METRICS if m not in df.columns]
+    if missing:
+        print(f"[traj-strat] note: {missing} absent from this CSV (older "
+              f"sweep) -- skipping them")
+
     # conditions: "base" is alpha=0; "PC{d}|{alpha}" otherwise
     pcs = sorted({m.group(1) for c in df["cond"].unique()
                   for m in [re.match(r"(PC\d+)\|", str(c))] if m})
@@ -95,9 +101,13 @@ def main():
     for pc in pcs:
         cond_of = {al: (f"{pc}|{al:+g}" if al != 0.0 else base_cond)
                    for al in alphas}
-        fig, axs = plt.subplots(1, len(METRICS),
-                                figsize=(3.1 * len(METRICS), 3.8))
-        for ax, met in zip(np.atleast_1d(axs), METRICS):
+        plot_mets = [m for m in PLOT_METRICS if m in metrics]
+        fig, axs = plt.subplots(1, len(plot_mets),
+                                figsize=(3.1 * len(plot_mets), 3.8))
+        # ax is None for metrics that only go to the CSVs.
+        ax_of = dict(zip(plot_mets, np.atleast_1d(axs)))
+        for met in metrics:
+            ax = ax_of.get(met)
             for tcid in clusters:
                 xr, yr, er = [], [], []
                 for al in alphas:
@@ -105,7 +115,10 @@ def main():
                     j = sub.join(base, how="inner", lsuffix="", rsuffix="_b")
                     dd = (j[met] - j[f"{met}_b"])[j["traj_cluster"] == tcid]
                     dd = dd.dropna()
-                    if len(dd) < 5:
+                    # 3 (not 5): rare-focal types (stop&go barely ever wins the
+                    # farthest-driving focal pick) sit at ~4 pairs/alpha and
+                    # were silently dropped from the figure entirely.
+                    if len(dd) < 3:
                         continue
                     xr.append(al)
                     yr.append(float(dd.mean()))
@@ -115,7 +128,7 @@ def main():
                                        "mean_delta": float(dd.mean()),
                                        "sem": float(dd.std()/len(dd)**0.5),
                                        "n_pairs": int(len(dd))})
-                if xr:
+                if xr and ax is not None:
                     ax.errorbar(xr, yr, yerr=er, marker="o", ms=3, capsize=2,
                                 lw=1.2, alpha=0.85,
                                 label=names.get(tcid, f"traj {tcid}"))
@@ -127,7 +140,7 @@ def main():
             for tcid in clusters:
                 dd2 = (j2[met] - j2[f"{met}_lo"])[j2["traj_cluster"] == tcid]
                 dd2 = dd2.dropna()
-                if len(dd2) >= 5:
+                if len(dd2) >= 3:
                     test_rows.append({
                         "axis": pc, "metric": met, "traj_cluster": tcid,
                         "hi": hi, "lo": lo,
@@ -136,11 +149,12 @@ def main():
                         "t_stat": float(dd2.mean() /
                                         (dd2.std() / len(dd2) ** 0.5)),
                         "n_pairs": int(len(dd2))})
-            ax.axhline(0, color="grey", lw=0.7)
-            ax.axvline(0, color="grey", lw=0.7, ls=":")
-            ax.set_title(f"Δ {METRIC_LABEL[met]}", fontsize=8)
-            ax.set_xlabel(f"{pc} (σ)", fontsize=8)
-            ax.grid(alpha=0.3)
+            if ax is not None:
+                ax.axhline(0, color="grey", lw=0.7)
+                ax.axvline(0, color="grey", lw=0.7, ls=":")
+                ax.set_title(f"Δ {METRIC_LABEL[met]}", fontsize=8)
+                ax.set_xlabel(f"{pc} (σ)", fontsize=8)
+                ax.grid(alpha=0.3)
         h, l = np.atleast_1d(axs)[0].get_legend_handles_labels()
         fig.legend(h, l, fontsize=7, ncol=min(len(l), 6), loc="lower center")
         fig.suptitle(f"PAIRED dose-response along {pc}, stratified by "
