@@ -143,7 +143,12 @@ def collect_simulated_stats(env, checkpoint_path, role_dim, obs_dim, num_episode
 
     if any("ego_enc" in k or "role_encoder" in k for k in keys):
         from roma.policy import RomaPolicy
-        policy = RomaPolicy(obs_dim=obs_dim, role_dim=role_dim)
+        # Rebuild the role encoder at the width it was TRAINED with; absent
+        # from pre-rebalance checkpoints -> None -> original layout.
+        _saved = ckpt.get("args", {}) or {}
+        policy = RomaPolicy(obs_dim=obs_dim, role_dim=role_dim,
+                            role_partner_dim=_saved.get("role_partner_dim"),
+                            role_road_dim=_saved.get("role_road_dim"))
     else:
         # Legacy flat MLP
         import torch.nn as nn
