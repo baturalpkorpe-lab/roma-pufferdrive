@@ -270,5 +270,14 @@ the per-cluster-trained models instead.
 READMEEOF
 
 echo
+# Stats archive, written as soon as the ANALYSIS finishes -- the full zip
+# is made by the chained video render, which takes up to 16h. This is the
+# one to scp when you only want the numbers and figures.
+PAIRED_TGZ="$SCRATCH_ROOT/analysis/${TAG}_paired.tgz"
+rm -f "$PAIRED_TGZ"
+( cd "$SCRATCH_ROOT/analysis" && tar czf "$PAIRED_TGZ" "$TAG/paired" ) \
+  && echo "[role_an] stats archive: $PAIRED_TGZ ($(du -h "$PAIRED_TGZ" 2>/dev/null | cut -f1))" \
+  || echo "[role_an] WARNING: could not write $PAIRED_TGZ (folder is still complete)"
+
 echo "[role_an] DONE -> $OUT_ROOT  (see README.txt for the file guide)"
 echo "[role_an] the chained render job adds renders/role_grid/ and zips the folder"

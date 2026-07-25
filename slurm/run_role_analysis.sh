@@ -43,7 +43,15 @@ if [ -z "$CKPT" ] || [ -z "$TAG" ]; then
     echo "  TAG   names the output folder: \$SCRATCH_ROOT/analysis/<TAG>"
     exit 1
 fi
-[ -f "$CKPT" ] || { echo "ERROR: checkpoint not found: $CKPT"; exit 1; }
+# WAIT_FOR set = the training producing this checkpoint is still running,
+# so queue behind it instead of demanding the file exists now.
+WAIT_FOR=${WAIT_FOR:-}
+if [ -z "$WAIT_FOR" ]; then
+    [ -f "$CKPT" ] || { echo "ERROR: checkpoint not found: $CKPT"; exit 1; }
+    DEP=""
+else
+    DEP="--dependency=afterok:$WAIT_FOR"
+fi
 
 ROOT=$SCRATCH_ROOT/analysis/$TAG
 E="ALL,TAG=$TAG,CKPT=$CKPT,ROLE_DIM=$ROLE_DIM,SCRATCH_ROOT=$SCRATCH_ROOT"
@@ -53,7 +61,7 @@ for v in TRAJ PUFFER_DIR DATA_DIR ALPHAS SCENES_PER_TYPE TYPE_NAMES \
     [ -n "$val" ] && E="$E,$v=$val"
 done
 
-A=$(sbatch --parsable --export="$E" "$HERE/role_analysis.sbatch")
+A=$(sbatch --parsable $DEP --export="$E" "$HERE/role_analysis.sbatch")
 echo "analysis  (GPU) : $A   -> $ROOT/paired/"
 
 if [ "${SKIP_RENDER:-0}" != "1" ]; then
@@ -70,7 +78,7 @@ else
 fi
 
 if [ "${SKIP_ICC:-0}" != "1" ]; then
-    I=$(sbatch --parsable \
+    I=$(sbatch --parsable $DEP \
         --export="$E,OUT=$SCRATCH_ROOT/role_icc/$TAG" \
         "$HERE/role_scene_icc.sbatch")
     echo "scene ICC (GPU) : $I   -> $SCRATCH_ROOT/role_icc/$TAG/"
