@@ -31,12 +31,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-METRICS = ["speed_mean", "accel_abs", "accel_pos", "decel_abs", "jerk_abs",
-           "turn_abs", "event_rate"]
-METRIC_LABEL = {"speed_mean": "speed (m/s)", "accel_abs": "|accel| (m/s2)",
-                "accel_pos": "throttle a+ (m/s2)", "decel_abs": "braking |a-| (m/s2)",
-                "jerk_abs": "|jerk| (m/s3)", "turn_abs": "|turn| (rad/s)",
-                "event_rate": "safety events / 91"}
+# Metric vocabulary from traj_kinematics (single source of truth -- shared
+# with role_paired_sweep and role_scene_consistency).
+from traj_kinematics import METRICS, PLOT_METRICS, METRIC_LABEL
 
 
 def parse_args():
@@ -104,9 +101,13 @@ def main():
     for pc in pcs:
         cond_of = {al: (f"{pc}|{al:+g}" if al != 0.0 else base_cond)
                    for al in alphas}
-        fig, axs = plt.subplots(1, len(metrics),
-                                figsize=(3.1 * len(metrics), 3.8))
-        for ax, met in zip(np.atleast_1d(axs), metrics):
+        plot_mets = [m for m in PLOT_METRICS if m in metrics]
+        fig, axs = plt.subplots(1, len(plot_mets),
+                                figsize=(3.1 * len(plot_mets), 3.8))
+        # ax is None for metrics that only go to the CSVs.
+        ax_of = dict(zip(plot_mets, np.atleast_1d(axs)))
+        for met in metrics:
+            ax = ax_of.get(met)
             for tcid in clusters:
                 xr, yr, er = [], [], []
                 for al in alphas:
@@ -127,7 +128,7 @@ def main():
                                        "mean_delta": float(dd.mean()),
                                        "sem": float(dd.std()/len(dd)**0.5),
                                        "n_pairs": int(len(dd))})
-                if xr:
+                if xr and ax is not None:
                     ax.errorbar(xr, yr, yerr=er, marker="o", ms=3, capsize=2,
                                 lw=1.2, alpha=0.85,
                                 label=names.get(tcid, f"traj {tcid}"))
@@ -148,11 +149,12 @@ def main():
                         "t_stat": float(dd2.mean() /
                                         (dd2.std() / len(dd2) ** 0.5)),
                         "n_pairs": int(len(dd2))})
-            ax.axhline(0, color="grey", lw=0.7)
-            ax.axvline(0, color="grey", lw=0.7, ls=":")
-            ax.set_title(f"Δ {METRIC_LABEL[met]}", fontsize=8)
-            ax.set_xlabel(f"{pc} (σ)", fontsize=8)
-            ax.grid(alpha=0.3)
+            if ax is not None:
+                ax.axhline(0, color="grey", lw=0.7)
+                ax.axvline(0, color="grey", lw=0.7, ls=":")
+                ax.set_title(f"Δ {METRIC_LABEL[met]}", fontsize=8)
+                ax.set_xlabel(f"{pc} (σ)", fontsize=8)
+                ax.grid(alpha=0.3)
         h, l = np.atleast_1d(axs)[0].get_legend_handles_labels()
         fig.legend(h, l, fontsize=7, ncol=min(len(l), 6), loc="lower center")
         fig.suptitle(f"PAIRED dose-response along {pc}, stratified by "

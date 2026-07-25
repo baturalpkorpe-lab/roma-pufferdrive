@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=nodiv_an
+#SBATCH --job-name=role_an
 #SBATCH --partition=gpu-a100
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -7,12 +7,12 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --time=08:00:00
 #SBATCH --account=research-ceg-tp
-#SBATCH --output=nodiv_an_%j.out
-#SBATCH --error=nodiv_an_%j.err
+#SBATCH --output=role_an_%j.out
+#SBATCH --error=role_an_%j.err
 
 # ===========================================================================
-# TRAJECTORY-CLUSTER role analysis for a finished checkpoint (default: the
-# diversity-off dim-4 run). EVERYTHING here is stratified by TRAJECTORY
+# TRAJECTORY-CLUSTER role analysis for ANY finished checkpoint. Pass CKPT+TAG;
+# nothing here is specific to one run. EVERYTHING is stratified by TRAJECTORY
 # CLUSTER (trajectory_clusters_stopfrac.csv: mid-speed / fast / stop&go /
 # turning). Map-regime clustering is NOT used anywhere.
 #
@@ -40,13 +40,14 @@
 set -u
 
 ROLE_DIM=${ROLE_DIM:-4}
-TAG=${TAG:-nodiv_dim4}
+TAG=${TAG:-role_dim4}
 
 SCRATCH_ROOT=${SCRATCH_ROOT:-/scratch/$USER}
 PUFFER_DIR=${PUFFER_DIR:-$SCRATCH_ROOT/PufferDrive}
 CODE_DIR=${CODE_DIR:-$SLURM_SUBMIT_DIR}
 DATA_DIR=${DATA_DIR:-$PUFFER_DIR/pufferlib/resources/drive/binaries/training}
-CKPT=${CKPT:-$SCRATCH_ROOT/checkpoints/roma_nodiv_dim4/roma_dim${ROLE_DIM}_final.pt}
+CKPT=${CKPT:-}
+[ -n "$CKPT" ] || { echo "ERROR: set CKPT=<checkpoint.pt> (and TAG=<name>)"; exit 1; }
 OUT_ROOT=${OUT_ROOT:-$SCRATCH_ROOT/analysis/$TAG}
 
 # THE clustering. Everything is keyed to this. Frozen stop_frac trajectory
@@ -85,16 +86,16 @@ if [ ! -f "$TRAJ" ]; then
     echo "       in this pipeline is keyed to it."
     fail=1
 fi
-[ "$fail" -eq 0 ] || { echo "[nodiv_an] preflight failed -- nothing submitted to the GPU."; exit 1; }
+[ "$fail" -eq 0 ] || { echo "[role_an] preflight failed -- nothing submitted to the GPU."; exit 1; }
 
 PAIRED="$OUT_ROOT/paired"
 mkdir -p "$PAIRED"
 SCAFFOLD="$PAIRED/scenario_traj_scaffold.csv"
 
-echo "[nodiv_an] tag=$TAG role_dim=$ROLE_DIM"
-echo "[nodiv_an] ckpt=$CKPT"
-echo "[nodiv_an] out=$OUT_ROOT  traj_clusters=$TRAJ"
-echo "[nodiv_an] branch=$(git -C "$CODE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ?) commit=$(git -C "$CODE_DIR" rev-parse --short HEAD 2>/dev/null || echo ?)"
+echo "[role_an] tag=$TAG role_dim=$ROLE_DIM"
+echo "[role_an] ckpt=$CKPT"
+echo "[role_an] out=$OUT_ROOT  traj_clusters=$TRAJ"
+echo "[role_an] branch=$(git -C "$CODE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ?) commit=$(git -C "$CODE_DIR" rev-parse --short HEAD 2>/dev/null || echo ?)"
 
 cd "$PUFFER_DIR"
 step() { echo; echo "==================== $* ===================="; }
@@ -107,7 +108,7 @@ step() { echo; echo "==================== $* ===================="; }
 # eligibility + a coarse per-scene tag; role_paired_by_traj (step 2) reapplies
 # the exact per-focal trajectory label from the full (sid,vid) clustering.
 step "0/5 build scenario->trajectory scaffold"
-python - "$TRAJ" "$SCAFFOLD" <<'PYEOF' || { echo "[nodiv_an] scaffold build failed"; exit 1; }
+python - "$TRAJ" "$SCAFFOLD" <<'PYEOF' || { echo "[role_an] scaffold build failed"; exit 1; }
 import sys, pandas as pd
 tc = pd.read_csv(sys.argv[1])
 tc.columns = [c.strip() for c in tc.columns]
@@ -128,7 +129,7 @@ python "$CODE_DIR/role_paired_sweep.py" \
     --n_axes 2 --alphas="$ALPHAS" \
     --regime_names "$TYPE_NAMES" \
     --warmup_episodes "$WARMUP_EP" --episodes "$SWEEP_EP" \
-  || echo "[nodiv_an] WARNING: sweep exited nonzero -- dependent steps may be partial"
+  || echo "[role_an] WARNING: sweep exited nonzero -- dependent steps may be partial"
 
 AGENT="$PAIRED/role_paired_agent.csv"
 WARMUP="$PAIRED/role_paired_warmup.csv"
@@ -138,9 +139,9 @@ step "2/5 role_paired_by_traj [cpu]"
 if [ -f "$AGENT" ]; then
     python "$CODE_DIR/role_paired_by_traj.py" \
         --in_dir "$PAIRED" --traj_clusters "$TRAJ" --cluster_names "$TYPE_NAMES" \
-      || echo "[nodiv_an] WARNING: by_traj failed"
+      || echo "[role_an] WARNING: by_traj failed"
 else
-    echo "[nodiv_an] skip: $AGENT missing (sweep did not produce it)"
+    echo "[role_an] skip: $AGENT missing (sweep did not produce it)"
 fi
 
 # --- 3. Per-scene consistency, per trajectory cluster ----------------------
@@ -149,9 +150,9 @@ if [ -f "$AGENT" ]; then
     python "$CODE_DIR/role_scene_consistency.py" \
         --agent_csv "$AGENT" --traj_clusters "$TRAJ" \
         --cluster_names "$TYPE_NAMES" --out_dir "$PAIRED" \
-      || echo "[nodiv_an] WARNING: consistency failed"
+      || echo "[role_an] WARNING: consistency failed"
 else
-    echo "[nodiv_an] skip: $AGENT missing"
+    echo "[role_an] skip: $AGENT missing"
 fi
 
 # --- 4. Role-space PCA map -------------------------------------------------
@@ -159,9 +160,9 @@ step "4/5 role_space_map [cpu]"
 if [ -f "$WARMUP" ]; then
     python "$CODE_DIR/role_space_map.py" \
         --agent_csv "$WARMUP" --out "$PAIRED/role_space_map.png" \
-      || echo "[nodiv_an] WARNING: role_space_map failed"
+      || echo "[role_an] WARNING: role_space_map failed"
 else
-    echo "[nodiv_an] skip: $WARMUP missing"
+    echo "[role_an] skip: $WARMUP missing"
 fi
 
 # --- 5. Role-role + role-vs-behaviour correlations -------------------------
@@ -169,9 +170,9 @@ step "5/5 role_feature_corr [cpu]"
 if [ -f "$WARMUP" ]; then
     python "$CODE_DIR/role_feature_corr.py" \
         --agent_csv "$WARMUP" --out_dir "$PAIRED" \
-      || echo "[nodiv_an] WARNING: role_feature_corr failed"
+      || echo "[role_an] WARNING: role_feature_corr failed"
 else
-    echo "[nodiv_an] skip: $WARMUP missing"
+    echo "[role_an] skip: $WARMUP missing"
 fi
 
 # --- Collect logs + write the folder index ---------------------------------
@@ -179,8 +180,8 @@ fi
 # single archive. The chained render job (render_grid_traj) drops its videos in
 # $OUT_ROOT/renders/role_grid and makes the final zip.
 mkdir -p "$OUT_ROOT/logs"
-cp -f "$SLURM_SUBMIT_DIR/nodiv_an_${SLURM_JOB_ID}.out" "$OUT_ROOT/logs/" 2>/dev/null || true
-cp -f "$SLURM_SUBMIT_DIR/nodiv_an_${SLURM_JOB_ID}.err" "$OUT_ROOT/logs/" 2>/dev/null || true
+cp -f "$SLURM_SUBMIT_DIR/role_an_${SLURM_JOB_ID}.out" "$OUT_ROOT/logs/" 2>/dev/null || true
+cp -f "$SLURM_SUBMIT_DIR/role_an_${SLURM_JOB_ID}.err" "$OUT_ROOT/logs/" 2>/dev/null || true
 
 cat > "$OUT_ROOT/README.txt" <<READMEEOF
 Trajectory-cluster role analysis -- $TAG
@@ -240,5 +241,5 @@ the per-cluster-trained models instead.
 READMEEOF
 
 echo
-echo "[nodiv_an] DONE -> $OUT_ROOT  (see README.txt for the file guide)"
-echo "[nodiv_an] the chained render job adds renders/role_grid/ and zips the folder"
+echo "[role_an] DONE -> $OUT_ROOT  (see README.txt for the file guide)"
+echo "[role_an] the chained render job adds renders/role_grid/ and zips the folder"
