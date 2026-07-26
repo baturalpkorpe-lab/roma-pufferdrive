@@ -140,10 +140,90 @@ def _seg_crossings(polys, max_pts=6000):
     return p[hit] + t[hit, None] * r_[hit]
 
 
+def _lane_tjunctions(polys, tol=4.0, min_angle=np.deg2rad(30)):
+    """T-junctions: a lane ENDPOINT sitting on another lane, at an angle.
+
+    _seg_crossings only finds lanes that pass THROUGH each other (a crossroads).
+    At a T the side lane terminates against the main lane, so the meeting point
+    is an endpoint and the interior-hit test misses it -- verified on a
+    synthetic T with no sign and no crosswalk, which scored zero markers.
+
+    The angle test is what separates a junction from mere segmentation: the
+    road id is a SEGMENT id and one road is chopped into ~16 m pieces, so
+    lane endpoints touch their own continuation everywhere. A continuation is
+    collinear (angle ~0 or ~pi); a real T meets at an angle.
+    """
+    segs, bears, owner = [], [], []
+    for k, (x, y) in enumerate(polys):
+        if len(x) < 2:
+            continue
+        segs.append(np.stack([0.5 * (x[:-1] + x[1:]),
+                              0.5 * (y[:-1] + y[1:])], 1))
+        bears.append(np.arctan2(np.diff(y), np.diff(x)))
+        owner.append(np.full(len(x) - 1, k))
+    if not segs:
+        return np.empty((0, 2))
+    S = np.concatenate(segs); B = np.concatenate(bears)
+    O = np.concatenate(owner)
+
+    ends, ebear, eowner = [], [], []
+    for k, (x, y) in enumerate(polys):
+        if len(x) < 2:
+            continue
+        ends += [[x[0], y[0]], [x[-1], y[-1]]]
+        ebear += [np.arctan2(y[1] - y[0], x[1] - x[0]),
+                  np.arctan2(y[-1] - y[-2], x[-1] - x[-2])]
+        eowner += [k, k]
+    if not ends:
+        return np.empty((0, 2))
+    E = np.asarray(ends, float); EB = np.asarray(ebear); EO = np.asarray(eowner)
+
+    # Endpoints of the segments, needed for a true point-to-SEGMENT distance.
+    # Querying midpoints alone is wrong: with ~16 m segments an endpoint lying
+    # exactly ON a segment can still be 8 m from its midpoint, so a 4 m
+    # tolerance silently misses every T. Search a midpoint radius wide enough
+    # to cover any segment, then measure the real distance.
+    A, Bp = [], []
+    for k, (x, y) in enumerate(polys):
+        if len(x) < 2:
+            continue
+        A.append(np.stack([x[:-1], y[:-1]], 1))
+        Bp.append(np.stack([x[1:], y[1:]], 1))
+    A = np.concatenate(A); Bp = np.concatenate(Bp)
+    half = float(np.hypot(*(Bp - A).T).max()) * 0.5 + tol
+
+    try:
+        from scipy.spatial import cKDTree
+        near = cKDTree(S).query_ball_point(E, r=half)
+    except Exception:
+        near = [np.where(np.hypot(S[:, 0] - e[0], S[:, 1] - e[1]) <= half)[0]
+                for e in E]
+
+    out = []
+    for i, idxs in enumerate(near):
+        idxs = np.atleast_1d(np.asarray(idxs, dtype=int))
+        idxs = idxs[O[idxs] != EO[i]]            # different lane only
+        if not len(idxs):
+            continue
+        ab = Bp[idxs] - A[idxs]
+        ap = E[i] - A[idxs]
+        L2 = (ab * ab).sum(1)
+        t = np.where(L2 > 1e-12, (ap * ab).sum(1) / np.maximum(L2, 1e-12), 0.0)
+        t = np.clip(t, 0.0, 1.0)
+        proj = A[idxs] + t[:, None] * ab
+        d = np.hypot(*(E[i] - proj).T)
+        ang = np.abs(wrap(B[idxs] - EB[i]))
+        ang = np.minimum(ang, np.pi - ang)       # direction-agnostic
+        if np.any((d <= tol) & (ang >= min_angle)):
+            out.append(E[i])
+    return np.asarray(out, float) if out else np.empty((0, 2))
+
+
 def junction_zones(roads, eps, use_lane_crossings):
     """Cluster intersection markers into one zone per junction.
     Returns (centres (K,2), source counts dict)."""
-    marks, src = [], {"stop_sign": 0, "crosswalk": 0, "lane_cross": 0}
+    marks, src = [], {"stop_sign": 0, "crosswalk": 0,
+                      "lane_cross": 0, "lane_tjunc": 0}
 
     for rd in roads:
         if rd["type"] == 7:                      # stop sign: single point
@@ -157,6 +237,11 @@ def junction_zones(roads, eps, use_lane_crossings):
         src["lane_cross"] = len(xs)
         if len(xs):
             marks.extend(xs.tolist())
+        # T-junctions: side lane terminates against a through lane
+        ts = _lane_tjunctions(lanes)
+        src["lane_tjunc"] = len(ts)
+        if len(ts):
+            marks.extend(ts.tolist())
 
     if not marks:
         return np.empty((0, 2)), src
@@ -302,7 +387,8 @@ def main():
           f"lane_crossings={bool(args.use_lane_crossings)}")
 
     import csv
-    rows_all, tot_src = [], {"stop_sign": 0, "crosswalk": 0, "lane_cross": 0}
+    rows_all, tot_src = [], {"stop_sign": 0, "crosswalk": 0,
+                             "lane_cross": 0, "lane_tjunc": 0}
     n_zone, n_act, bad = 0, 0, 0
     for i, fp in enumerate(files):
         try:
