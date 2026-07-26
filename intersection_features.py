@@ -28,15 +28,25 @@ DEFINITION (structure, gated by real traffic):
   2. A zone is ACTIVE only if >= --min_traversals moving vehicles actually
      drive through it. A junction nobody uses is not an intersection anyone
      had to deal with.
+  2b. A zone must have >= --min_axes distinct road AXES near it. A mid-block
+     crosswalk (or a stop sign on a straight road) sits on ONE axis -- the two
+     travel directions are 180 deg apart, i.e. the same line -- so without this
+     both directions of an ordinary street get labelled. Verified: a synthetic
+     mid-block crosswalk labelled BOTH opposite-lane cars before the test and
+     neither after, while a real 4-way survives.
   3. A trajectory is intersection-involved if, while MOVING, it passes within
      --zone_radius of an ACTIVE zone.
 
-Also emitted (not used for the label, but the reason the label is worth
-having): road-relative turn -- the agent's signed heading change MINUS the
-bearing change of the lane centerline it is following. A car tracking a curve
-has road_rel_turn ~ 0 with a large net_turn; a car turning at a junction has a
-large road_rel_turn. That is the direct discriminator for the curvy-road
-false positives.
+DISCRIMINATOR: turn_in_zone_frac -- the share of the trajectory's total
+|heading change| that happens INSIDE a junction zone. A junction turn
+concentrates its turning there (1.0); a curved road spreads it along the path
+(0.0). Measured on synthetic data: 1.00 vs 0.00 at |net_turn| 1.57 vs 1.48.
+
+road_rel_turn is still emitted but DOES NOT WORK as a discriminator and should
+not be used. It takes the nearest lane bearing at the trajectory start and end,
+but at a junction the end lane is the NEW road, so the road bearing change
+already contains the turn and the residual is ~0 by construction. On real data
+it came out backwards: 0.172 for junction turns vs 0.531 for the rest.
 
 Output: one row per (scenario_id, vehicle_id) ->
     intersection_features.csv
@@ -70,6 +80,10 @@ def parse_args():
     p.add_argument("--min_traversals", type=int, default=1,
                    help="moving vehicles that must traverse a zone for it to "
                         "count as ACTIVE")
+    p.add_argument("--min_axes", type=int, default=2,
+                   help="distinct road axes required near a zone. 2 rejects a "
+                        "mid-block crosswalk / stop sign on a straight road, "
+                        "whose two travel directions are ONE axis. 1 = off.")
     p.add_argument("--use_lane_crossings", type=int, default=1,
                    help="1 = also infer junctions from crossing lane "
                         "centerlines (catches signalised/unmarked ones)")
@@ -219,7 +233,40 @@ def _lane_tjunctions(polys, tol=4.0, min_angle=np.deg2rad(30)):
     return np.asarray(out, float) if out else np.empty((0, 2))
 
 
-def junction_zones(roads, eps, use_lane_crossings):
+def _n_axes(centre, lanes, radius=22.0, tol=np.deg2rad(30)):
+    """How many distinct road AXES pass near a point.
+
+    A mid-block crosswalk or a stop sign on a straight road sits on ONE axis:
+    the two travel directions are 180 deg apart, i.e. the same line. A real
+    junction has at least two. Bearings are taken mod pi so direction does not
+    matter, then greedily grouped at `tol`.
+    """
+    if not lanes:
+        return 0
+    b = []
+    for x, y in lanes:
+        if len(x) < 2:
+            continue
+        mx = 0.5 * (x[:-1] + x[1:]); my = 0.5 * (y[:-1] + y[1:])
+        d = np.hypot(mx - centre[0], my - centre[1])
+        k = d <= radius
+        if k.any():
+            b.append(np.arctan2(np.diff(y), np.diff(x))[k])
+    if not b:
+        return 0
+    b = np.mod(np.concatenate(b), np.pi)          # axis, not direction
+    groups = []
+    for ang in np.sort(b):
+        for g in groups:
+            dd = abs(ang - g)
+            if min(dd, np.pi - dd) <= tol:        # wrap at pi
+                break
+        else:
+            groups.append(ang)
+    return len(groups)
+
+
+def junction_zones(roads, eps, use_lane_crossings, min_axes=2):
     """Cluster intersection markers into one zone per junction.
     Returns (centres (K,2), source counts dict)."""
     marks, src = [], {"stop_sign": 0, "crosswalk": 0,
@@ -246,6 +293,7 @@ def junction_zones(roads, eps, use_lane_crossings):
     if not marks:
         return np.empty((0, 2)), src
     M = np.asarray(marks, float)
+    src["_lanes"] = [(rd["x"], rd["y"]) for rd in roads if rd["type"] == 4]
 
     # single-link clustering at eps: a 4-way stop has one marker per approach,
     # so the markers of ONE junction must collapse to ONE zone.
@@ -254,7 +302,13 @@ def junction_zones(roads, eps, use_lane_crossings):
         lab = DBSCAN(eps=eps, min_samples=1).fit_predict(M)
     except Exception:
         lab = _greedy_cluster(M, eps)
-    return np.array([M[lab == c].mean(0) for c in np.unique(lab)]), src
+    centres = np.array([M[lab == c].mean(0) for c in np.unique(lab)])
+    lanes = src.pop("_lanes", [])
+    if min_axes > 1 and len(centres):
+        keep = np.array([_n_axes(c, lanes) >= min_axes for c in centres])
+        src["zones_dropped_1axis"] = int((~keep).sum())
+        centres = centres[keep]
+    return centres, src
 
 
 def _greedy_cluster(M, eps):
@@ -289,7 +343,8 @@ def lane_bearing_at(pt, lanes_xy, lanes_bear):
 def scene_rows(m, args):
     roads, objs = m["roads"], m["objects"]
     sid = m["scenario_id"]
-    centres, src = junction_zones(roads, args.zone_eps, args.use_lane_crossings)
+    centres, src = junction_zones(roads, args.zone_eps,
+                              args.use_lane_crossings, args.min_axes)
 
     # lane segment midpoints + bearings, for the road-relative turn
     mids, bears = [], []
@@ -349,7 +404,18 @@ def scene_rows(m, args):
         s_in  = spd[inzone[:-1] & (spd > 0)] if inzone[:-1].any() else np.array([])
         s_out = spd[~inzone[:-1]] if (~inzone[:-1]).any() else np.array([])
 
-        net_turn = float(wrap(np.diff(h)).sum())
+        dh = wrap(np.diff(h))
+        tot_turn = float(np.abs(dh).sum())
+        in_seg = inzone[:-1] & inzone[1:]
+        turn_in = float(np.abs(dh[in_seg]).sum()) if in_seg.any() else 0.0
+        # WHERE the heading change happens. A junction turn concentrates it
+        # inside the zone; a curved road spreads it along the whole path. This
+        # replaces road_rel_turn, which could not discriminate: at a junction
+        # the nearest lane at the END is the NEW road, so the road bearing
+        # change already contains the turn and the residual is ~0 either way
+        # (measured: 0.172 for junction turns vs 0.531 for the rest -- backwards).
+        turn_in_zone_frac = (turn_in / tot_turn) if tot_turn > 1e-6 else 0.0
+        net_turn = float(dh.sum())
         b0 = lane_bearing_at((x[0],  y[0]),  lanes_xy, lanes_bear)
         b1 = lane_bearing_at((x[-1], y[-1]), lanes_xy, lanes_bear)
         road_turn = float(wrap(b1 - b0)) if np.isfinite(b0 * b1) else np.nan
@@ -369,6 +435,9 @@ def scene_rows(m, args):
             stop_frac=round(float((spd < MOVE_MS).mean()), 4),
             net_turn=round(net_turn, 4),
             abs_net_turn=round(abs(net_turn), 4),
+            total_abs_turn=round(tot_turn, 4),
+            turn_in_zone=round(turn_in, 4),
+            turn_in_zone_frac=round(turn_in_zone_frac, 4),
             road_bearing_change=round(road_turn, 4) if np.isfinite(road_turn) else "",
             road_rel_turn=round(road_rel, 4) if np.isfinite(road_rel) else "",
             abs_road_rel_turn=round(abs(road_rel), 4) if np.isfinite(road_rel) else "",
@@ -389,7 +458,7 @@ def main():
     import csv
     rows_all, tot_src = [], {"stop_sign": 0, "crosswalk": 0,
                              "lane_cross": 0, "lane_tjunc": 0}
-    n_zone, n_act, bad = 0, 0, 0
+    n_zone, n_act, bad, n_drop = 0, 0, 0, 0
     for i, fp in enumerate(files):
         try:
             m = read_map_binary(fp)
@@ -400,8 +469,9 @@ def main():
                 print(f"  FAIL {fp.name}: {type(e).__name__}: {e}")
             continue
         rows_all += r
+        n_drop += src.pop("zones_dropped_1axis", 0)
         for k in tot_src:
-            tot_src[k] += src[k]
+            tot_src[k] += src.get(k, 0)
         n_zone += nz; n_act += na
         if args.progress and (i + 1) % args.progress == 0:
             print(f"  {i+1}/{len(files)}  rows={len(rows_all)}", flush=True)
@@ -416,6 +486,7 @@ def main():
     inv = sum(r["intersection"] for r in rows_all)
     print(f"\n  maps ok={len(files)-bad} failed={bad}")
     print(f"  markers: {tot_src}")
+    print(f"  zones dropped for having only ONE road axis: {n_drop}")
     print(f"  zones: {n_zone} found, {n_act} ACTIVE "
           f"({100*n_act/max(n_zone,1):.1f}% used by traffic)")
     print(f"  trajectories: {n}")
