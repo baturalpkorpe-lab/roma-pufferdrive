@@ -27,7 +27,7 @@
 #   0. build a scenario->trajectory-cluster scaffold so the sweep's --clusters
 #      is driven by the TRAJECTORY clustering, not map regimes
 #   1. role_paired_sweep       PC1/PC2 paired dose-response + axes       [GPU]
-#   2. role_paired_by_traj     dose-response SPLIT BY TRAJECTORY CLUSTER [cpu]
+#   2. (removed -- duplicated step 1; see the note at step 2)
 #   3. role_scene_consistency  per-scene consistency, per traj cluster   [cpu]
 #   4. role_space_map          2-D PCA role-space map                    [cpu]
 #   5. role_feature_corr       role-role + role-vs-behaviour correlations[cpu]
@@ -117,8 +117,8 @@ step() { echo; echo "==================== $* ===================="; }
 # but the trajectory clustering is per (scenario, vehicle). Collapse it to the
 # scene's dominant trajectory cluster so the sweep is driven by the TRAJECTORY
 # clustering rather than map regimes. This scaffold only decides scene
-# eligibility + a coarse per-scene tag; role_paired_by_traj (step 2) reapplies
-# the exact per-focal trajectory label from the full (sid,vid) clustering.
+# eligibility + the per-scene regime tag that step 1's per-regime lines use,
+# which IS the trajectory clustering -- hence step 2 being redundant.
 step "0/5 build scenario->trajectory scaffold"
 python - "$TRAJ" "$SCAFFOLD" <<'PYEOF' || { echo "[role_an] scaffold build failed"; exit 1; }
 import sys, pandas as pd
