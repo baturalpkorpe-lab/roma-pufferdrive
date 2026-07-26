@@ -84,9 +84,17 @@ def parse_args():
                    help="distinct road axes required near a zone. 2 rejects a "
                         "mid-block crosswalk / stop sign on a straight road, "
                         "whose two travel directions are ONE axis. 1 = off.")
-    p.add_argument("--use_lane_crossings", type=int, default=1,
-                   help="1 = also infer junctions from crossing lane "
-                        "centerlines (catches signalised/unmarked ones)")
+    p.add_argument("--use_lane_crossings", type=int, default=0,
+                   help="Infer junctions from lane geometry as well as signs. "
+                        "DEFAULT OFF, measured on the full 10k pool: it adds "
+                        "2.08M markers (21:1 vs signs+crosswalks) for +7pp of "
+                        "involvement (31.1%% -> 38.0%%) and produces NO extra "
+                        "active zones (15349 markers-only vs 15031 with). It "
+                        "is also immune to --min_axes, since a lane T-junction "
+                        "marker requires >=30 deg between lanes and the axis "
+                        "test requires >=30 deg between axes -- circular. Signs "
+                        "and crosswalks are Waymo ground truth; this is "
+                        "inference. Turn on only with rendered validation.")
     p.add_argument("--progress", type=int, default=200)
     return p.parse_args()
 
@@ -254,16 +262,20 @@ def _n_axes(centre, lanes, radius=22.0, tol=np.deg2rad(30)):
             b.append(np.arctan2(np.diff(y), np.diff(x))[k])
     if not b:
         return 0
-    b = np.mod(np.concatenate(b), np.pi)          # axis, not direction
-    groups = []
-    for ang in np.sort(b):
-        for g in groups:
-            dd = abs(ang - g)
-            if min(dd, np.pi - dd) <= tol:        # wrap at pi
-                break
-        else:
-            groups.append(ang)
-    return len(groups)
+    b = np.sort(np.mod(np.concatenate(b), np.pi))   # axis, not direction
+    if len(b) == 1:
+        return 1
+    # Cluster by GAPS on the circle, not by distance to a fixed representative.
+    # A curved road produces a CONTINUOUS spread of bearings; a junction
+    # produces discrete groups with empty space between them. The previous
+    # version compared each bearing to the first member of each group, so a
+    # continuous 56 deg sweep became two "axes" and a crosswalk on a sharp
+    # bend (R=45 m) passed the filter -- the curvy-road false positive this
+    # test exists to stop. Single-linkage on the sorted circle: consecutive
+    # bearings closer than tol belong to the same axis, so a curve chains into
+    # ONE group however far it sweeps.
+    gaps = np.append(np.diff(b), (b[0] + np.pi) - b[-1])
+    return max(1, int((gaps > tol).sum()))
 
 
 def junction_zones(roads, eps, use_lane_crossings, min_axes=2):
