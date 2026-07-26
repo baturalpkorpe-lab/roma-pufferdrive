@@ -42,11 +42,17 @@ MEAN_METRICS  = ["speed_mean", "accel_abs", "accel_pos", "decel_abs",
 # stops (decel_p95 8.0 vs 2.0, hard_brake_rate 0.167 vs 0.0, brake_dur_mean
 # 1.5 s vs 6.0 s).
 TAIL_METRICS  = ["decel_p95", "decel_max", "accel_p95", "accel_max",
-                 "hard_brake_rate", "severe_brake_rate",
+                 "hard_brake_rate", "severe_brake_rate", "hard_accel_rate",
                  "jerk_p95", "jerk_rms", "jerk_spikiness", "accel_kurt"]
+# Braking and acceleration get the SAME event description. Braking alone
+# cannot express aggression -- a driver who launches hard out of every
+# junction and one who creeps away can have identical braking stats.
 EVENT_METRICS = ["n_brake_events", "brake_per_100m", "brake_peak_mean",
                  "brake_peak_max", "brake_dur_mean", "brake_dv_mean",
-                 "brake_abrupt_mean"]
+                 "brake_abrupt_mean",
+                 "n_accel_ev_events", "accel_ev_per_100m", "accel_ev_peak_mean",
+                 "accel_ev_peak_max", "accel_ev_dur_mean", "accel_ev_dv_mean",
+                 "accel_ev_abrupt_mean"]
 # Not a behaviour: the fraction of accelerations killed by the |a|>10 m/s2
 # plausibility cap. Swept like everything else ON PURPOSE -- masking deletes
 # the largest samples, so if one condition breaks the sim more often its tail
@@ -58,9 +64,26 @@ METRICS = MEAN_METRICS + TAIL_METRICS + EVENT_METRICS + AUDIT_METRICS
 
 # Everything above lands in the CSVs; only these get a figure panel, or the
 # dose-response grids would be ~25 panels wide and unreadable.
-PLOT_METRICS = ["speed_mean", "decel_p95", "decel_max", "hard_brake_rate",
-                "brake_peak_mean", "brake_dur_mean", "brake_per_100m",
-                "jerk_p95", "event_rate", "accel_mask_frac"]
+# Curated to be NON-REDUNDANT and symmetric in throttle vs brake:
+#   - accel_abs is dropped: accel_pos + decel_abs == accel_abs exactly, so the
+#     third panel is arithmetically implied by the other two
+#   - decel_max / brake_peak_max / *_dv_mean / *_abrupt_mean are dropped as
+#     near-duplicates of their p95 / peak_mean partners
+#   - severe_brake_rate is dropped: identically ZERO on this data (nothing ever
+#     brakes past 5 m/s2), so its panel was a flat line at y=0
+#   - turn_abs is BACK -- it went missing when this list was introduced, which
+#     is why the turning panel vanished from role_paired_PC*.png
+#   - jerk_* stay in the CSVs but off the figure: with a 91-action discrete
+#     grid jerk measures ACTION CHURN, not comfort
+# NOTE on reading these: percentile/max metrics are QUANTISED by the discrete
+# action grid, so their scatter shows stacked horizontal bands. The event
+# duration / count metrics integrate over time and do not.
+PLOT_METRICS = ["speed_mean", "turn_abs", "event_rate",
+                "accel_p95", "hard_accel_rate", "accel_ev_peak_mean",
+                "accel_ev_dur_mean",
+                "decel_p95", "hard_brake_rate", "brake_peak_mean",
+                "brake_dur_mean",
+                "accel_mask_frac"]
 
 METRIC_LABEL = {
     "speed_mean": "speed (m/s)", "accel_abs": "|accel| (m/s2)",
@@ -73,7 +96,14 @@ METRIC_LABEL = {
     "severe_brake_rate": "steps |a-|>5 (frac)",
     "jerk_p95": "|jerk| p95 (m/s3)", "jerk_rms": "jerk rms (m/s3)",
     "jerk_spikiness": "jerk rms/mean", "accel_kurt": "accel kurtosis",
+    "hard_accel_rate": "steps a+>2 (frac)",
     "n_brake_events": "brake events", "brake_per_100m": "brake events/100m",
+    "n_accel_ev_events": "accel events", "accel_ev_per_100m": "accel events/100m",
+    "accel_ev_peak_mean": "accel event peak, mean (m/s2)",
+    "accel_ev_peak_max": "accel event peak, max (m/s2)",
+    "accel_ev_dur_mean": "accel event duration (s)",
+    "accel_ev_dv_mean": "accel event dv (m/s)",
+    "accel_ev_abrupt_mean": "accel event peak/mean",
     "brake_peak_mean": "event peak, mean (m/s2)",
     "brake_peak_max": "event peak, max (m/s2)",
     "brake_dur_mean": "event duration (s)",
@@ -96,6 +126,10 @@ BRAKE_ON_MS2     = 0.5  # |a| below this is coasting, not a braking action
 BRAKE_MIN_STEPS  = 3    # an EVENT lasts >= 0.3 s (rejects single-step noise)
 HARD_BRAKE_MS2   = 3.0  # naturalistic-driving "harsh braking" line
 SEVERE_BRAKE_MS2 = 5.0  # "severe"; still well under the ACCEL_MAX_MS2 mask
+HARD_ACCEL_MS2   = 2.0  # "hard launch": cars accelerate less hard than they
+                        # brake, so the throttle threshold is lower
+MIN_DIST_100M    = 20.0 # m: below this, a per-100m RATE is meaningless --
+                        # a 2 m creep with one event scored 50 events/100 m
 
 
 def wrap_angle(a):
@@ -287,33 +321,45 @@ def event_kinematics(p_spd, t_idx=None):
                                 if len(dec) else np.nan)
     out["severe_brake_rate"] = (float((dec > SEVERE_BRAKE_MS2).mean())
                                 if len(dec) else np.nan)
+    out["hard_accel_rate"]   = (float((thr > HARD_ACCEL_MS2).mean())
+                                if len(thr) else np.nan)
 
-    # ---- Braking events ----------------------------------------------------
-    braking = np.zeros(len(acc), dtype=bool)
-    np.greater(-acc, BRAKE_ON_MS2, out=braking, where=np.isfinite(acc))
-    edges  = np.flatnonzero(np.diff(np.concatenate(
-        ([0], braking.astype(np.int8), [0]))))
-    starts, ends = edges[0::2], edges[1::2]
-
-    peaks, durs, dvs, abrupts = [], [], [], []
-    for s, e in zip(starts, ends):
-        if e - s < BRAKE_MIN_STEPS:
-            continue
-        seg = -acc[s:e]                     # all finite and > BRAKE_ON_MS2
-        peaks.append(float(seg.max()))
-        durs.append(len(seg) * 0.1)
-        dvs.append(float(seg.sum()) * 0.1)  # m/s shed over the event
-        abrupts.append(float(seg.max() / seg.mean()))
-
+    # ---- Braking AND acceleration events -----------------------------------
+    # The SAME segmentation both ways. Braking alone cannot express aggression:
+    # a driver who launches hard out of every junction and one who creeps away
+    # can have identical braking statistics.
     dist = float(p_spd[p_spd <= SPEED_MAX_MS].sum()) * 0.1   # m travelled
-    out["distance_m"]      = dist
-    out["n_brake_events"]  = len(peaks)
-    out["brake_per_100m"]  = (len(peaks) / (dist / 100.0)) if dist > 1.0 else np.nan
-    out["brake_peak_mean"] = float(np.mean(peaks))   if peaks else np.nan
-    out["brake_peak_max"]  = float(np.max(peaks))    if peaks else np.nan
-    out["brake_dur_mean"]  = float(np.mean(durs))    if durs  else np.nan
-    out["brake_dv_mean"]   = float(np.mean(dvs))     if dvs   else np.nan
-    out["brake_abrupt_mean"] = float(np.mean(abrupts)) if abrupts else np.nan
+    out["distance_m"] = dist
+
+    for sign, pre in ((-1.0, "brake"), (+1.0, "accel_ev")):
+        mag = sign * acc                     # positive while inside an event
+        on = np.zeros(len(acc), dtype=bool)
+        np.greater(mag, BRAKE_ON_MS2, out=on, where=np.isfinite(acc))
+        edges = np.flatnonzero(np.diff(np.concatenate(
+            ([0], on.astype(np.int8), [0]))))
+        starts, ends = edges[0::2], edges[1::2]
+
+        peaks, durs, dvs, abrupts = [], [], [], []
+        for s0, e0 in zip(starts, ends):
+            if e0 - s0 < BRAKE_MIN_STEPS:
+                continue
+            seg = mag[s0:e0]                 # finite and > BRAKE_ON_MS2
+            peaks.append(float(seg.max()))
+            durs.append(len(seg) * 0.1)
+            dvs.append(float(seg.sum()) * 0.1)   # m/s shed or gained
+            abrupts.append(float(seg.max() / seg.mean()))
+
+        # A per-100m RATE needs enough distance to be a rate. The old guard was
+        # dist > 1.0 m, so a 2 m creep with one event scored 50 events/100 m and
+        # those outliers flattened the whole axis.
+        rate = (len(peaks) / (dist / 100.0)) if dist >= MIN_DIST_100M else np.nan
+        out[f"n_{pre}_events"]    = len(peaks)
+        out[f"{pre}_per_100m"]    = rate
+        out[f"{pre}_peak_mean"]   = float(np.mean(peaks))   if peaks else np.nan
+        out[f"{pre}_peak_max"]    = float(np.max(peaks))    if peaks else np.nan
+        out[f"{pre}_dur_mean"]    = float(np.mean(durs))    if durs  else np.nan
+        out[f"{pre}_dv_mean"]     = float(np.mean(dvs))     if dvs   else np.nan
+        out[f"{pre}_abrupt_mean"] = float(np.mean(abrupts)) if abrupts else np.nan
     return out
 
 

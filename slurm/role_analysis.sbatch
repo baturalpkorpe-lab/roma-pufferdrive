@@ -162,15 +162,13 @@ WARMUP="$PAIRED/role_paired_warmup.csv"
     echo "          X=0 means no scene in the scaffold matched the loaded maps."
     exit 1; }
 
-# --- 2. Dose-response SPLIT BY TRAJECTORY CLUSTER --------------------------
-step "2/5 role_paired_by_traj [cpu]"
-if [ -f "$AGENT" ]; then
-    python "$CODE_DIR/role_paired_by_traj.py" \
-        --in_dir "$PAIRED" --traj_clusters "$TRAJ" --cluster_names "$TYPE_NAMES" \
-      || echo "[role_an] WARNING: by_traj failed"
-else
-    echo "[role_an] skip: $AGENT missing (sweep did not produce it)"
-fi
+# --- 2. (removed) role_paired_by_traj ------------------------------------
+# It wrote role_paired_traj_PC*.png / _deltas / _tests, which DUPLICATED
+# role_paired_PC*.png: the sweep's --clusters scaffold IS the trajectory
+# clustering, so its per-regime lines are already per trajectory cluster --
+# and it additionally draws the overall mean, which the by_traj figure lacks.
+# Two near-identical figure sets in one folder invited exactly the confusion
+# they caused. role_paired_by_traj.py is kept in the repo for one-off use.
 
 # --- 3. Per-scene consistency, per trajectory cluster ----------------------
 step "3/5 role_scene_consistency [cpu]"
@@ -230,12 +228,6 @@ paired/                            role-pairing analysis
                                    x metric. "does forcing the role move behaviour?"
   role_paired_PC1.png              dose-response of the paired deltas along PC1
   role_paired_PC2.png              same along PC2 (0 at alpha=0 by construction)
-  role_paired_traj_PC1.png         *** THE distinction figure ***: the PC1
-  role_paired_traj_PC2.png         dose-response SPLIT BY TRAJECTORY CLUSTER --
-                                   one line per type. Shows the roles pull each
-                                   trajectory type differently.
-  role_paired_traj_deltas.csv      the numbers behind those two figures
-  role_paired_traj_tests.csv       per-trajectory-cluster significance
   role_scene_consistency.csv       within-scene role consistency, per trajectory
                                    cluster (does a scene's agents get consistent
                                    roles?)

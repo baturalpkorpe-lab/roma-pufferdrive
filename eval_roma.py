@@ -376,18 +376,42 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device,
     # ── 2b. Drop non-active / artifact agents ─────────────────────────────────
     # Inactive padding slots carry placeholder positions that np.diff turns
     # into impossible speeds; keep only physically-plausible moving agents.
-    SPEED_CAP  = 45.0   # m/s -- above any real vehicle: teleport/respawn artifact
+    # A respawn is NOT a reason to delete an agent. This used to test
+    # whole-episode max_speed against SPEED_CAP with no teleport handling, so a
+    # single mid-episode respawn produced an impossible max_speed and the agent
+    # was dropped -- 28,921 of 30,720 on nodiv dim4, i.e. 94%. That discard is
+    # BIASED: agents respawn after collisions and off-road events, so the role
+    # space was being built from the survivors, and PC1/max|r| disagreed with
+    # role_paired_sweep on the same checkpoint.
+    #
+    # Now match role_paired_sweep: cut each agent at its first >TELEPORT_M jump
+    # and judge motion on the segment BEFORE it, exactly as focal_metrics does.
+    SPEED_CAP  = 45.0   # m/s -- above any real vehicle
     MIN_MOTION = 1.0    # m/s -- below this the agent never really moved
-    valid  = (np.isfinite(stats["max_speed"])
-              & (stats["max_speed"] <= SPEED_CAP)
-              & (stats["max_speed"] >  MIN_MOTION))
+    from traj_kinematics import TELEPORT_M
+    xs_, ys_ = data["xs"], data["ys"]                  # (N_ep, T, B)
+    step = np.hypot(np.diff(xs_, axis=1), np.diff(ys_, axis=1))   # (N_ep,T-1,B)
+    spd  = step * 10.0
+    tele = step > TELEPORT_M
+    # steps strictly before the first teleport are the usable segment
+    pre  = np.cumsum(tele, axis=1) == 0
+    n_pre = pre.sum(axis=1)                            # (N_ep, B)
+    seg_max = np.where(pre, spd, -np.inf).max(axis=1)   # (N_ep, B)
+    seg_max = np.where(n_pre >= 10, seg_max, np.nan)
+    seg_max = seg_max.reshape(-1)
+    valid  = (np.isfinite(seg_max)
+              & (seg_max <= SPEED_CAP)
+              & (seg_max >  MIN_MOTION))
+    print(f"  teleport-truncated motion filter: median usable steps "
+          f"{np.median(n_pre):.0f}/{xs_.shape[1]-1}")
     n_drop = int((~valid).sum())
     if valid.sum() >= 10:
         role_means = role_means[valid]
         stats      = {k: v[valid] for k, v in stats.items()}
         N          = len(role_means)
-        print(f"  Dropped {n_drop:,} parked/padding/artifact agents "
-              f"-> {N:,} moving agents analysed")
+        print(f"  Dropped {n_drop:,} parked/padding agents "
+              f"-> {N:,} moving agents analysed (respawned agents KEPT, "
+              f"judged on their pre-respawn segment)")
     else:
         print(f"  [warn] only {int(valid.sum())} valid agents; skipping artifact filter")
 
@@ -399,13 +423,16 @@ def run_role_analysis(policy, env, num_episodes, role_dim, device,
         corr = np.corrcoef(role_means.T)
         off  = np.abs(corr - np.eye(role_dim))
         max_off = float(off.max())
-        print(f"  max |off-diagonal r| = {max_off:.3f}")
+        print(f"  max |off-diagonal r| = {max_off:.3f}  (N={N})")
 
         # ── 4. PCA behavioral scatter + variance ──────────────────────────────
         print("  [PCA] Behavioral scatter (min/max speed + jerk)")
         fig_pca_beh, ev = _plot_pca_behavioral(role_means, stats, ckpt_name)
         _save_log(fig_pca_beh, "pca_behavioral")
-        print(f"  PCA variance: PC1={ev[0]:.1%}  PC2={ev[1]:.1%}  total={ev[:2].sum():.1%}")
+        print(f"  PCA variance: PC1={ev[0]:.1%}  PC2={ev[1]:.1%}  "
+              f"total={ev[:2].sum():.1%}   (N={N} agents, teleport-truncated "
+              f"motion filter -- role_paired_sweep uses vehicles-only and will "
+              f"differ if N differs)")
         if wandb_run is not None:
             try:
                 import wandb as _wandb

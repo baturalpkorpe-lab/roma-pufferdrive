@@ -376,12 +376,17 @@ def main():
                 b  = np.polyfit(proj[ok], y[ok], 1)
                 xx = np.array([proj[ok].min(), proj[ok].max()])
                 ax.plot(xx, b[0] * xx + b[1], "r-", lw=1.5)
-            ax.set_title(f"PC{d+1} vs {met}\nr={r:+.2f}", fontsize=8)
+            ax.set_title(f"PC{d+1} ({100*evr[d]:.0f}% var) vs {met}\n"
+                         f"r={r:+.2f}  n={int(ok.sum())}", fontsize=8)
             ax.tick_params(labelsize=6)
             print(f"[paired]   PC{d+1} vs {met:<11}: r={r:+.3f}")
-    fig.suptitle("Observational: role PCs vs behavior (natural rollouts, "
-                 "plausibility-masked; scene-confounded -- the causal test is "
-                 "the paired sweep)", fontsize=11)
+    fig.suptitle(
+        f"Observational: role PCs vs behaviour  |  PC1={100*evr[0]:.1f}% var, "
+        f"PC2={100*evr[1]:.1f}% var  (n={len(Bdf)} natural agents)\n"
+        "CORRELATION ACROSS AGENTS, scene-confounded -- the role is largely "
+        "scene-determined (ICC ~0.4 vs ~0.1 for behaviour), so a sign here may "
+        "REVERSE in the paired sweep, which is the causal test.",
+        fontsize=10)
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     fig.savefig(out / "role_paired_observational.png", dpi=140)
     plt.close(fig)
