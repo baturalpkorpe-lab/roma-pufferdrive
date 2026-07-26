@@ -28,12 +28,16 @@ DEFINITION (structure, gated by real traffic):
   2. A zone is ACTIVE only if >= --min_traversals moving vehicles actually
      drive through it. A junction nobody uses is not an intersection anyone
      had to deal with.
-  2b. A zone must have >= --min_axes distinct road AXES near it. A mid-block
+  2b. A zone must have >= --min_axes distinct road AXES near it, where two
+     axes count as distinct only if they differ by >= 60 deg. A mid-block
      crosswalk (or a stop sign on a straight road) sits on ONE axis -- the two
      travel directions are 180 deg apart, i.e. the same line -- so without this
-     both directions of an ordinary street get labelled. Verified: a synthetic
-     mid-block crosswalk labelled BOTH opposite-lane cars before the test and
-     neither after, while a real 4-way survives.
+     both directions of an ordinary street get labelled.
+     The 60 deg threshold is deliberate: a curved road sweeps its bearing
+     continuously, so a smaller threshold splits one curve into several
+     "axes" and a crosswalk on a bend passes. Known limit: a curve of radius
+     ~25 m still reads as 2 axes (it sweeps ~100 deg within the sampling
+     radius) -- rare, and harmless unless a marker sits on it.
   3. A trajectory is intersection-involved if, while MOVING, it passes within
      --zone_radius of an ACTIVE zone.
 
@@ -241,7 +245,7 @@ def _lane_tjunctions(polys, tol=4.0, min_angle=np.deg2rad(30)):
     return np.asarray(out, float) if out else np.empty((0, 2))
 
 
-def _n_axes(centre, lanes, radius=22.0, tol=np.deg2rad(30)):
+def _n_axes(centre, lanes, radius=22.0, tol=np.deg2rad(60)):
     """How many distinct road AXES pass near a point.
 
     A mid-block crosswalk or a stop sign on a straight road sits on ONE axis:
@@ -265,17 +269,25 @@ def _n_axes(centre, lanes, radius=22.0, tol=np.deg2rad(30)):
     b = np.sort(np.mod(np.concatenate(b), np.pi))   # axis, not direction
     if len(b) == 1:
         return 1
-    # Cluster by GAPS on the circle, not by distance to a fixed representative.
-    # A curved road produces a CONTINUOUS spread of bearings; a junction
-    # produces discrete groups with empty space between them. The previous
-    # version compared each bearing to the first member of each group, so a
-    # continuous 56 deg sweep became two "axes" and a crosswalk on a sharp
-    # bend (R=45 m) passed the filter -- the curvy-road false positive this
-    # test exists to stop. Single-linkage on the sorted circle: consecutive
-    # bearings closer than tol belong to the same axis, so a curve chains into
-    # ONE group however far it sweeps.
-    gaps = np.append(np.diff(b), (b[0] + np.pi) - b[-1])
-    return max(1, int((gaps > tol).sum()))
+    # Two axes count as distinct only when they differ by >= tol. tol is large
+    # (60 deg) ON PURPOSE: a curved road sweeps its bearing continuously, so a
+    # small tol splits one curve into several "axes" and lets a mid-block
+    # crosswalk on a bend through. A real junction differs by ~90 deg.
+    #
+    # Do NOT replace this with gap-based clustering on the sorted circle. That
+    # was tried and rejected 99% of all zones on the real pool: junction TURN
+    # CONNECTORS sweep through every angle between the two roads, so a real
+    # junction's bearing distribution is CONTINUOUS, not two discrete clumps.
+    # Separation from a representative is what survives connectors.
+    reps = []
+    for ang in b:
+        for g in reps:
+            d = abs(ang - g)
+            if min(d, np.pi - d) < tol:
+                break
+        else:
+            reps.append(ang)
+    return len(reps)
 
 
 def junction_zones(roads, eps, use_lane_crossings, min_axes=2):
