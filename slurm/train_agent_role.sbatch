@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=roma_agentrole
+#SBATCH --job-name=roma_noroad
 #SBATCH --partition=gpu-a100
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -7,8 +7,8 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --time=24:00:00
 #SBATCH --account=research-ceg-tp
-#SBATCH --output=roma_agentrole_%j.out
-#SBATCH --error=roma_agentrole_%j.err
+#SBATCH --output=roma_noroad_%j.out
+#SBATCH --error=roma_noroad_%j.err
 
 # ===========================================================================
 # AGENT-CENTRIC ROLE: rebalanced role input + road-free MI target.
@@ -19,11 +19,22 @@
 # longer needed. Two changes, both flag-gated (see the role-agent-centric
 # commit for the full argument):
 #
-#   --role_road_dim 16     road stays in the role encoder's input -- an agent
-#   --role_partner_dim 64  should still hold back on a curve -- but stops
-#                          being half of its bandwidth. The POLICY GRU keeps
-#                          all 64 road dims regardless, so nothing that keeps
-#                          the car inside the boundaries is touched.
+#   --role_road_dim 0      road is REMOVED FROM THE ROLE ENTIRELY. The role
+#   --role_partner_dim 64  encoder sees 32 ego + 64 partner = 96 dims and no
+#                          road at all; role_road_proj is None and _role_input
+#                          appends nothing for road. The POLICY GRU still gets
+#                          the full 128-dim env embedding, so nothing that
+#                          keeps the car inside the boundaries is touched.
+#                          Verified on this branch: perturbing the road block
+#                          of the observation by +100 leaves the role encoder
+#                          input bit-identical.
+#
+#                          This is the r16 -> r0 step past role-agent-centric,
+#                          which reduced scene-ICC only 0.398 -> 0.370. If the
+#                          residual scene-determination is carried by the road
+#                          CHANNEL, r0 should move it further; if it is carried
+#                          by ego/partner being themselves scene-caused, r0
+#                          will not help and that is the informative answer.
 #   --mi_target ego_partner
 #                          drops road from the MI TARGET. mi_weight=1.0 vs
 #                          div_weight=0.1 makes MI the largest gradient on the
@@ -69,7 +80,7 @@ CODE_DIR=${CODE_DIR:-$SLURM_SUBMIT_DIR}
 DATA_DIR=${DATA_DIR:-$PUFFER_DIR/pufferlib/resources/drive/binaries/training}
 
 # ---- The architecture change ----------------------------------------------
-ROLE_ROAD_DIM=${ROLE_ROAD_DIM:-16}
+ROLE_ROAD_DIM=${ROLE_ROAD_DIM:-0}
 ROLE_PARTNER_DIM=${ROLE_PARTNER_DIM:-64}
 MI_TARGET=${MI_TARGET:-ego_partner}
 
@@ -88,7 +99,7 @@ SEED=${SEED:-0}
 # resume from weights that cannot load.
 case "$MI_TARGET" in ego_partner) MI_TAG=ep ;; *) MI_TAG=$MI_TARGET ;; esac
 case "$DIV_WEIGHT" in 0|0.|0.0|0.00) DIV_TAG=_nodiv ;; *) DIV_TAG= ;; esac
-SAVE_DIR=${SAVE_DIR:-$SCRATCH_ROOT/checkpoints/roma_agentrole_dim${ROLE_DIM}_r${ROLE_ROAD_DIM}p${ROLE_PARTNER_DIM}_${MI_TAG}${DIV_TAG}}
+SAVE_DIR=${SAVE_DIR:-$SCRATCH_ROOT/checkpoints/roma_noroad_dim${ROLE_DIM}_r${ROLE_ROAD_DIM}p${ROLE_PARTNER_DIM}_${MI_TAG}${DIV_TAG}}
 WANDB_PROJECT=${WANDB_PROJECT:-roma-pufferdrive}
 WANDB_ENTITY=${WANDB_ENTITY:-s-rahmani-tu-delft}
 WANDB_NAME=${WANDB_NAME:-roma_dim${ROLE_DIM}_agentrole${DIV_TAG}_road${ROLE_ROAD_DIM}p${ROLE_PARTNER_DIM}_${MI_TARGET}_${SEED}}
@@ -124,19 +135,19 @@ LATEST=$(ls "$SAVE_DIR"/roma_dim${ROLE_DIM}_step*.pt 2>/dev/null \
 if [ -n "$LATEST" ]; then
     LATEST_STEP=$(echo "$LATEST" | sed 's/.*_step\([0-9]*\)\.pt/\1/')
     if [ -f "$SAVE_DIR/roma_dim${ROLE_DIM}_final.pt" ] || [ "$LATEST_STEP" -ge "$TOTAL_STEPS" ]; then
-        echo "[agentrole] already at step $LATEST_STEP / $TOTAL_STEPS -- nothing to do"
+        echo "[noroad] already at step $LATEST_STEP / $TOTAL_STEPS -- nothing to do"
         exit 0
     fi
-    echo "[agentrole] resuming from $LATEST (step $LATEST_STEP)"
+    echo "[noroad] resuming from $LATEST (step $LATEST_STEP)"
     RESUME_ARGS="--resume $LATEST"
 else
-    echo "[agentrole] no existing checkpoint in $SAVE_DIR -- fresh run"
+    echo "[noroad] no existing checkpoint in $SAVE_DIR -- fresh run"
 fi
 
-echo "[agentrole] role_dim=$ROLE_DIM road=$ROLE_ROAD_DIM partner=$ROLE_PARTNER_DIM mi_target=$MI_TARGET"
-echo "[agentrole] div_weight=$DIV_WEIGHT total_steps=$TOTAL_STEPS save=$SAVE_DIR"
-echo "[agentrole] branch=$(git -C "$CODE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ?)"
-echo "[agentrole] commit=$(git -C "$CODE_DIR" rev-parse --short HEAD 2>/dev/null || echo ?)"
+echo "[noroad] role_dim=$ROLE_DIM road=$ROLE_ROAD_DIM partner=$ROLE_PARTNER_DIM mi_target=$MI_TARGET"
+echo "[noroad] div_weight=$DIV_WEIGHT total_steps=$TOTAL_STEPS save=$SAVE_DIR"
+echo "[noroad] branch=$(git -C "$CODE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ?)"
+echo "[noroad] commit=$(git -C "$CODE_DIR" rev-parse --short HEAD 2>/dev/null || echo ?)"
 
 # C binding loads pufferlib/config/ocean/drive.ini via a relative path.
 cd "$PUFFER_DIR"
@@ -166,9 +177,9 @@ python "$CODE_DIR/roma_pufferdrive/train_roma.py" \
     --wandb_entity        "$WANDB_ENTITY" \
     --wandb_name          "$WANDB_NAME" \
     $RESUME_ARGS \
-  || { echo "[agentrole] FAILED (python exit $?)"; exit 1; }
+  || { echo "[noroad] FAILED (python exit $?)"; exit 1; }
 # The guard matters: without it the trailing echo below is the last command, so
 # the job exits 0 on a python crash and sacct reports COMPLETED 0:0 -- and the
 # afterok eval fires on a run that produced nothing.
 
-echo "[agentrole] done -> $SAVE_DIR"
+echo "[noroad] done -> $SAVE_DIR"
