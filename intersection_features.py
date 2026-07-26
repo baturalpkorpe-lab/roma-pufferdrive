@@ -466,7 +466,7 @@ def scene_rows(m, args):
             road_rel_turn=round(road_rel, 4) if np.isfinite(road_rel) else "",
             abs_road_rel_turn=round(abs(road_rel), 4) if np.isfinite(road_rel) else "",
         ))
-    return rows, src, len(active), len(centres)
+    return rows, src, active, centres
 
 
 def main():
@@ -486,7 +486,8 @@ def main():
     for i, fp in enumerate(files):
         try:
             m = read_map_binary(fp)
-            r, src, na, nz = scene_rows(m, args)
+            r, src, active, centres = scene_rows(m, args)
+            na, nz = len(active), len(centres)
         except Exception as e:
             bad += 1
             if bad <= 3:
