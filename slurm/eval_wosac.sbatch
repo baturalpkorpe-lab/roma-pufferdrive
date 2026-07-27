@@ -34,7 +34,13 @@ module load miniconda3
 source /apps/generic/miniforge3/25.11.0/etc/profile.d/conda.sh
 conda activate roma
 
-export PYTHONPATH=$HOME/roma_pufferdrive:/scratch/e452103/PufferDrive
+# CODE_DIR = the clone this job was submitted FROM, like every other sbatch
+# here. It used to be hardcoded to $HOME/roma_pufferdrive, which is not even the
+# baseline clone (that one is on role-agent-centric), so submitting from
+# ~/roma_baseline silently ran a different branch's eval_roma.py and policy.py
+# against the checkpoint.
+CODE_DIR=${CODE_DIR:-$SLURM_SUBMIT_DIR}
+export PYTHONPATH=$CODE_DIR:/scratch/e452103/PufferDrive
 export PYTHONUNBUFFERED=1
 # eval_roma has no --wandb_entity flag; it uses the runner's default entity.
 export WANDB_ENTITY=s-rahmani-tu-delft
@@ -43,7 +49,7 @@ mkdir -p /scratch/e452103/logs "$OUT"
 # C binding loads pufferlib/config/ocean/drive.ini via a relative path.
 cd /scratch/e452103/PufferDrive
 
-python $HOME/roma_pufferdrive/eval_roma.py \
+python "$CODE_DIR/eval_roma.py" \
     --checkpoint        "$CKPT" \
     --role_dim          "$ROLE_DIM" \
     --num_agents        3072 \
