@@ -10,6 +10,10 @@ the sim; background drawn per --background):
     PC2 sweep                  (0, b)  for b in --alphas, b != 0
     corners (--grid 1)         (a, b)  for a, b in {min,max}x{min,max}
 
+A role_dim=1 checkpoint has a single role axis, so role_paired_axes.csv holds
+PC1 only: the PC2 fan and the corners are dropped and this degrades to a
+PC1-only sweep (1 + 4 = 5 videos per scene) rather than refusing to run.
+
 Default 5-value alphas -> 1 + 4 + 4 + 4 = 13 videos per scene;
 4 types x --scenes_per_type 3 = 12 scenes -> ~156 videos. Plus, per scene:
     overlay_pc1_*.png   the PC1 fan (coolwarm)
@@ -76,12 +80,16 @@ def parse_args():
     return p.parse_args()
 
 
-def cond_list(alphas, grid):
-    """[(name, a1, a2)] -- natural + PC1 fan + PC2 fan + corners."""
+def cond_list(alphas, grid, has_pc2=True):
+    """[(name, a1, a2)] -- natural + PC1 fan + PC2 fan + corners.
+    has_pc2=False (role_dim=1: the role space has a single axis) degrades to
+    natural + the PC1 fan; there is no second axis to fan or to cross."""
     conds = [("nat", 0.0, 0.0)]
     for a in alphas:
         if a != 0.0:
             conds.append((f"pc1{a:+g}", a, 0.0))
+    if not has_pc2:
+        return conds
     for b in alphas:
         if b != 0.0:
             conds.append((f"pc2{b:+g}", 0.0, b))
@@ -100,9 +108,8 @@ def main():
     device  = torch.device(args.device)
     out_dir = Path(args.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     alphas  = sorted(float(x) for x in args.alphas.split(","))
-    conds   = cond_list(alphas, args.grid)
-    print(f"[grid] {len(conds)} conditions per scene: "
-          f"{[c[0] for c in conds]}")
+    # conds depends on whether the axes CSV actually has a PC2 -> built below,
+    # once the checkpoint's role space is known.
 
     import pandas as pd
     tc = pd.read_csv(args.traj_clusters)
@@ -128,10 +135,24 @@ def main():
     if role_dim == 0:
         raise SystemExit("role_dim=0 checkpoint -- nothing to sweep")
     mu, axes = load_axes(args.axes_csv, role_dim)
-    if "PC1" not in axes or "PC2" not in axes:
-        raise SystemExit(f"axes csv needs PC1+PC2, has {list(axes)}")
+    if "PC1" not in axes:
+        raise SystemExit(f"axes csv needs PC1, has {list(axes)}")
     u1, s1 = axes["PC1"]
-    u2, s2 = axes["PC2"]
+    # A role_dim=1 checkpoint has a single role axis, so role_paired_sweep
+    # writes PC1 only. Fall back to a PC1-only sweep instead of refusing to
+    # render: no PC2 fan, no PC1xPC2 corners.
+    has_pc2 = "PC2" in axes
+    if has_pc2:
+        u2, s2 = axes["PC2"]
+    else:
+        u2, s2 = np.zeros_like(u1), 0.0
+        print(f"[grid] axes csv has no PC2 (role_dim={role_dim}) -- "
+              f"PC1-only sweep, corners disabled")
+
+    do_grid = bool(args.grid) and has_pc2
+    conds = cond_list(alphas, do_grid, has_pc2=has_pc2)
+    print(f"[grid] {len(conds)} conditions per scene: "
+          f"{[c[0] for c in conds]}")
 
     # colors: PC1 fan coolwarm, PC2 fan PiYG, natural white, corners olive tones
     c_pc1, c_pc2 = plt.get_cmap("coolwarm"), plt.get_cmap("PiYG")
@@ -198,7 +219,9 @@ def main():
                     m   = mets[name]
                     tag = name.replace("+", "p").replace("-", "m")
                     fn  = f"t{t}_{sid[:10]}_{tag}.mp4"
-                    ttl = (f"{tname} | {sid[:10]} | PC1={a:+g} PC2={b:+g} | "
+                    axttl = (f"PC1={a:+g} PC2={b:+g}" if has_pc2
+                             else f"PC1={a:+g}")
+                    ttl = (f"{tname} | {sid[:10]} | {axttl} | "
                            f"v={m['speed_mean']:.1f}  |a|={m['accel_abs']:.1f}"
                            f"  turn={m['turn_abs']:.2f}")
                     dist, dmin, fmin, reached = render_condition_video(
@@ -212,17 +235,19 @@ def main():
                 base = f"t{t}_{sid[:10]}"
                 pc1_set = ["nat"] + [c[0] for c in conds
                                      if c[0].startswith("pc1")]
-                pc2_set = ["nat"] + [c[0] for c in conds
-                                     if c[0].startswith("pc2")]
                 render_compare_overlay(
                     views, pc1_set, colors,
-                    f"{tname} | {sid[:10]} | PC1 sweep (PC2=0)",
+                    f"{tname} | {sid[:10]} | PC1 sweep"
+                    + (" (PC2=0)" if has_pc2 else ""),
                     out_dir / f"overlay_pc1_{base}.png", args.dpi, mets)
-                render_compare_overlay(
-                    views, pc2_set, colors,
-                    f"{tname} | {sid[:10]} | PC2 sweep (PC1=0)",
-                    out_dir / f"overlay_pc2_{base}.png", args.dpi, mets)
-                if args.grid:
+                if has_pc2:
+                    pc2_set = ["nat"] + [c[0] for c in conds
+                                         if c[0].startswith("pc2")]
+                    render_compare_overlay(
+                        views, pc2_set, colors,
+                        f"{tname} | {sid[:10]} | PC2 sweep (PC1=0)",
+                        out_dir / f"overlay_pc2_{base}.png", args.dpi, mets)
+                if do_grid:
                     g_set = ["nat"] + [c[0] for c in conds
                                        if c[0].startswith("g")]
                     render_compare_overlay(

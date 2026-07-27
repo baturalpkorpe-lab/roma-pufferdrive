@@ -75,7 +75,9 @@ def main():
     # -- role x role intercorrelation --------------------------------------
     R  = df[role_cols].values.astype(np.float64)
     ok = np.isfinite(R).all(axis=1)
-    corr_rr = np.corrcoef(R[ok].T)
+    # np.corrcoef of a SINGLE variable returns a 0-d array, not a 1x1 matrix,
+    # so a role_dim=1 checkpoint used to die in heatmap() on mat[i, j].
+    corr_rr = np.atleast_2d(np.corrcoef(R[ok].T))
     heatmap(corr_rr, role_cols, role_cols,
             f"Role dim inter-correlation  (n={int(ok.sum())})",
             out / "role_role_corr.png")
