@@ -145,6 +145,13 @@ def parse_args():
                         "ignores mark_as_expert and would control every agent "
                         "in the scene, destroying the per-cluster population. "
                         "Pass '' to fall back to the drive.ini eval value.")
+    p.add_argument("--allow_full_control", action="store_true",
+                   help="Do NOT abort when batch 1 measures ~100%% of the scene "
+                        "under policy control. Off by default: for a per-cluster "
+                        "eval that state means the cluster population is gone and "
+                        "the run is meaningless, so it is worth losing 2 minutes "
+                        "instead of the full wall clock. Set it deliberately for a "
+                        "whole-scene eval where 100%% is the intent.")
     p.add_argument("--device",     type=str, default="cuda")
     return p.parse_args()
 
@@ -308,6 +315,47 @@ def main():
             ctrl.update({"alpha": a, "batch": batch})
             env_rows.append(env_m); ctrl_rows.append(ctrl)
 
+            # FAIL FAST on the MEASUREMENT, not on the setting. The end-of-run
+            # report used to warn only when control_mode == "control_wosac",
+            # so a run that passed control_agents and still ended up with 100%
+            # of the scene controlled sailed through and burned the full wall
+            # clock on an eval with no GT-replay traffic in it at all.
+            # controlled_frac is measured (trajectory spread across rollouts),
+            # so it catches the case the string comparison cannot.
+            if len(ctrl_rows) == 1 and not args.allow_full_control:
+                cf0 = ctrl["controlled_frac"]
+                if cf0 >= 0.99:
+                    raise SystemExit(
+                        f"\n[cwosac] ABORT after batch 1: {100*cf0:.1f}% of "
+                        f"agents are policy-controlled ({ctrl['n_controlled_detected']}"
+                        f"/{ctrl['n_agents']}).\n"
+                        f"  control_mode passed = {control_mode}, so the mode is "
+                        f"probably NOT the problem.\n"
+                        f"  The likely cause is that the map binaries in\n"
+                        f"    {args.data_dir}\n"
+                        f"  have no mark_as_expert agents, so control_agents has "
+                        f"nothing to exclude.\n"
+                        f"  Check with (read_map_binary exposes mark_as_expert):\n"
+                        f"    python -c \"from map_binary import read_map_binary; "
+                        f"from pathlib import Path; "
+                        f"o=read_map_binary(sorted(Path('{args.data_dir}')"
+                        f".glob('map_*.bin'))[0])['objects']; "
+                        f"print(sum(x['mark_as_expert'] for x in o), 'experts of', "
+                        f"len(o))\"\n"
+                        f"  With 0 experts this is not a per-cluster evaluation: "
+                        f"every vehicle,\n"
+                        f"  pedestrian and cyclist is policy-driven and there is no "
+                        f"human traffic\n"
+                        f"  to react to. Pass --allow_full_control if you really "
+                        f"want that.")
+                if ctrl["n_controlled_detected"] < 1:
+                    raise SystemExit(
+                        f"\n[cwosac] ABORT after batch 1: NOTHING is controlled "
+                        f"(0/{ctrl['n_agents']}).\n"
+                        f"  Expected with control_sdc_only -- make_cluster_maps "
+                        f"blanks sdc_track_index\n"
+                        f"  for foreign egos. Use --control_mode control_agents.")
+
             try:
                 df = evaluator.compute_metrics(gt, sim, agent_state, road_edges,
                                                aggregate_results=False)
@@ -387,6 +435,21 @@ def main():
         print("      mark_as_expert check ('ignore expert flag'), so every")
         print("      vehicle/ped/cyclist is controlled and the cluster")
         print("      population is gone. Rerun with --control_mode control_agents.")
+    # Judge the MEASUREMENT independently of the setting. A run can pass
+    # control_agents and still control the whole scene -- if the map binaries
+    # carry no mark_as_expert agents there is nothing for the mode to exclude.
+    # That combination produced a full 5x wall clock of unusable numbers once,
+    # because the only check here was the string comparison above.
+    if cf >= 0.99:
+        print(f"\n  *** 100% CONTROLLED ***  measured {100*cf:.1f}%, mode="
+              f"{control_mode}.")
+        print("      NOT a per-cluster evaluation: no GT-replay traffic exists,")
+        print("      so collision/offroad/goal_rate reflect a scene where every")
+        print("      road user is policy-driven. Check that the cluster maps")
+        print("      actually have mark_as_expert agents.")
+    elif cf > 0.0:
+        print(f"\n  OK: {100*cf:.1f}% controlled, the rest replay GT -- this is")
+        print("      the per-cluster population the policy was trained on.")
     if nd < 1:
         print("\n  WARNING: NOTHING was controlled. Expected if control_mode is")
         print("           control_sdc_only -- make_cluster_maps blanks")
