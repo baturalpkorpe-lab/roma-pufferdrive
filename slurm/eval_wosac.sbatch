@@ -23,6 +23,11 @@
 CKPT=${CKPT:-/scratch/e452103/checkpoints/roma_baseline_dim2/roma_dim2_final.pt}
 ROLE_DIM=${ROLE_DIM:-2}
 OUT=${OUT:-/scratch/e452103/eval_results/dim2}
+# eval_roma falls back to the CHECKPOINT STEM for the wandb run name, and every
+# per-cluster checkpoint is called roma_dim<D>_final.pt -- so without this every
+# cluster eval shows up in wandb as the same indistinguishable run. Default to
+# the output folder name, which is already unique per eval.
+RUN_NAME=${RUN_NAME:-$(basename "$OUT")}
 
 module purge
 module load miniconda3
@@ -49,6 +54,6 @@ python $HOME/roma_pufferdrive/eval_roma.py \
     --wosac_max_batches 100 \
     --role_episodes     10 \
     --output_dir        "$OUT" \
-    --wandb
+    --wandb --wandb_run_name "$RUN_NAME"
 
 echo "Done -> $OUT"
