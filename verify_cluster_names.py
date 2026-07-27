@@ -1,5 +1,5 @@
 """
-verify_cluster_names.py -- are 0=mid-speed 1=fast 2=stop&go 3=turning correct?
+verify_cluster_names.py -- is 0=fast 1=stop&go 2=mid-speed 3=turning correct?
 
 The names are asserted in ~6 places (role_analysis.sbatch, render_role_grid*,
 intersection_report, the handoff) and traced back to a comment claiming they
@@ -32,7 +32,11 @@ import argparse
 import numpy as np
 import pandas as pd
 
-ASSUMED = {0: "mid-speed", 1: "fast", 2: "stop&go", 3: "turning"}
+# The mapping now used everywhere in the repo. The previous ASSUMED here had
+# 0 and 2 swapped (0=mid-speed 1=fast), traced to a comment claiming the
+# centroid plot verified it, with no artifact behind the claim. This is the
+# hypothesis to TEST -- it is still not independently confirmed.
+ASSUMED = {0: "fast", 1: "stop&go", 2: "mid-speed", 3: "turning"}
 
 
 def parse_args():

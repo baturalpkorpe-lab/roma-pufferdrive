@@ -39,7 +39,7 @@ DATA_DIR=${DATA_DIR:-pufferlib/resources/drive/binaries/training}
 OUT_ROOT=${OUT_ROOT:-/scratch/e452103/renders/role_grid_dim2}
 OUT=${OUT:-$OUT_ROOT/type${TYPE}}
 SCENES=${SCENES:-3}
-NAMES=${NAMES:-"0:mid-speed,1:fast,2:stop&go,3:turning"}
+NAMES=${NAMES:-"0:fast,1:stop&go,2:mid-speed,3:turning"}
 
 module purge
 module load miniconda3

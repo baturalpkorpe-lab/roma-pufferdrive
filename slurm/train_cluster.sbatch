@@ -15,7 +15,7 @@
 # trajectory (mark_as_expert baked into the per-cluster binaries by
 # make_cluster_maps.py -- run slurm/make_cluster_maps.sbatch first).
 #
-# Cluster names: 0=mid-speed  1=fast  2=stop&go  3=turning
+# Cluster names: 0=fast  1=stop&go  2=mid-speed  3=turning
 #
 # The cluster<K>-* branches pin CLUSTER; on baseline pass it explicitly:
 #   sbatch --export=ALL,CLUSTER=1 slurm/train_cluster.sbatch

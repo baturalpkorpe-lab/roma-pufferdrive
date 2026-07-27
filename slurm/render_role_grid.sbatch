@@ -27,7 +27,7 @@ AXES=${AXES:-/scratch/e452103/role_paired/dim2/role_paired_axes.csv}
 TRAJ=${TRAJ:-/scratch/e452103/traj_atlas/trajectory_clusters_stopfrac.csv}
 OUT=${OUT:-/scratch/e452103/renders/role_grid_dim2}
 SCENES=${SCENES:-3}
-NAMES=${NAMES:-"0:mid-speed,1:fast,2:stop&go,3:turning"}
+NAMES=${NAMES:-"0:fast,1:stop&go,2:mid-speed,3:turning"}
 
 module purge
 module load miniconda3

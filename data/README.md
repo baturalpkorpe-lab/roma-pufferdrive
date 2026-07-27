@@ -10,7 +10,7 @@ The frozen stop_frac trajectory K-means clustering:
 
     scenario_id, vehicle_id, cluster [, margin, cluster2, is_edge]
 
-`cluster`: 0 = mid-speed, 1 = fast, 2 = stop&go, 3 = turning (verify against the
+`cluster`: 0 = fast, 1 = stop&go, 2 = mid-speed, 3 = turning (verify against the
 K=4 centroid plot, never by label alone).
 
 Every trajectory-cluster analysis is keyed to this file. `slurm/nodiv_analysis.sbatch`

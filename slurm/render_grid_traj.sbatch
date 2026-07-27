@@ -12,7 +12,7 @@
 # The trajectory-cluster VIDEO grid: render_role_grid picks --scenes_per_type
 # scenes PER TRAJECTORY CLUSTER (keyed by the (scenario, vehicle) trajectory
 # clustering) and renders each across the PC1xPC2 forcing grid, so the videos
-# SHOW how each trajectory type (mid-speed / fast / stop&go / turning) responds
+# SHOW how each trajectory type (fast / stop&go / mid-speed / turning) responds
 # to role forcing. CPU (compute partition) on purpose -- headless matplotlib,
 # no GPU, so it does not eat the supervisor's GPU allocation for 16h.
 #
@@ -48,7 +48,7 @@ if [ -z "${TRAJ:-}" ]; then
         TRAJ="$CODE_DIR/data/trajectory_clusters_stopfrac.csv"
     fi
 fi
-TYPE_NAMES=${TYPE_NAMES:-0:mid-speed,1:fast,2:stop&go,3:turning}
+TYPE_NAMES=${TYPE_NAMES:-0:fast,1:stop&go,2:mid-speed,3:turning}
 ALPHAS=${ALPHAS:--2,-1,0,1,2}
 SCENES_PER_TYPE=${SCENES_PER_TYPE:-6}
 
