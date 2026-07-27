@@ -228,6 +228,9 @@ paired/                            role-pairing analysis
                                    x metric. "does forcing the role move behaviour?"
   role_paired_PC1.png              dose-response of the paired deltas along PC1
   role_paired_PC2.png              same along PC2 (0 at alpha=0 by construction)
+                                   ROLE_DIM=1 runs have ONE role axis, so there
+                                   is no PC2 here and the video grid is a
+                                   PC1-only sweep (no corners) -- not missing.
   role_scene_consistency.csv       within-scene role consistency, per trajectory
                                    cluster (does a scene's agents get consistent
                                    roles?)
