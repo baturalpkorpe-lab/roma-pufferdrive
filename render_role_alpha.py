@@ -9,7 +9,9 @@ mu + alpha*sigma*PC_d; all other agents natural), and write:
                                 box (blue=alpha-2 .. red=alpha+2), context cars
                                 replay their human GT, goal star shown; the
                                 title carries the MEASURED numbers (speed,
-                                |accel|, |jerk|, |turn|) for that alpha.
+                                braking p95, throttle p95, |turn|) for that
+                                alpha. NOT mean|a| -- that is 10*TV(speed)/N
+                                and cannot move with the sweep.
   overlay_r{rg}_{sid}.png       all alpha trajectories on one image.
   metrics_r{rg}_{sid}.csv       per-alpha measured metrics for that scene.
   alpha_render_summary.csv      all scenes x alphas in one table.
@@ -52,13 +54,27 @@ from render_role_conditions import (rollout_forced, scan_allocation, scene_view,
                                     first_segment, focal_goal,
                                     focal_collision_frames, focal_offroad_frames)
 from role_regime_analysis import _squeeze
-from traj_kinematics import ego_kinematics
+from traj_kinematics import (ego_kinematics, event_kinematics,
+                             TAIL_METRICS, EVENT_METRICS, AUDIT_METRICS)
+
+# What the renders REPORT. accel_abs is deliberately absent: mean|a| is
+# 10*TV(speed)/N, so a hard stop and a gentle one score identically and the
+# number cannot move with the sweep -- it was the one burned into every video
+# title and CSV. These are the curated non-redundant panels, symmetric in
+# braking and throttle, plus jerk (the largest measured PC2 effect).
+RENDER_METRICS = ["speed_mean", "turn_abs",
+                  "accel_p95", "hard_accel_rate", "accel_ev_peak_mean",
+                  "decel_p95", "hard_brake_rate", "brake_peak_mean",
+                  "jerk_p95", "accel_mask_frac"]
+# One braking + one throttle number for the burned-in video/console captions,
+# where there is only room for a handful.
+TITLE_BRAKE    = "decel_p95"
+TITLE_THROTTLE = "accel_p95"
 
 T = 91
 TELEPORT_M = 4.0      # metric segment cut (respawn discontinuity)
 EVENT_REW  = -0.4
-MET_COLS   = ["speed_mean", "accel_abs", "jerk_abs", "turn_abs", "event_rate",
-              "goal_min_m", "reached"]
+MET_COLS   = RENDER_METRICS + ["event_rate", "goal_min_m", "reached"]
 
 
 def parse_args():
@@ -161,11 +177,15 @@ def focal_numbers(data):
     dh  = wrap_angle(np.diff(fh[:end])) * 10.0
     n   = min(len(spd), len(dh))
     k = ego_kinematics(spd[:n], dh[:n])           # plausibility-masked kinematics
+    # spd here is built from CONSECUTIVE steps (no validity compaction), so
+    # there are no holes to bridge and t_idx stays None -- unlike focal_metrics
+    # in role_paired_sweep, which must pass the original indices.
+    e = event_kinematics(spd[:n])                 # tail + braking/throttle events
     collided = focal_collision_frames(data, end)
     offroad  = focal_offroad_frames(data, end)
-    return {
+    out = {
         "speed_mean":   k["speed_mean"],
-        "accel_abs":    k["accel_abs"],
+        "accel_abs":    k["accel_abs"],       # kept for back-compat; NOT reported
         "accel_pos":    k["accel_pos"],
         "decel_abs":    k["decel_abs"],
         "jerk_abs":     k["jerk_abs"],
@@ -174,6 +194,8 @@ def focal_numbers(data):
         "offroad_rate": int(offroad.sum()),   # offroad frames (of `end`)
         "seg_end":      end,
     }
+    out.update({kk: e[kk] for kk in TAIL_METRICS + EVENT_METRICS + AUDIT_METRICS})
+    return out
 
 
 def render_alpha_overlay(views, alphas, cmap, title, out_path, dpi, metrics):
@@ -291,7 +313,8 @@ def main():
                 view["hide_after"] = hide_after_frame(view)
                 views[al] = view
                 print(f"  α={al:+g}: v={mets[al]['speed_mean']:.1f} m/s  "
-                      f"|a|={mets[al]['accel_abs']:.1f}  "
+                      f"b95={mets[al][TITLE_BRAKE]:.1f} "
+                      f"t95={mets[al][TITLE_THROTTLE]:.1f}  "
                       f"|j|={mets[al]['jerk_abs']:.0f}  "
                       f"turn={mets[al]['turn_abs']:.2f}", flush=True)
             if not ok:
@@ -308,7 +331,8 @@ def main():
                     name  = f"r{rg}_{sid[:10]}_{tag}.mp4"
                     title = (f"regime {rg} | {sid[:10]} | {args.axis} "
                              f"α={al:+g} | v={m['speed_mean']:.1f} m/s  "
-                             f"|a|={m['accel_abs']:.1f}  "
+                             f"b95={m[TITLE_BRAKE]:.1f} "
+                             f"t95={m[TITLE_THROTTLE]:.1f}  "
                              f"turn={m['turn_abs']:.2f}")
                     dist, dmin, fmin, reached = render_condition_video(
                         views[al], views[al]["focal"], col, title,

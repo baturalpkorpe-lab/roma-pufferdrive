@@ -11,7 +11,7 @@ that trajectory type. Roll the IDENTICAL scene 6 times:
                 alpha*sigma along PC1 (natural-offset; a0 = fully natural)
 
 Background vehicles replay their human GT (no policy weirdness); focal is the
-big colored box; goal star shown; measured speed/|accel|/turn burned into
+big colored box; goal star shown; measured speed/braking-p95/throttle-p95/turn burned into
 each title. Per scene: 6 MP4s + 1 overlay PNG (all six paths, dim0 in black)
 + metrics CSV. Total (4 types x 2 scenes): 48 videos.
 
@@ -48,10 +48,13 @@ from render_role_conditions import (rollout_forced, scene_view,
                                     first_segment, focal_goal)
 from render_role_alpha import load_axes, focal_numbers
 from role_regime_analysis import _squeeze
+from render_role_alpha import (RENDER_METRICS, TITLE_BRAKE,
+                               TITLE_THROTTLE)
 
 T = 91
-MET_COLS = ["speed_mean", "accel_abs", "accel_pos", "decel_abs", "jerk_abs",
-            "turn_abs", "event_rate", "offroad_rate", "goal_min_m", "reached"]
+# accel_abs dropped: mean|a| = 10*TV(speed)/N cannot move with the sweep.
+MET_COLS = RENDER_METRICS + ["event_rate", "offroad_rate", "goal_min_m",
+                             "reached"]
 
 
 def parse_args():
@@ -255,7 +258,8 @@ def main():
                 view["hide_after"] = hide_after_frame(view)
                 views[c] = view
                 print(f"  {c:>5}: v={mets[c]['speed_mean']:.1f} m/s  "
-                      f"|a|={mets[c]['accel_abs']:.1f}  "
+                      f"b95={mets[c][TITLE_BRAKE]:.1f} "
+                      f"t95={mets[c][TITLE_THROTTLE]:.1f}  "
                       f"turn={mets[c]['turn_abs']:.2f}", flush=True)
             if not ok:
                 continue
@@ -269,7 +273,9 @@ def main():
                     ttl  = (f"traj {tname} | {sid[:10]} | "
                             f"{'no-role (dim0)' if c == 'dim0' else f'{args.axis} α={c[1:]}'}"
                             f" | v={m['speed_mean']:.1f} m/s  "
-                            f"|a|={m['accel_abs']:.1f}  turn={m['turn_abs']:.2f}")
+                            f"b95={m[TITLE_BRAKE]:.1f} "
+                            f"t95={m[TITLE_THROTTLE]:.1f}  "
+                            f"turn={m['turn_abs']:.2f}")
                     dist, dmin, fmin, reached = render_condition_video(
                         views[c], views[c]["focal"], colors[c], ttl,
                         out_dir / name, args.fps, args.dpi,

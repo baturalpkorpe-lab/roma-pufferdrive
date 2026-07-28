@@ -44,11 +44,14 @@ from render_topdown import load_policy
 from render_role_conditions import (rollout_forced, scene_view,
                                     hide_after_frame, render_condition_video)
 from render_role_compare import scan_for_types, render_compare_overlay
-from render_role_alpha import load_axes, focal_numbers
+from render_role_alpha import (load_axes, focal_numbers, RENDER_METRICS,
+                               TITLE_BRAKE, TITLE_THROTTLE)
 
 T = 91
-MET_COLS = ["speed_mean", "accel_abs", "accel_pos", "decel_abs", "jerk_abs",
-            "turn_abs", "event_rate", "offroad_rate", "goal_min_m", "reached"]
+# accel_abs is NOT here on purpose: mean|a| = 10*TV(speed)/N, so a hard stop
+# and a gentle one score identically and it cannot move with the sweep.
+MET_COLS = RENDER_METRICS + ["event_rate", "offroad_rate", "goal_min_m",
+                             "reached"]
 
 
 def parse_args():
@@ -210,6 +213,7 @@ def main():
                 view["hide_after"] = hide_after_frame(view)
                 views[name] = view
                 print(f"  {name:>8}: v={mets[name]['speed_mean']:.1f}  "
+                      f"b95={mets[name][TITLE_BRAKE]:.1f} "
                       f"turn={mets[name]['turn_abs']:.2f}", flush=True)
             if not ok:
                 continue
@@ -222,7 +226,8 @@ def main():
                     axttl = (f"PC1={a:+g} PC2={b:+g}" if has_pc2
                              else f"PC1={a:+g}")
                     ttl = (f"{tname} | {sid[:10]} | {axttl} | "
-                           f"v={m['speed_mean']:.1f}  |a|={m['accel_abs']:.1f}"
+                           f"v={m['speed_mean']:.1f}  "
+                           f"b95={m[TITLE_BRAKE]:.1f} t95={m[TITLE_THROTTLE]:.1f}"
                            f"  turn={m['turn_abs']:.2f}")
                     dist, dmin, fmin, reached = render_condition_video(
                         views[name], views[name]["focal"], colors[name], ttl,

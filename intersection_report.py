@@ -26,7 +26,7 @@ import argparse
 import numpy as np
 import pandas as pd
 
-CLUSTER_NAME = {0: "mid-speed", 1: "fast", 2: "stop&go", 3: "turning"}
+CLUSTER_NAME = {0: "fast", 1: "stop&go", 2: "mid-speed", 3: "turning"}
 TURN_HI = 0.5      # rad; |net_turn| above this = "turning-shaped"
 
 
