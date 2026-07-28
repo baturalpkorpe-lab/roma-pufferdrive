@@ -148,7 +148,8 @@ def collect_simulated_stats(env, checkpoint_path, role_dim, obs_dim, num_episode
         _saved = ckpt.get("args", {}) or {}
         policy = RomaPolicy(obs_dim=obs_dim, role_dim=role_dim,
                             role_partner_dim=_saved.get("role_partner_dim"),
-                            role_road_dim=_saved.get("role_road_dim"))
+                            role_road_dim=_saved.get("role_road_dim"),
+                            role_film=_saved.get("role_film", False))
     else:
         # Legacy flat MLP
         import torch.nn as nn

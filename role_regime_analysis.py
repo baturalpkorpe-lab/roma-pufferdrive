@@ -142,6 +142,7 @@ def load_policy(ckpt_path, obs_dim, device):
         # from pre-rebalance checkpoints -> None -> original layout.
         role_partner_dim=saved.get("role_partner_dim"),
         role_road_dim=saved.get("role_road_dim"),
+        role_film=saved.get("role_film", False),
     ).to(device)
     key = "policy_state" if "policy_state" in ckpt else "policy"
     policy.load_state_dict(ckpt[key])

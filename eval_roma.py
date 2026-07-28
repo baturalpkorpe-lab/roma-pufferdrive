@@ -69,7 +69,8 @@ def load_policy(checkpoint_path, role_dim, obs_dim, device):
     saved  = ckpt.get("args", {}) or {}
     policy = RomaPolicy(obs_dim=obs_dim, role_dim=role_dim,
                         role_partner_dim=saved.get("role_partner_dim"),
-                        role_road_dim=saved.get("role_road_dim"))
+                        role_road_dim=saved.get("role_road_dim"),
+                        role_film=saved.get("role_film", False))
     policy.load_state_dict(ckpt[key])
     policy.to(device)
     policy.eval()

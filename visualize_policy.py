@@ -44,8 +44,16 @@ def run(args):
     device = torch.device("cpu")
 
     from roma.policy import RomaPolicy
-    policy = RomaPolicy(obs_dim=args.obs_dim, role_dim=args.role_dim)
-    ckpt = torch.load(args.checkpoint, map_location=device)
+    # Rebuild at the layout the checkpoint was TRAINED with. This built at the
+    # DEFAULT layout, so it already failed on any rebalanced (role_road_dim /
+    # role_partner_dim) checkpoint before FiLM existed -- every other loader
+    # reads these from ckpt["args"] and this one was simply missed.
+    ckpt   = torch.load(args.checkpoint, map_location=device, weights_only=False)
+    _saved = ckpt.get("args", {}) or {}
+    policy = RomaPolicy(obs_dim=args.obs_dim, role_dim=args.role_dim,
+                        role_partner_dim=_saved.get("role_partner_dim"),
+                        role_road_dim=_saved.get("role_road_dim"),
+                        role_film=_saved.get("role_film", False))
     key  = "policy_state" if "policy_state" in ckpt else "policy"
     policy.load_state_dict(ckpt[key])
     policy.eval()

@@ -98,6 +98,8 @@ def load_policy(ckpt_path, obs_dim, device, role_dim_override=0):
         # Absent from pre-rebalance checkpoints -> None -> original layout.
         role_partner_dim = saved.get("role_partner_dim"),
         role_road_dim    = saved.get("role_road_dim"),
+        # FiLM adds modules; absent from pre-FiLM checkpoints -> False.
+        role_film        = saved.get("role_film", False),
     ).to(device)
     key = "policy_state" if "policy_state" in ckpt else "policy"
     policy.load_state_dict(ckpt[key])

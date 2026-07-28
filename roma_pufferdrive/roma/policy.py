@@ -96,7 +96,7 @@ class RomaPolicy(nn.Module):
 
     def __init__(self, obs_dim=1121, action_dim=91, role_dim=8, role_hidden=64,
                  policy_hidden=128, var_floor=1e-4, obs_window_len=8, ego_dim=7,
-                 role_partner_dim=None, role_road_dim=None):
+                 role_partner_dim=None, role_road_dim=None, role_film=False):
         super().__init__()
         self.obs_dim        = obs_dim
         self.action_dim     = action_dim
@@ -156,6 +156,28 @@ class RomaPolicy(nn.Module):
             self.role_encoder = RoleEncoder(self.role_in_dim, role_dim, role_hidden, var_floor)
         else:
             self.role_encoder = None
+        # --- FiLM: let the role MODULATE the env features, not just offset ---
+        # Concatenation makes the role an additive bias in the GRU's first
+        # layer: h = W_env@e + W_z@z. The role can shift the pre-activation and
+        # nothing more, and it is 4 inputs against 128 -- structurally
+        # outnumbered 32:1 even at equal per-dimension weight. FiLM instead has
+        # the role emit a per-feature scale and shift,
+        #     e' = e * (1 + gamma(z)) + beta(z),
+        # so it controls HOW every env feature is used. The concatenation is
+        # KEPT as well, so the GRU input width is unchanged and the only new
+        # parameters are this one Linear.
+        #
+        # Zero-init is load-bearing: gamma = beta = 0 at step 0 makes e' == e
+        # exactly, so a FiLM run starts from the identical function a non-FiLM
+        # run starts from and cannot destabilise early training.
+        #
+        # role_film=False builds NO module, so the state dict is unchanged and
+        # every existing checkpoint still loads.
+        self.role_film = bool(role_film) and self.use_role
+        if self.role_film:
+            self.film = nn.Linear(role_dim, 2 * env_embed_dim)
+            nn.init.zeros_(self.film.weight)
+            nn.init.zeros_(self.film.bias)
         self.policy_gru   = nn.GRUCell(env_embed_dim + role_dim, policy_hidden)
         self.actor        = nn.Linear(policy_hidden, action_dim)
         self.critic       = nn.Linear(policy_hidden, 1)
@@ -202,7 +224,15 @@ class RomaPolicy(nn.Module):
             role_z, role_mean, role_log_var, new_role_h = self.role_encoder(role_in, role_h)
             if forced_role is not None:
                 role_z = forced_role
-            policy_input = torch.cat([env_emb, role_z], dim=-1)
+            # FiLM runs on the role the policy ACTUALLY acts on, so a forced
+            # role is modulated too -- otherwise the sweep would bypass the
+            # very mechanism it is meant to exercise.
+            if self.role_film:
+                gamma, beta = self.film(role_z).chunk(2, dim=-1)
+                env_for_policy = env_emb * (1.0 + gamma) + beta
+            else:
+                env_for_policy = env_emb
+            policy_input = torch.cat([env_for_policy, role_z], dim=-1)
         else:
             # no-role ablation: policy sees only the env embedding
             empty        = env_emb.new_zeros(env_emb.shape[0], 0)
@@ -213,7 +243,11 @@ class RomaPolicy(nn.Module):
         logits   = self.actor(new_policy_h)
         value    = self.critic(new_policy_h)
         # Slide the window with the current env embedding (detached — the
-        # window is an MI-loss target, gradients should not flow through it)
+        # window is an MI-loss target, gradients should not flow through it).
+        # NOTE: env_emb here is the UNMODULATED embedding on purpose. Feeding
+        # the FiLM-modulated one would make the MI target a function of the
+        # role, so forcing a role would move its own target and the loss could
+        # be minimised by warping the target instead of by encoding behaviour.
         new_emb_win = torch.cat([emb_win[:, 1:, :], env_emb.detach().unsqueeze(1)], dim=1)
         new_state = (new_role_h, new_policy_h, new_emb_win)
         role_info = {

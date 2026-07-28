@@ -192,6 +192,12 @@ def parse_args():
                    help="Partner width in the role encoder's input. Default "
                         "None = 32 (the partner encoder's own out_dim, i.e. "
                         "unchanged). Raise it to make the role more relational.")
+    p.add_argument("--role_film", action="store_true",
+                   help="FiLM-condition the policy on the role: the role emits "
+                        "a per-feature scale and shift for the env embedding "
+                        "instead of only being concatenated to it. Zero-init, "
+                        "so training starts from the identical function. Off = "
+                        "the original concat-only policy, byte-identical.")
     p.add_argument("--role_road_dim",    type=int, default=None,
                    help="Road width in the role encoder's input. Default None "
                         "= 64 (unchanged), which is half the role's input "
@@ -857,6 +863,7 @@ def train(args):
         obs_window_len   = 8,
         role_partner_dim = args.role_partner_dim,
         role_road_dim    = args.role_road_dim,
+        role_film        = args.role_film,
     ).to(device)
 
     # 'ego_partner' keeps only the [ego | partner] prefix of the env embedding

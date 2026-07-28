@@ -36,7 +36,10 @@ SCRATCH_ROOT=${SCRATCH_ROOT:-/scratch/$USER}
 ROAD=${ROLE_ROAD_DIM:-16}
 PARTNER=${ROLE_PARTNER_DIM:-64}
 case "${MI_TARGET:-ego_partner}" in ego_partner) MI_TAG=ep ;; *) MI_TAG=${MI_TARGET} ;; esac
-ARCH_TAG=_r${ROAD}p${PARTNER}_${MI_TAG}
+# Must match train_mi_future.sbatch: FiLM changes the policy's state dict, so
+# it belongs in the path that decides which checkpoints a run resumes from.
+case "${ROLE_FILM:-0}" in 1|true|yes) FILM_TAG=_film ;; *) FILM_TAG= ;; esac
+ARCH_TAG=_r${ROAD}p${PARTNER}_${MI_TAG}${FILM_TAG}
 DIV_WEIGHT=${DIV_WEIGHT:-0.1}
 case "$DIV_WEIGHT" in 0|0.|0.0|0.00) DIV_TAG=_nodiv ;; *) DIV_TAG= ;; esac
 RUN=dim${D}_H${H}${ARCH_TAG}${DIV_TAG}
@@ -44,7 +47,7 @@ SAVE_DIR=${SAVE_DIR:-$SCRATCH_ROOT/checkpoints/roma_mifutagent_${RUN}}
 
 E="ALL,ROLE_DIM=$D,MI_HORIZON=$H,DIV_WEIGHT=$DIV_WEIGHT,SAVE_DIR=$SAVE_DIR"
 for v in ROLE_ROAD_DIM ROLE_PARTNER_DIM MI_TARGET MI_WEIGHT SEED SCRATCH_ROOT \
-         PUFFER_DIR TOTAL_STEPS WANDB_PROJECT WANDB_ENTITY WANDB_NAME; do
+         ROLE_FILM PUFFER_DIR TOTAL_STEPS WANDB_PROJECT WANDB_ENTITY WANDB_NAME; do
     eval "val=\${$v:-}"
     [ -n "$val" ] && E="$E,$v=$val"
 done
@@ -58,6 +61,6 @@ IC=$(sbatch --parsable --dependency=afterok:$J \
      "$HERE/role_scene_icc.sbatch")
 echo "scene ICC (map-independence metric)    : $IC  (afterok:$J)"
 echo
-echo "arch        -> road=$ROAD partner=$PARTNER mi_target=${MI_TARGET:-ego_partner}"
+echo "arch        -> road=$ROAD partner=$PARTNER mi_target=${MI_TARGET:-ego_partner} film=${ROLE_FILM:-0}"
 echo "div_weight  -> $DIV_WEIGHT"
 echo "checkpoints -> $SAVE_DIR"

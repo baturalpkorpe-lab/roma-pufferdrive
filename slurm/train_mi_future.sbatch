@@ -64,7 +64,14 @@ ROLE_ROAD_DIM=${ROLE_ROAD_DIM:-16}
 ROLE_PARTNER_DIM=${ROLE_PARTNER_DIM:-64}
 MI_TARGET=${MI_TARGET:-ego_partner}
 case "$MI_TARGET" in ego_partner) MI_TAG=ep ;; *) MI_TAG=$MI_TARGET ;; esac
-ARCH_TAG=_r${ROLE_ROAD_DIM}p${ROLE_PARTNER_DIM}_${MI_TAG}
+# FiLM adds modules to the policy, so a FiLM and a non-FiLM run MUST NOT share
+# a SAVE_DIR -- resuming across them would try to load a state dict with
+# missing/unexpected keys. It goes in the arch tag for the same reason the role
+# view does.
+ROLE_FILM=${ROLE_FILM:-0}
+case "$ROLE_FILM" in 1|true|yes) FILM_ARG="--role_film"; FILM_TAG=_film ;;
+                     *)          FILM_ARG=""          ; FILM_TAG=      ;; esac
+ARCH_TAG=_r${ROLE_ROAD_DIM}p${ROLE_PARTNER_DIM}_${MI_TAG}${FILM_TAG}
 
 # ---- The ablation ---------------------------------------------------------
 DIV_WEIGHT=${DIV_WEIGHT:-0.1}                # 0 = diversity loss OFF
@@ -120,6 +127,12 @@ grep -q -- "--wandb_name" "$CODE_DIR/roma_pufferdrive/train_roma.py" || {
 # --mi_target only exists on the mi-future-agentcentric branch: a plain
 # mi-future clone would run FUTURE-only and silently skip the agent-centric
 # half of this experiment.
+if [ -n "$FILM_ARG" ]; then
+    grep -q -- "--role_film" "$CODE_DIR/roma_pufferdrive/train_roma.py" || {
+        echo "ERROR: ROLE_FILM=1 but this train_roma.py has no --role_film."
+        echo "       FiLM lives on mi-future-agentcentric-film -- wrong branch?"
+        exit 1; }
+fi
 grep -q -- "--mi_target" "$CODE_DIR/roma_pufferdrive/train_roma.py" || {
     echo "ERROR: this train_roma.py has no --mi_target -- wrong branch?"
     echo "       clone mi-future-agentcentric and submit from that checkout."; exit 1; }
@@ -147,6 +160,7 @@ fi
 
 echo "[mifut] role_dim=$ROLE_DIM  H=$MI_HORIZON  maps=$NUM_MAPS  total_steps=$TOTAL_STEPS"
 echo "[mifut] role view: road=$ROLE_ROAD_DIM partner=$ROLE_PARTNER_DIM  mi_target=$MI_TARGET"
+echo "[mifut] FiLM conditioning: ${FILM_ARG:-off}"
 echo "[mifut] div_weight=$DIV_WEIGHT  mi_weight=$MI_WEIGHT  wandb_name=$WANDB_NAME"
 echo "[mifut] code=$CODE_DIR  save=$SAVE_DIR"
 echo "[mifut] branch=$(git -C "$CODE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ?) commit=$(git -C "$CODE_DIR" rev-parse --short HEAD 2>/dev/null || echo ?)"
