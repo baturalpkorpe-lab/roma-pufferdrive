@@ -39,7 +39,8 @@ case "${MI_TARGET:-ego_partner}" in ego_partner) MI_TAG=ep ;; *) MI_TAG=${MI_TAR
 # Must match train_mi_future.sbatch: FiLM changes the policy's state dict, so
 # it belongs in the path that decides which checkpoints a run resumes from.
 case "${ROLE_FILM:-0}" in 1|true|yes) FILM_TAG=_film ;; *) FILM_TAG= ;; esac
-ARCH_TAG=_r${ROAD}p${PARTNER}_${MI_TAG}${FILM_TAG}
+case "${COMPLIANCE_WEIGHT:-0}" in 0|0.|0.0|0.00) COMPLY_TAG= ;; *) COMPLY_TAG=_comply ;; esac
+ARCH_TAG=_r${ROAD}p${PARTNER}_${MI_TAG}${FILM_TAG}${COMPLY_TAG}
 DIV_WEIGHT=${DIV_WEIGHT:-0.1}
 case "$DIV_WEIGHT" in 0|0.|0.0|0.00) DIV_TAG=_nodiv ;; *) DIV_TAG= ;; esac
 RUN=dim${D}_H${H}${ARCH_TAG}${DIV_TAG}
@@ -47,7 +48,7 @@ SAVE_DIR=${SAVE_DIR:-$SCRATCH_ROOT/checkpoints/roma_mifutagent_${RUN}}
 
 E="ALL,ROLE_DIM=$D,MI_HORIZON=$H,DIV_WEIGHT=$DIV_WEIGHT,SAVE_DIR=$SAVE_DIR"
 for v in ROLE_ROAD_DIM ROLE_PARTNER_DIM MI_TARGET MI_WEIGHT SEED SCRATCH_ROOT \
-         ROLE_FILM PUFFER_DIR TOTAL_STEPS WANDB_PROJECT WANDB_ENTITY WANDB_NAME; do
+         ROLE_FILM COMPLIANCE_WEIGHT PERTURB_FRAC PERTURB_ALPHA PUFFER_DIR TOTAL_STEPS WANDB_PROJECT WANDB_ENTITY WANDB_NAME; do
     eval "val=\${$v:-}"
     [ -n "$val" ] && E="$E,$v=$val"
 done

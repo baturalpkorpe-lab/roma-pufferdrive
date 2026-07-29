@@ -174,6 +174,26 @@ class RomaAuxLoss(nn.Module):
         per = ((behaviour_pred - behaviour_target) ** 2).mean(dim=-1)
         return per[mi_mask].mean()
 
+    def compliance_error(self, role_z, emb_window):
+        """PER-SAMPLE squared error between what the role PREDICTS the agent
+        will do and what it ACTUALLY did: || MIDecoder(z) - BE(future) ||^2.
+
+        Identical quantity to mi_loss, but returned unreduced so it can be
+        turned into a REWARD. That distinction is the whole point: as a loss
+        the target is detached and the env is non-differentiable, so the
+        gradient reaches only the encoder and decoder -- it teaches z to
+        DESCRIBE behaviour. Routed through PPO as a reward it reaches the
+        POLICY, which is the only way to teach it to OBEY the role.
+
+        Returns (B,), no grad -- a reward is a constant w.r.t. the update.
+        """
+        with torch.no_grad():
+            if self.mi_emb_dim != emb_window.size(-1):
+                emb_window = emb_window[..., :self.mi_emb_dim]
+            target = self.behaviour_extractor(emb_window)
+            pred   = self.mi_decoder(role_z)
+            return ((pred - target) ** 2).mean(dim=-1)
+
     def diversity_loss(self, role_mean):
         """
         Diversity loss — pushes agents to have different role vectors.

@@ -192,6 +192,30 @@ def parse_args():
                    help="Partner width in the role encoder's input. Default "
                         "None = 32 (the partner encoder's own out_dim, i.e. "
                         "unchanged). Raise it to make the role more relational.")
+    p.add_argument("--compliance_weight", type=float, default=0.0,
+                   help="Reward weight on || MIDecoder(z) - BehaviourExtractor"
+                        "(realised future) ||^2. The MI LOSS teaches z to "
+                        "describe behaviour but its gradient never reaches the "
+                        "policy (target detached, env non-differentiable); the "
+                        "same quantity as a REWARD goes through PPO and teaches "
+                        "the policy to OBEY the role. 0 = off.")
+    p.add_argument("--perturb_frac", type=float, default=0.0,
+                   help="Fraction of agents whose role is randomly shifted each "
+                        "rollout. Compliance alone only ever trains on-manifold "
+                        "(z always matches the obs), so the off-manifold "
+                        "response a sweep probes stays unconstrained. MUST be "
+                        "paired with --compliance_weight: perturbation WITHOUT "
+                        "a compliance signal teaches the policy to IGNORE the "
+                        "role, since ignoring noise is what maximises reward.")
+    p.add_argument("--perturb_alpha", type=float, default=2.0,
+                   help="Shift magnitude in units of the role's own std, "
+                        "uniform in [-a, a]. Match the sweep range you will "
+                        "later evaluate (default +-2 sigma).")
+    p.add_argument("--compliance_perturbed_only", type=int, default=1,
+                   help="1 = the compliance reward applies ONLY to perturbed "
+                        "agents, so natural driving stays governed by the task "
+                        "reward and the policy cannot farm compliance by making "
+                        "its behaviour trivially predictable.")
     p.add_argument("--role_film", action="store_true",
                    help="FiLM-condition the policy on the role: the role emits "
                         "a per-feature scale and shift for the env embedding "
@@ -952,6 +976,17 @@ def train(args):
     # to avoid restarting GRU from zeros on shuffled minibatches.
     b_role_h   = torch.zeros(N, args.role_hidden,   device=device)
     b_policy_h = torch.zeros(N, args.policy_hidden, device=device)
+    # Role perturbation actually applied, and the role actually acted on.
+    # b_pert must be replayed verbatim in the PPO update or the importance
+    # ratio compares a perturbed rollout against an unperturbed re-evaluation.
+    use_perturb = args.perturb_frac > 0.0 and policy.role_dim > 0
+    use_comply  = args.compliance_weight > 0.0 and policy.role_dim > 0
+    b_pert  = torch.zeros(N, policy.role_dim, device=device)
+    b_rolez = torch.zeros(N, policy.role_dim, device=device)
+    if use_perturb and not use_comply:
+        print("[ROMA] WARNING: --perturb_frac without --compliance_weight "
+              "trains the policy to IGNORE the role (ignoring noise maximises "
+              "reward). Set --compliance_weight or drop --perturb_frac.")
 
     state = policy.initial_state(B, device)
     obs   = torch.as_tensor(obs_probe, dtype=torch.float32).to(device)
@@ -975,6 +1010,22 @@ def train(args):
         # ---- Rollout ----
         policy.eval()
         ptr = 0
+        # One shift per AGENT per rollout (not per step): the role is a
+        # persistent property, and a shift that changed every step would be
+        # noise rather than a different role to comply with.
+        pert = torch.zeros(B, policy.role_dim, device=device)
+        if use_perturb:
+            sel = torch.rand(B, device=device) < args.perturb_frac
+            u = torch.randn(B, policy.role_dim, device=device)
+            u = u / (u.norm(dim=-1, keepdim=True) + 1e-12)
+            a = (torch.rand(B, 1, device=device) * 2 - 1) * args.perturb_alpha
+            # Scale the shift by the role's OWN spread, measured from the
+            # previous rollout. b_rolez is all zeros before the first one, so
+            # fall back to 1.0 rather than shifting by nothing forever.
+            _rs = float(b_rolez.std())
+            role_sigma = _rs if _rs > 1e-6 else 1.0
+            pert = torch.where(sel.unsqueeze(-1), u * a * role_sigma,
+                               torch.zeros_like(u))
         with torch.no_grad():
             for _ in range(args.rollout_steps):
                 # Store the obs the policy acts on BEFORE stepping the env —
@@ -983,8 +1034,11 @@ def train(args):
                 b_obs[ptr:ptr+B]      = obs
                 b_role_h[ptr:ptr+B]   = state[0]
                 b_policy_h[ptr:ptr+B] = state[1]
+                b_pert[ptr:ptr+B] = pert
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
-                    logits, value, state, role_info = policy(obs, state)
+                    logits, value, state, role_info = policy(
+                        obs, state, role_shift=(pert if use_perturb else None))
+                b_rolez[ptr:ptr+B] = role_info["role_z"].float()
                 dist    = Categorical(logits=logits.float())
                 action  = dist.sample()
                 logprob = dist.log_prob(action)
@@ -1049,28 +1103,6 @@ def train(args):
         role_std_all  = role_info["role_mean"].float().std(dim=0).mean().item()
         role_norm_all = role_info["role_mean"].float().norm(dim=-1).mean().item()
 
-        # ---- GAE ----
-        with torch.no_grad():
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
-                _, last_val, _, _ = policy(obs, state)
-        T_steps   = args.rollout_steps
-        last_vals = last_val.squeeze(-1).float()             # (B,) — one per agent
-        adv_2d    = compute_gae(
-            b_rew[:ptr].reshape(T_steps, B),
-            b_val[:ptr].reshape(T_steps, B),
-            b_don[:ptr].reshape(T_steps, B),
-            last_vals, args.gamma, args.gae_lambda,
-        )                                                    # (T, B)
-        adv     = adv_2d.reshape(-1)                         # back to (N,)
-        returns = adv + b_val[:ptr]
-        adv     = (adv - adv.mean()) / (adv.std() + 1e-8)
-
-        # ---- LR annealing ----
-        frac = 1.0 - global_step / args.total_steps
-        lr_now = args.lr * frac
-        for pg in optimizer.param_groups:
-            pg["lr"] = lr_now
-
         # ---- Future-MI target index (once per rollout) ----
         # Buffer layout is flat index i = t*B + agent. The emb window STORED
         # at step t+H holds embeddings t+H-7..t+H for that agent — with H=8
@@ -1094,6 +1126,52 @@ def train(args):
         fut_idx = torch.clamp(fut_t, max=T_steps - 1) * B + a_of
         mi_valid_frac = float(fut_ok.float().mean())
 
+        # ---- Compliance reward (must land BEFORE GAE) ----------------
+        # || MIDecoder(z_used) - BehaviourExtractor(realised future) ||^2, as a
+        # NEGATIVE reward. Identical quantity to the MI loss; the difference is
+        # the route. As a loss the target is detached and the env is
+        # non-differentiable, so the gradient reaches only encoder+decoder and
+        # teaches z to DESCRIBE. Through PPO it reaches the POLICY and teaches
+        # it to OBEY -- which is the missing link that lets the encoder assign
+        # "fast" to an agent while forcing that same role SLOWS it.
+        comply_mean = 0.0
+        if use_comply:
+            with torch.no_grad():
+                cerr = aux_loss_fn.compliance_error(b_rolez[:ptr],
+                                                    b_embwin[fut_idx])
+                cerr = cerr * fut_ok.float()          # no valid future -> no signal
+                if args.compliance_perturbed_only and use_perturb:
+                    # Only the shifted agents are graded, so natural driving
+                    # stays governed by the task reward and the policy cannot
+                    # farm compliance by making its behaviour trivially
+                    # predictable.
+                    cerr = cerr * (b_pert[:ptr].abs().sum(-1) > 0).float()
+                b_rew[:ptr] -= args.compliance_weight * cerr
+                comply_mean = float(cerr.mean())
+
+        # ---- GAE ----
+        with torch.no_grad():
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
+                _, last_val, _, _ = policy(obs, state)
+        T_steps   = args.rollout_steps
+        last_vals = last_val.squeeze(-1).float()             # (B,) — one per agent
+        adv_2d    = compute_gae(
+            b_rew[:ptr].reshape(T_steps, B),
+            b_val[:ptr].reshape(T_steps, B),
+            b_don[:ptr].reshape(T_steps, B),
+            last_vals, args.gamma, args.gae_lambda,
+        )                                                    # (T, B)
+        adv     = adv_2d.reshape(-1)                         # back to (N,)
+        returns = adv + b_val[:ptr]
+        adv     = (adv - adv.mean()) / (adv.std() + 1e-8)
+
+        # ---- LR annealing ----
+        frac = 1.0 - global_step / args.total_steps
+        lr_now = args.lr * frac
+        for pg in optimizer.param_groups:
+            pg["lr"] = lr_now
+
+
         # ---- PPO update ----
         policy.train()
         aux_loss_fn.train()
@@ -1113,7 +1191,9 @@ def train(args):
                             torch.zeros(len(mb), policy.obs_window_len,
                                         policy.env_embed_dim, device=device))
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
-                    logits, value, _, role_info = policy(b_obs[mb], mb_state)
+                    logits, value, _, role_info = policy(
+                        b_obs[mb], mb_state,
+                        role_shift=(b_pert[mb] if use_perturb else None))
 
                     dist        = Categorical(logits=logits.float())
                     new_logprob = dist.log_prob(b_act[mb])
@@ -1192,6 +1272,10 @@ def train(args):
                 "train/value_loss":       vl.item(),
                 "train/mi_loss":          aux["mi_loss"].item(),
                 "train/mi_valid_frac":    mi_valid_frac,
+                "train/compliance_error": comply_mean,
+                "train/perturbed_frac":   (float((b_pert[:ptr].abs().sum(-1) > 0)
+                                                 .float().mean())
+                                           if use_perturb else 0.0),
                 "train/div_loss":         aux["div_loss"].item(),
                 "train/kl_loss":          0.0,  # kl disabled in baseline
                 "train/score":            score,

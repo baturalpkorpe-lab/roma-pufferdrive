@@ -215,7 +215,7 @@ class RomaPolicy(nn.Module):
             parts.append(r if self.role_road_proj is None else self.role_road_proj(r))
         return torch.cat(parts, dim=-1)
 
-    def forward(self, obs, state, forced_role=None):
+    def forward(self, obs, state, forced_role=None, role_shift=None):
         role_h, policy_h, emb_win = state
         e, p, r  = self._env_parts(obs)
         env_emb  = torch.cat([e, p, r], dim=-1)
@@ -224,6 +224,14 @@ class RomaPolicy(nn.Module):
             role_z, role_mean, role_log_var, new_role_h = self.role_encoder(role_in, role_h)
             if forced_role is not None:
                 role_z = forced_role
+            if role_shift is not None:
+                # ADD to the agent's own live role, keeping the encoder in the
+                # graph -- unlike forced_role, which replaces it and cuts the
+                # gradient path. This is what training-time perturbation needs:
+                # the PPO update must reapply the SAME shift the rollout acted
+                # on, or the importance ratio compares a perturbed rollout
+                # against an unperturbed re-evaluation and silently breaks.
+                role_z = role_z + role_shift
             # FiLM runs on the role the policy ACTUALLY acts on, so a forced
             # role is modulated too -- otherwise the sweep would bypass the
             # very mechanism it is meant to exercise.

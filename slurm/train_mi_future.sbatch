@@ -68,10 +68,17 @@ case "$MI_TARGET" in ego_partner) MI_TAG=ep ;; *) MI_TAG=$MI_TARGET ;; esac
 # a SAVE_DIR -- resuming across them would try to load a state dict with
 # missing/unexpected keys. It goes in the arch tag for the same reason the role
 # view does.
+# Compliance = reward the policy for behaving the way its own role predicts.
+# Perturbation without compliance teaches the policy to IGNORE the role, so the
+# two are tagged together and guarded below.
+COMPLIANCE_WEIGHT=${COMPLIANCE_WEIGHT:-0}
+PERTURB_FRAC=${PERTURB_FRAC:-0}
+PERTURB_ALPHA=${PERTURB_ALPHA:-2.0}
+case "$COMPLIANCE_WEIGHT" in 0|0.|0.0|0.00) COMPLY_TAG= ;; *) COMPLY_TAG=_comply ;; esac
 ROLE_FILM=${ROLE_FILM:-0}
 case "$ROLE_FILM" in 1|true|yes) FILM_ARG="--role_film"; FILM_TAG=_film ;;
                      *)          FILM_ARG=""          ; FILM_TAG=      ;; esac
-ARCH_TAG=_r${ROLE_ROAD_DIM}p${ROLE_PARTNER_DIM}_${MI_TAG}${FILM_TAG}
+ARCH_TAG=_r${ROLE_ROAD_DIM}p${ROLE_PARTNER_DIM}_${MI_TAG}${FILM_TAG}${COMPLY_TAG}
 
 # ---- The ablation ---------------------------------------------------------
 DIV_WEIGHT=${DIV_WEIGHT:-0.1}                # 0 = diversity loss OFF
@@ -127,6 +134,21 @@ grep -q -- "--wandb_name" "$CODE_DIR/roma_pufferdrive/train_roma.py" || {
 # --mi_target only exists on the mi-future-agentcentric branch: a plain
 # mi-future clone would run FUTURE-only and silently skip the agent-centric
 # half of this experiment.
+# Guard the combination that silently trains the opposite of what is wanted.
+case "$PERTURB_FRAC" in 0|0.|0.0|0.00) ;; *)
+    case "$COMPLIANCE_WEIGHT" in 0|0.|0.0|0.00)
+        echo "ERROR: PERTURB_FRAC=$PERTURB_FRAC with COMPLIANCE_WEIGHT=0."
+        echo "       Perturbing the role with nothing rewarding compliance"
+        echo "       teaches the policy to IGNORE the role -- the opposite of"
+        echo "       the intent. Set COMPLIANCE_WEIGHT>0 or PERTURB_FRAC=0."
+        exit 1 ;;
+    esac ;;
+esac
+if [ -n "$COMPLY_TAG" ]; then
+    grep -q -- "--compliance_weight" "$CODE_DIR/roma_pufferdrive/train_roma.py" || {
+        echo "ERROR: COMPLIANCE_WEIGHT set but this train_roma.py has no"
+        echo "       --compliance_weight -- wrong branch?"; exit 1; }
+fi
 if [ -n "$FILM_ARG" ]; then
     grep -q -- "--role_film" "$CODE_DIR/roma_pufferdrive/train_roma.py" || {
         echo "ERROR: ROLE_FILM=1 but this train_roma.py has no --role_film."
@@ -161,6 +183,7 @@ fi
 echo "[mifut] role_dim=$ROLE_DIM  H=$MI_HORIZON  maps=$NUM_MAPS  total_steps=$TOTAL_STEPS"
 echo "[mifut] role view: road=$ROLE_ROAD_DIM partner=$ROLE_PARTNER_DIM  mi_target=$MI_TARGET"
 echo "[mifut] FiLM conditioning: ${FILM_ARG:-off}"
+echo "[mifut] compliance=$COMPLIANCE_WEIGHT perturb_frac=$PERTURB_FRAC alpha=$PERTURB_ALPHA"
 echo "[mifut] div_weight=$DIV_WEIGHT  mi_weight=$MI_WEIGHT  wandb_name=$WANDB_NAME"
 echo "[mifut] code=$CODE_DIR  save=$SAVE_DIR"
 echo "[mifut] branch=$(git -C "$CODE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ?) commit=$(git -C "$CODE_DIR" rev-parse --short HEAD 2>/dev/null || echo ?)"
