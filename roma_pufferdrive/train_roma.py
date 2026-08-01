@@ -1112,6 +1112,11 @@ def train(args):
         #   invalid if t+H runs past the rollout tail, or if the episode
         #   reset anywhere in [t, t+H-1] (the "future" would belong to a new
         #   episode; b_don[u] marks a reset after step u).
+        # T_steps is just args.rollout_steps -- a constant, not derived from
+        # anything below. It used to be assigned inside the GAE block further
+        # down; when the future-MI + compliance blocks moved ABOVE GAE they
+        # started reading it before that assignment ran (UnboundLocalError).
+        T_steps = args.rollout_steps
         H       = args.mi_horizon
         i_all   = torch.arange(ptr, device=device)
         t_of    = i_all // B
@@ -1153,7 +1158,6 @@ def train(args):
         with torch.no_grad():
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
                 _, last_val, _, _ = policy(obs, state)
-        T_steps   = args.rollout_steps
         last_vals = last_val.squeeze(-1).float()             # (B,) — one per agent
         adv_2d    = compute_gae(
             b_rew[:ptr].reshape(T_steps, B),
