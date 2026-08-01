@@ -1142,8 +1142,18 @@ def train(args):
         comply_mean = 0.0
         if use_comply:
             with torch.no_grad():
-                cerr = aux_loss_fn.compliance_error(b_rolez[:ptr],
-                                                    b_embwin[fut_idx])
+                # CHUNKED on purpose. b_embwin[fut_idx] over the whole rollout
+                # materialises a full copy of the window buffer (~3 GB at
+                # 256x3072) and BehaviourExtractor then flattens it to another
+                # ~3 GB -- ~6 GB of peak allocation on top of the ~7 GB the
+                # rollout buffers already hold. The MI loss avoids this by
+                # indexing per minibatch; this does the same.
+                cerr = torch.empty(ptr, device=device)
+                cstep = max(1, ptr // args.num_minibatch)
+                for s in range(0, ptr, cstep):
+                    sl = slice(s, min(s + cstep, ptr))
+                    cerr[sl] = aux_loss_fn.compliance_error(
+                        b_rolez[sl], b_embwin[fut_idx[sl]])
                 cerr = cerr * fut_ok.float()          # no valid future -> no signal
                 if args.compliance_perturbed_only and use_perturb:
                     # Only the shifted agents are graded, so natural driving
