@@ -72,7 +72,17 @@ def parse_args():
                         "wide without merging neighbours.")
     p.add_argument("--single_link_eps", type=float, default=20.0,
                    help="what intersection_features.py uses, for comparison")
-    p.add_argument("--zone_radius", type=float, default=25.0)
+    p.add_argument("--zone_radius", type=float, default=25.0,
+                   help="fixed zone radius, used only with --fixed_radius 1")
+    p.add_argument("--fixed_radius", type=int, default=0,
+                   help="1 = legacy fixed --zone_radius. 0 (default) = the "
+                        "paper's rule: radius is the max centre-to-marker "
+                        "distance plus --zone_buffer, per zone.")
+    p.add_argument("--zone_buffer", type=float, default=4.0,
+                   help="Rahmani et al. add 4 m to the max centre-to-sign "
+                        "distance so the zone overlaps the approach lanes")
+    p.add_argument("--zone_radius_min", type=float, default=15.0,
+                   help="floor, so a 1-sign zone still has an area")
     p.add_argument("--min_stop_allway", type=int, default=3,
                    help="Rahmani criterion (a): >=3 stop signs, which admits "
                         "T-shaped layouts")
@@ -268,29 +278,49 @@ def scene_rows(m, args, dist=None, tracks=None):
     used = []
     for seed_kind, groups, M in seeds:
         for g in groups:
-            centre = M[g].mean(0)
+            mem = M[g]
+            centre = mem.mean(0)
+            # Zone radius per the paper: the max centre-to-marker distance plus
+            # a buffer, NOT a fixed constant. A fixed 25 m was the binding
+            # constraint at wide clique distances -- a junction whose signs span
+            # ~50 m has its outer signs sitting AT 25 m from the centroid, so
+            # they fell outside the counting radius and n_stop fell as
+            # clique_dist grew (n=4 went 95 -> 83 -> 79 over clique 45/60/75,
+            # the opposite of the expected direction).
+            if args.fixed_radius:
+                R = args.zone_radius
+            else:
+                spread_r = (float(np.hypot(*(mem - centre).T).max())
+                            if len(mem) > 1 else 0.0)
+                R = max(spread_r + args.zone_buffer, args.zone_radius_min)
+
             # a crosswalk zone that a stop-sign zone already covers is the
             # same junction seen twice
             if seed_kind == "cross" and any(
-                    np.hypot(*(centre - c)) <= args.zone_radius for c in used):
+                    np.hypot(*(centre - c)) <= R for c in used):
                 continue
             used.append(centre)
 
             n_axes = _n_axes(centre, lanes)
-            n_stop = int((np.hypot(stops[:, 0] - centre[0],
-                                   stops[:, 1] - centre[1])
-                          <= args.zone_radius).sum()) if len(stops) else 0
+            # For a stop-seeded zone the clique IS the set of signs assigned to
+            # that junction, so its size is exact. Counting by radius instead
+            # was wrong in both directions: at tight thresholds several
+            # fragments of one junction each saw the same 3-4 signs and every
+            # fragment reported n_stop>=3 (the 218-vs-153 double count), and at
+            # wide thresholds it truncated as described above.
+            if seed_kind == "stop":
+                sel = mem
+            else:
+                sel = (stops[np.hypot(stops[:, 0] - centre[0],
+                                      stops[:, 1] - centre[1]) <= R]
+                       if len(stops) else np.empty((0, 2)))
+            n_stop = len(sel)
             n_cross = int((np.hypot(crosses[:, 0] - centre[0],
                                     crosses[:, 1] - centre[1])
-                           <= args.zone_radius).sum()) if len(crosses) else 0
-            # stop_spread is the diagnostic for --clique_dist being too tight:
-            # if a 4-way stop's signs sit further apart than the threshold, the
-            # clique splits one junction into two "partial_stop" zones, and the
-            # all-way class empties out for a purely parametric reason.
+                           <= R).sum()) if len(crosses) else 0
+
             stop_spread = 0.0
             if n_stop:
-                sel = stops[np.hypot(stops[:, 0] - centre[0],
-                                     stops[:, 1] - centre[1]) <= args.zone_radius]
                 n_stop_dirs = _sectors(np.arctan2(sel[:, 1] - centre[1],
                                                   sel[:, 0] - centre[0]),
                                        args.sector_deg)
@@ -300,15 +330,14 @@ def scene_rows(m, args, dist=None, tracks=None):
                     stop_spread = float(dd.max())
             else:
                 n_stop_dirs = 0
-            n_appr = _approach_dirs(centre, lanes, args.zone_radius,
-                                    args.sector_deg)
+            n_appr = _approach_dirs(centre, lanes, R, args.sector_deg)
 
             # traffic supply: movers through the zone, and co-present PAIRS,
             # which is the ceiling on how many conflicts this zone can yield
             inz = []
             for tr in tracks:
                 d = np.hypot(tr["x"] - centre[0], tr["y"] - centre[1])
-                k = np.flatnonzero(d <= args.zone_radius)
+                k = np.flatnonzero(d <= R)
                 if len(k):
                     inz.append((tr["i0"] + k[0], tr["i0"] + k[-1]))
             n_trav = len(inz)
@@ -322,7 +351,7 @@ def scene_rows(m, args, dist=None, tracks=None):
                                  n_appr, args),
                 n_stop=n_stop, n_crosswalk=n_cross, n_axes=n_axes,
                 n_stop_dirs=n_stop_dirs, n_approach_dirs=n_appr,
-                stop_spread=round(stop_spread, 1),
+                stop_spread=round(stop_spread, 1), zone_r=round(R, 1),
                 n_traversals=n_trav, n_copresent_pairs=n_pairs,
             ))
 
