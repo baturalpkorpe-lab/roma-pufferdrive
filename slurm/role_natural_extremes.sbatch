@@ -30,16 +30,22 @@ module load miniconda3
 source /apps/generic/miniforge3/25.11.0/etc/profile.d/conda.sh
 conda activate roma
 
-export PYTHONPATH=$HOME/roma_pufferdrive:/scratch/e452103/PufferDrive
+# Read code from the clone that SUBMITTED. The old hardcoded
+# CODE_DIR=$HOME/roma_pufferdrive is on role-agent-centric despite its name, and
+# that branch's render_topdown.py load_policy has no `role_film` handling -- so a
+# FiLM checkpoint analysed through it builds a policy without the FiLM modules
+# and load_state_dict raises on the unexpected keys. Same fix as 74038b8.
+CODE_DIR=${CODE_DIR:-${SLURM_SUBMIT_DIR:-$HOME/roma_pufferdrive}}
+PUFFER_DIR=${PUFFER_DIR:-/scratch/e452103/PufferDrive}
+export PYTHONPATH=$CODE_DIR:$PUFFER_DIR
 export PYTHONUNBUFFERED=1
-CODE_DIR=$HOME/roma_pufferdrive
 
 mkdir -p /scratch/e452103/logs "$OUT"
 [ -f "$AXES" ] || { echo "ERROR: axes csv not found: $AXES (run role_paired_sweep first)"; exit 1; }
 [ -f "$TRAJ" ] || { echo "ERROR: clusters csv not found: $TRAJ"; exit 1; }
 
 # C binding loads pufferlib/config/ocean/drive.ini via a relative path.
-cd /scratch/e452103/PufferDrive
+cd "$PUFFER_DIR"
 
 python "$CODE_DIR/role_natural_extremes.py" \
     --checkpoint    "$CKPT" \
