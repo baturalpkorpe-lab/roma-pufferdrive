@@ -72,18 +72,25 @@ check("PET ~ 1.0 - clear time", mt["pet"], 0.67, 0.2)
 check("TA at decision", float(mt["ta_at_decision"]), 1.0, 0.25)
 check("both passed", mt["both_passed"], 1)
 
-print("\n2. MERGING: parallel paths 1.2 m apart converging, no intersection")
-n = T
-t = np.arange(n) / HZ
-# A on y=0 heading +x; B on y=1.2 heading +x, slightly behind
-A2 = straight(1, -40, 0.0, 12, 0)
-B2 = straight(2, -55, 1.2, 12, 0)
+print("\n2. MERGING: converging from separated lanes, paths never intersect")
+# A holds y=0. B starts 12 m off to the side and closes to 1.2 m, so the paths
+# come within the 2 m buffer without ever crossing -- the case Rahmani et al.
+# add the buffer for. The original version of this test had both cars perfectly
+# parallel at a constant 1.2 m, which is a QUEUE with lateral wobble inside one
+# lane, not a merge, and it is now correctly rejected by approach_offset.
+t = np.arange(T) / HZ
+A2 = straight(1, -60, 0.0, 12, 0)
+by2 = np.clip(12.0 - 2.7 * t, 1.2, None)
+B2 = mk(2, -60 + 12 * t, by2,
+        np.arctan2(np.gradient(by2), np.gradient(-60 + 12 * t)))
 cp2 = CM.conflict_point(A2, B2, buffer=2.0)
 check("merging conflict found", cp2 is not None, True)
 check("geometric is buffer", cp2["geometric"], "buffer")
+off2 = CM.approach_offset(A2, B2, cp2)
+print(f"  INFO upstream lateral offset = {off2:.1f} m (threshold 5.0)")
 kind2, dh2 = CM.classify_conflict(A2, B2, cp2)
 check("kind", kind2, "merging")
-check("heading diff ~0", dh2, 0.0, 5.0)
+check("heading diff small", dh2 < 30.0, True)
 
 print("\n3. NO conflict: parallel, 30 m apart, never within buffer")
 A3 = straight(1, -40, 0, 12, 0)
@@ -113,6 +120,37 @@ cp4b = CM.conflict_point(A4b, B4b, 2.0)
 check("true path intersection", cp4b is not None and cp4b["geometric"] == "cross", True)
 k4b, d4b = CM.classify_conflict(A4b, B4b, cp4b)
 check("kept as crossing", k4b, "crossing")
+
+print("\n4c. A QUEUE in one lane is not a merging conflict")
+# Two cars on the SAME path 20 m apart. Their paths coincide, so a 2 m buffer
+# contact fires at once and this was being logged as a merging conflict -- 84%
+# of all conflicts on the 10k pool (17246 merging vs 3270 crossing) with
+# car-following fingerprints: minTTC 8.9 s vs the paper's 6.1-6.3, MRD 1.14 vs
+# their 0.58.
+A4c = straight(1, 0, 0, 10, 0)
+B4c = straight(2, -20, 0, 10, 0)
+cp4c = CM.conflict_point(A4c, B4c, 2.0)
+check("queue produces a buffer contact", cp4c is not None, True)
+check("queue lateral offset ~0", CM.approach_offset(A4c, B4c, cp4c), 0.0, 1.0)
+k4c, _ = CM.classify_conflict(A4c, B4c, cp4c)
+check("queue REJECTED (not merging)", k4c, None)
+
+print("\n4d. A genuine merge from a side road SURVIVES")
+# A already in the target lane heading +x; B approaches on a 45 deg side road
+# and joins it. One vehicle IS already in the lane, which is why the test uses
+# max() of the two separations, not min().
+t = np.arange(T) / HZ
+A4d = straight(1, -60, 0.0, 12, 0)
+bx = np.where(t < 4.0, -60 + 12 * t, -12 + 12 * (t - 4.0))
+by = np.where(t < 4.0, 30 - 7.5 * t, 0.0)
+bh = np.where(t < 4.0, np.arctan2(-7.5, 12), 0.0)
+B4d = mk(2, bx, by, bh)
+cp4d = CM.conflict_point(A4d, B4d, 2.0)
+check("merge contact found", cp4d is not None, True)
+asep = CM.approach_offset(A4d, B4d, cp4d)
+print(f"  INFO lateral offset = {asep:.1f} m (threshold 5.0)")
+k4d, _ = CM.classify_conflict(A4d, B4d, cp4d)
+check("side-road merge KEPT", k4d is not None, True)
 
 print("\n5. dense_scene + leaders_dense: B follows A at 20 m")
 A5 = straight(1, 0, 0, 10, 0)

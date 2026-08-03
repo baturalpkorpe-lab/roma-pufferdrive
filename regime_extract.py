@@ -83,7 +83,7 @@ def scene(m, args):
 
     tracks = CM.vehicle_tracks(objs)
     if len(tracks) < 1:
-        return [], [], 0
+        return [], [], 0, 0
     D = CM.dense_scene(tracks, T_STEPS)
     lead = CM.leaders_dense(D)
 
@@ -102,7 +102,7 @@ def scene(m, args):
     # ---- conflicts: only pairs that share a junction zone ----------------
     # Gating on the zone is what keeps this tractable AND is the definition:
     # Rahmani et al. identify conflicts WITHIN identified intersection areas.
-    conflicts = []
+    conflicts, n_reject = [], 0
     if len(centres):
         inzone = []                       # per zone: track indices, with span
         for c in centres:
@@ -134,8 +134,12 @@ def scene(m, args):
                     if cp is None:
                         continue
                     kind, dh = CM.classify_conflict(A, B, cp)
-                    if kind is None:       # oncoming traffic merely passing
+                    if kind is None:
+                        # oncoming traffic merely passing, or a same-lane
+                        # queue (parallel paths are not a merge)
+                        n_reject += 1
                         continue
+                    asep = CM.approach_offset(A, B, cp)
                     mt = CM.conflict_metrics(A, B, cp, kind,
                                              tau_dec=args.tau_dec)
                     if mt is None:
@@ -157,6 +161,7 @@ def scene(m, args):
                             ego_went_first=went,
                             kind=kind, geometric=mt["geometric"],
                             heading_diff_deg=round(float(dh), 1),
+                            approach_offset=round(float(asep), 2),
                             ta_at_decision=ta,
                             pet=mt["pet"], min_ttc=mt["min_ttc"],
                             mrd=mt["mrd"],
@@ -221,7 +226,7 @@ def scene(m, args):
             v_at_t0=round(float(D["V"][e][np.flatnonzero(D["M"][e])[0]]), 3),
             n_zones_scene=int(len(centres)),
         ))
-    return conflicts, rows, len(tracks)
+    return conflicts, rows, len(tracks), n_reject
 
 
 def main():
@@ -234,10 +239,10 @@ def main():
     print(f"[regime] {len(files)} maps  R={args.zone_radius}m "
           f"tau_dec={args.tau_dec}s", flush=True)
 
-    C, R, bad, n_tr = [], [], 0, 0
+    C, R, bad, n_tr, n_rej = [], [], 0, 0, 0
     for i, fp in enumerate(files):
         try:
-            c, r, nt = scene(read_map_binary(fp), args)
+            c, r, nt, nrj = scene(read_map_binary(fp), args)
         except Exception as e:
             bad += 1
             if bad <= 3:
@@ -246,6 +251,7 @@ def main():
         C += c
         R += r
         n_tr += nt
+        n_rej += nrj
         if args.progress and (i + 1) % args.progress == 0:
             print(f"  {i+1}/{len(files)}  conflicts={len(C)} traj={len(R)}",
                   flush=True)

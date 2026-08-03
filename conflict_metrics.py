@@ -172,8 +172,59 @@ def conflict_point(a, b, buffer=2.0):
     return dict(pt=pt, ia=i, ib=j, geometric="buffer")
 
 
+def approach_offset(a, b, cp, lookback=3.0):
+    """Max LATERAL offset of the two upstream approach positions from the
+    conflict-point axis.
+
+    Rahmani et al. require merging vehicles to "start from different lanes
+    before the intersection". Without lane ids, the geometric equivalent is that
+    at least one vehicle approached from ACROSS the axis they end up sharing.
+
+    This is what separates a merge from a QUEUE. Two cars following each other in
+    one lane have almost the same path, so a 2 m buffer contact triggers
+    immediately, and they were being counted as merging conflicts. On the 10k pool
+    that inflated merging to 84% of all conflicts (17246 vs 3270 crossing,
+    against a roughly even split in the paper) and gave merging car-following
+    fingerprints: minTTC 8.9 s against their 6.1-6.3, MRD 1.14 against their 0.58.
+
+    LATERAL offset, not distance. A follower sits far BEHIND along the axis but
+    ON it, so a plain distance test passes as soon as the leader's recorded track
+    starts later than the follower's -- measured on the synthetic queue, that
+    scored 20 m purely from the lead vehicle's path not extending back that far.
+    Only the across-axis component says "different lane".
+
+    Measured between their SIMULTANEOUS positions, not as each one's distance
+    from the conflict point. Two reasons. Simultaneous separation splits cleanly
+    into a longitudinal part (following) and a lateral part (different lane),
+    which is exactly the distinction wanted. And anchoring on the conflict point
+    instead leaks longitudinal distance into the lateral term whenever the axis
+    is tilted: a vehicle 36 m upstream on a straight path picked up a spurious
+    4 m of "lateral" offset from a 6 deg axis tilt, enough to matter against a
+    5 m threshold.
+    """
+    k = int(lookback * HZ)
+    sa, sb = a["i0"] + cp["ia"], b["i0"] + cp["ib"]
+    s_up = max(sa, sb) - k                           # before the LATER arrival
+    ja = int(np.clip(s_up - a["i0"], 0, a["n"] - 1))
+    jb = int(np.clip(s_up - b["i0"], 0, b["n"] - 1))
+
+    # Axis = mean heading at that instant. Only ever called where the two are
+    # within align_deg of each other, so the mean is meaningful.
+    ux = np.cos(a["h"][ja]) + np.cos(b["h"][jb])
+    uy = np.sin(a["h"][ja]) + np.sin(b["h"][jb])
+    n = np.hypot(ux, uy)
+    if n < 1e-9:                                     # exactly opposed: no axis
+        return np.inf
+    ux, uy = ux / n, uy / n
+
+    dx = b["x"][jb] - a["x"][ja]
+    dy = b["y"][jb] - a["y"][ja]
+    return float(abs(dx * uy - dy * ux))             # across-axis component
+
+
 def classify_conflict(a, b, cp, align_deg=30.0, cross_deg=45.0,
-                      oncoming_deg=150.0, merge_sep=4.0, merge_hold=1.0):
+                      oncoming_deg=150.0, merge_sep=4.0, merge_hold=1.0,
+                      min_approach_offset=5.0):
     """merging | crossing | None, from geometry alone. None = not a conflict.
 
     Rahmani et al. use lane identity ("different lanes before, SAME lane
@@ -206,6 +257,13 @@ def classify_conflict(a, b, cp, align_deg=30.0, cross_deg=45.0,
     deg = np.rad2deg(dh)
 
     if dh <= np.deg2rad(align_deg):
+        # Parallel is necessary but NOT sufficient for a merge: a queue in one
+        # lane is parallel too. Demand distinct approaches. Only merging needs
+        # this -- a crossing requires a true path intersection at an angle, which
+        # same-lane followers cannot produce, and the crossing metrics already
+        # reproduce the paper (minTTC 5.03 vs their 4.71-5.08).
+        if approach_offset(a, b, cp) < min_approach_offset:
+            return None, deg                         # same lane: car-following
         return "merging", deg
     if dh >= np.deg2rad(oncoming_deg) and cp["geometric"] == "buffer":
         return None, deg                             # just passing, not merging
@@ -218,6 +276,8 @@ def classify_conflict(a, b, cp, align_deg=30.0, cross_deg=45.0,
         sep = np.hypot(a["x"][cp["ia"]:cp["ia"] + k] - b["x"][cp["ib"]:cp["ib"] + k],
                        a["y"][cp["ia"]:cp["ia"] + k] - b["y"][cp["ib"]:cp["ib"] + k])
         if (sep[:need] <= merge_sep).all():
+            if approach_offset(a, b, cp) < min_approach_offset:
+                return None, deg                     # same lane: car-following
             return "merging", deg
     return "crossing", deg
 
