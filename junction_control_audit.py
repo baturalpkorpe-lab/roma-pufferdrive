@@ -53,6 +53,7 @@ import argparse
 import csv
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -251,6 +252,64 @@ def classify(n_stop, n_cross, n_axes, n_stop_dirs, n_appr_dirs, args):
     if n_cross >= 1:
         return "signalised_likely"
     return "uncontrolled"
+
+
+def labelled_zones(roads, clique_dist=45.0, zone_buffer=4.0,
+                   zone_radius_min=15.0, min_stop_allway=3, sector_deg=45.0):
+    """Junction zones with a right-of-way label, for callers outside this file.
+
+    Returns [dict(centre=(2,), R, control, n_stop, n_crosswalk, n_axes)].
+
+    Deliberately ADDITIVE: scene_rows() keeps its own copy of this flow and is
+    not refactored to call this. The audit's full-pool numbers are already in
+    hand, there is no map data outside the cluster to verify a refactor against,
+    and a regression in the audit costs more than the duplication. The
+    CLASSIFICATION itself is not duplicated -- both paths call classify().
+    """
+    lanes = [(r["x"], r["y"]) for r in roads if r["type"] == 4]
+    stops = np.array([[r["x"][0], r["y"][0]] for r in roads if r["type"] == 7],
+                     dtype=float).reshape(-1, 2)
+    crosses = np.array([[r["x"].mean(), r["y"].mean()]
+                        for r in roads if r["type"] == 8],
+                       dtype=float).reshape(-1, 2)
+
+    cargs = SimpleNamespace(min_stop_allway=min_stop_allway,
+                            require_sign_per_approach=0)
+    out, used = [], []
+    for seed_kind, M in (("stop", stops), ("cross", crosses)):
+        if not len(M):
+            continue
+        for g in clique_clusters(M, clique_dist):
+            mem = M[g]
+            centre = mem.mean(0)
+            spread = (float(np.hypot(*(mem - centre).T).max())
+                      if len(mem) > 1 else 0.0)
+            R = max(spread + zone_buffer, zone_radius_min)
+            if seed_kind == "cross" and any(
+                    np.hypot(*(centre - c)) <= R for c in used):
+                continue                      # same junction already seeded
+            used.append(centre)
+
+            if seed_kind == "stop":
+                sel = mem
+            else:
+                sel = (stops[np.hypot(stops[:, 0] - centre[0],
+                                      stops[:, 1] - centre[1]) <= R]
+                       if len(stops) else np.empty((0, 2)))
+            n_stop = len(sel)
+            n_cross = int((np.hypot(crosses[:, 0] - centre[0],
+                                    crosses[:, 1] - centre[1]) <= R).sum()) \
+                if len(crosses) else 0
+            n_axes = _n_axes(centre, lanes)
+            n_dirs = _sectors(np.arctan2(sel[:, 1] - centre[1],
+                                         sel[:, 0] - centre[0]),
+                              sector_deg) if n_stop else 0
+            n_appr = _approach_dirs(centre, lanes, R, sector_deg)
+            out.append(dict(
+                centre=centre, R=R,
+                control=classify(n_stop, n_cross, n_axes, n_dirs, n_appr, cargs),
+                n_stop=n_stop, n_crosswalk=n_cross, n_axes=n_axes))
+    return out
 
 
 def scene_rows(m, args, dist=None, tracks=None):

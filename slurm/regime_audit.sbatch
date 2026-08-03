@@ -49,6 +49,9 @@ CODE_DIR=${CODE_DIR:-$SLURM_SUBMIT_DIR}
 DATA_DIR=${DATA_DIR:-$PUFFER_DIR/pufferlib/resources/drive/binaries/training}
 OUT=${OUT:-$SCRATCH_ROOT/regimes}
 LIMIT=${LIMIT:-0}
+# Sensitivity knob for the merge-vs-queue test. One lane width is
+# ~3.2-3.7 m, so 3.5 is the permissive end and 5.0 the strict end.
+MIN_OFFSET=${MIN_OFFSET:-5.0}
 
 # conda's gcc_linux-64 activation scripts are not set -u safe
 # (SYS_SYSROOT / CONDA_BACKUP_CXX unbound) and will kill the job on e452103.
@@ -64,14 +67,14 @@ export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-4}
 
 for f in conflict_metrics.py junction_control_audit.py regime_extract.py \
-         intersection_features.py map_binary.py; do
+         gap_acceptance.py intersection_features.py map_binary.py; do
     [ -f "$CODE_DIR/$f" ] || { echo "ERROR: missing $CODE_DIR/$f -- see the"\
         "PREFLIGHT block at the top of this file"; exit 1; }
 done
 [ -d "$DATA_DIR" ] || { echo "ERROR: no data_dir $DATA_DIR"; exit 1; }
 
 mkdir -p "$OUT"
-echo "[regime] data=$DATA_DIR out=$OUT limit=$LIMIT"
+echo "[regime] data=$DATA_DIR out=$OUT limit=$LIMIT min_approach_offset=$MIN_OFFSET"
 echo "[regime] branch=$(git -C "$CODE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ?)"\
      "commit=$(git -C "$CODE_DIR" rev-parse --short HEAD 2>/dev/null || echo ?)"
 echo "[regime] maps available: $(ls "$DATA_DIR"/map_*.bin 2>/dev/null | wc -l)"
@@ -93,6 +96,7 @@ python "$CODE_DIR/regime_extract.py" \
     --data_dir "$DATA_DIR" \
     --out_conflicts "$OUT/conflicts_gt.csv" \
     --out_traj      "$OUT/regimes_gt.csv" \
+    --min_approach_offset "$MIN_OFFSET" \
     --limit "$LIMIT"
 
 echo; echo "[regime] done -> $OUT"

@@ -51,7 +51,7 @@ from pathlib import Path
 import numpy as np
 
 import conflict_metrics as CM
-from intersection_features import junction_zones
+from junction_control_audit import labelled_zones
 from map_binary import read_map_binary
 
 T_STEPS = 91                     # map_binary.py: array_size is always 91
@@ -63,8 +63,18 @@ def parse_args():
     p.add_argument("--out_conflicts", default="conflicts_gt.csv")
     p.add_argument("--out_traj", default="regimes_gt.csv")
     p.add_argument("--limit", type=int, default=0)
-    p.add_argument("--zone_eps", type=float, default=20.0)
-    p.add_argument("--zone_radius", type=float, default=25.0)
+    p.add_argument("--zone_radius", type=float, default=25.0,
+                   help="radius used for the free-flow exclusion only; the "
+                        "conflict zones themselves carry their own adaptive R")
+    p.add_argument("--clique_dist", type=float, default=45.0,
+                   help="stop signs of ONE junction, mutual-proximity clique")
+    p.add_argument("--zone_buffer", type=float, default=4.0)
+    p.add_argument("--zone_radius_min", type=float, default=15.0)
+    p.add_argument("--min_approach_offset", type=float, default=5.0,
+                   help="across-axis separation, ~3 s upstream, required for a "
+                        "MERGE rather than a same-lane queue. One lane width is "
+                        "~3.2-3.7 m, so 3.5 is the permissive end of the "
+                        "sensitivity range and 5.0 the strict end.")
     p.add_argument("--buffer", type=float, default=2.0,
                    help="merging conflict buffer, Rahmani et al. use 2 m total")
     p.add_argument("--tau_dec", type=float, default=3.0,
@@ -87,29 +97,35 @@ def scene(m, args):
     D = CM.dense_scene(tracks, T_STEPS)
     lead = CM.leaders_dense(D)
 
-    centres, _ = junction_zones(roads, args.zone_eps, use_lane_crossings=0,
-                                min_axes=2)
+    # Clique-clustered zones carrying a right-of-way label, so every conflict
+    # can be attributed to all-way / priority / signalised control. Single-link
+    # was merging ~21% of junctions into their neighbours (46839 clique vs
+    # 37028 single-link at the same 45 m on the 10k pool).
+    Z = [z for z in labelled_zones(roads, args.clique_dist, args.zone_buffer,
+                                   args.zone_radius_min)
+         if z["control"] != "not_a_junction"]
     # a zone counts only where traffic actually goes through it -- a junction
     # nobody used is not a junction anyone had to deal with
-    if len(centres):
-        act = []
-        for c in centres:
-            d = np.hypot(D["X"] - c[0], D["Y"] - c[1])
-            if int(np.nansum(np.nanmin(d, axis=1) <= args.zone_radius)) >= 1:
-                act.append(c)
-        centres = np.asarray(act, float).reshape(-1, 2)
+    act = []
+    for z in Z:
+        d = np.hypot(D["X"] - z["centre"][0], D["Y"] - z["centre"][1])
+        if int(np.nansum(np.nanmin(d, axis=1) <= z["R"])) >= 1:
+            act.append(z)
+    Z = act
+    centres = (np.array([z["centre"] for z in Z], float).reshape(-1, 2)
+               if Z else np.empty((0, 2)))
 
     # ---- conflicts: only pairs that share a junction zone ----------------
     # Gating on the zone is what keeps this tractable AND is the definition:
     # Rahmani et al. identify conflicts WITHIN identified intersection areas.
     conflicts, n_reject = [], 0
-    if len(centres):
+    if Z:
         inzone = []                       # per zone: track indices, with span
-        for c in centres:
-            d = np.hypot(D["X"] - c[0], D["Y"] - c[1])
+        for z in Z:
+            d = np.hypot(D["X"] - z["centre"][0], D["Y"] - z["centre"][1])
             here = []
             for e in range(len(tracks)):
-                k = np.flatnonzero(d[e] <= args.zone_radius)
+                k = np.flatnonzero(d[e] <= z["R"])
                 if len(k):
                     here.append((e, int(k[0]), int(k[-1])))
             inzone.append(here)
@@ -133,7 +149,8 @@ def scene(m, args):
                     cp = CM.conflict_point(A, B, args.buffer)
                     if cp is None:
                         continue
-                    kind, dh = CM.classify_conflict(A, B, cp)
+                    kind, dh = CM.classify_conflict(
+                        A, B, cp, min_approach_offset=args.min_approach_offset)
                     if kind is None:
                         # oncoming traffic merely passing, or a same-lane
                         # queue (parallel paths are not a merge)
@@ -144,7 +161,8 @@ def scene(m, args):
                                              tau_dec=args.tau_dec)
                     if mt is None:
                         continue
-                    zx, zy = centres[zi]
+                    zone = Z[zi]
+                    zx, zy = zone["centre"]
                     # two rows, one per participant, so the file joins onto
                     # per-agent role vectors without a pivot
                     for ego, other in ((A, B), (B, A)):
@@ -173,6 +191,8 @@ def scene(m, args):
                             both_passed=mt["both_passed"],
                             zone_x=round(float(zx), 2),
                             zone_y=round(float(zy), 2),
+                            control=zone["control"],
+                            zone_n_stop=zone["n_stop"],
                         ))
 
     # ---- per-trajectory regimes + style parameters -----------------------
@@ -190,11 +210,13 @@ def scene(m, args):
         n_free = int(ff[e].sum())
         v_free = (float(np.nanmean(D["V"][e][ff[e]])) if n_free else np.nan)
 
-        d_zone = np.inf
+        d_zone, z_ctrl = np.inf, ""
         if len(centres):
             dd = np.hypot(D["X"][e][:, None] - centres[None, :, 0],
                           D["Y"][e][:, None] - centres[None, :, 1])
-            d_zone = float(np.nanmin(dd)) if np.isfinite(dd).any() else np.inf
+            if np.isfinite(dd).any():
+                d_zone = float(np.nanmin(dd))
+                z_ctrl = Z[int(np.nanargmin(np.nanmin(dd, axis=0)))]["control"]
 
         fr = {"conflict": 1.0 if tr["id"] in in_conf else 0.0,
               "following": n_follow / max(n_valid, 1),
@@ -223,6 +245,7 @@ def scene(m, args):
                             and v_ref > 0.1 else ""),
             # exogenous descriptors, safe to stratify on
             min_dist_to_zone=(round(d_zone, 2) if np.isfinite(d_zone) else ""),
+            nearest_zone_control=z_ctrl,
             v_at_t0=round(float(D["V"][e][np.flatnonzero(D["M"][e])[0]]), 3),
             n_zones_scene=int(len(centres)),
         ))
@@ -273,6 +296,12 @@ def main():
     kc = Counter(c["kind"] for c in C)
     for k, n in kc.most_common():
         print(f"    {k:<10} {n//2:>7} conflicts")
+    print("\n  by RIGHT-OF-WAY class (the pre-registered stratification):")
+    for k, n in Counter(c["control"] for c in C).most_common():
+        sub = [c for c in C if c["control"] == k]
+        mg = sum(1 for c in sub if c["kind"] == "merging") // 2
+        print(f"    {k:<20} {n//2:>7} conflicts  "
+              f"(merging {mg}, crossing {n//2 - mg})")
     both = sum(1 for c in C if c["both_passed"]) // 2
     print(f"    both vehicles passed the point inside the 9.1 s window: {both}")
     ta = [float(c["ta_at_decision"]) for c in C if c["ta_at_decision"] != ""]
