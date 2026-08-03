@@ -74,6 +74,7 @@ case "$MI_TARGET" in ego_partner) MI_TAG=ep ;; *) MI_TAG=$MI_TARGET ;; esac
 COMPLIANCE_WEIGHT=${COMPLIANCE_WEIGHT:-0}
 PERTURB_FRAC=${PERTURB_FRAC:-0}
 PERTURB_ALPHA=${PERTURB_ALPHA:-2.0}
+COMPLIANCE_PERTURBED_ONLY=${COMPLIANCE_PERTURBED_ONLY:-1}
 case "$COMPLIANCE_WEIGHT" in 0|0.|0.0|0.00) COMPLY_TAG= ;; *) COMPLY_TAG=_comply ;; esac
 ROLE_FILM=${ROLE_FILM:-0}
 case "$ROLE_FILM" in 1|true|yes) FILM_ARG="--role_film"; FILM_TAG=_film ;;
@@ -144,6 +145,26 @@ case "$PERTURB_FRAC" in 0|0.|0.0|0.00) ;; *)
         exit 1 ;;
     esac ;;
 esac
+# And the mirror image, which the guard above did NOT cover. train_roma.py
+# applies the perturbed-only mask as
+#     if args.compliance_perturbed_only and use_perturb:
+# so with PERTURB_FRAC=0 the mask never engages and compliance silently grades
+# EVERY agent -- the exact "farm compliance by driving predictably" failure the
+# --compliance_perturbed_only help text exists to prevent.
+case "$COMPLIANCE_WEIGHT" in 0|0.|0.0|0.00) ;; *)
+    case "$PERTURB_FRAC" in 0|0.|0.0|0.00)
+        if [ "$COMPLIANCE_PERTURBED_ONLY" = "1" ]; then
+            echo "ERROR: COMPLIANCE_WEIGHT=$COMPLIANCE_WEIGHT with"
+            echo "       PERTURB_FRAC=0 and COMPLIANCE_PERTURBED_ONLY=1."
+            echo "       The perturbed-only mask only engages when perturbation"
+            echo "       is on, so compliance would grade every agent and the"
+            echo "       policy can farm it by behaving predictably."
+            echo "       Set PERTURB_FRAC>0, or COMPLIANCE_PERTURBED_ONLY=0 to"
+            echo "       deliberately grade all agents."
+            exit 1
+        fi ;;
+    esac ;;
+esac
 if [ -n "$COMPLY_TAG" ]; then
     grep -q -- "--compliance_weight" "$CODE_DIR/roma_pufferdrive/train_roma.py" || {
         echo "ERROR: COMPLIANCE_WEIGHT set but this train_roma.py has no"
@@ -182,8 +203,16 @@ fi
 
 echo "[mifut] role_dim=$ROLE_DIM  H=$MI_HORIZON  maps=$NUM_MAPS  total_steps=$TOTAL_STEPS"
 echo "[mifut] role view: road=$ROLE_ROAD_DIM partner=$ROLE_PARTNER_DIM  mi_target=$MI_TARGET"
+# These echoes, the run-name tags and the branch guards all read the same
+# variables -- but for one run they ALL said "film + comply ON" while the
+# training used argparse defaults, because the variables were never added to the
+# python invocation below. Everything that reports config here is downstream of
+# the same values; only the actual command line decides. If a flag is added
+# above, it MUST also be added to the python call, and the wandb config dump is
+# the only report that proves it.
 echo "[mifut] FiLM conditioning: ${FILM_ARG:-off}"
 echo "[mifut] compliance=$COMPLIANCE_WEIGHT perturb_frac=$PERTURB_FRAC alpha=$PERTURB_ALPHA"
+echo "[mifut] compliance_perturbed_only=$COMPLIANCE_PERTURBED_ONLY"
 echo "[mifut] div_weight=$DIV_WEIGHT  mi_weight=$MI_WEIGHT  wandb_name=$WANDB_NAME"
 echo "[mifut] code=$CODE_DIR  save=$SAVE_DIR"
 echo "[mifut] branch=$(git -C "$CODE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ?) commit=$(git -C "$CODE_DIR" rev-parse --short HEAD 2>/dev/null || echo ?)"
@@ -199,6 +228,11 @@ python "$CODE_DIR/roma_pufferdrive/train_roma.py" \
     --mi_target        "$MI_TARGET" \
     --div_weight    "$DIV_WEIGHT" \
     --mi_weight     "$MI_WEIGHT" \
+    --compliance_weight "$COMPLIANCE_WEIGHT" \
+    --perturb_frac      "$PERTURB_FRAC" \
+    --perturb_alpha     "$PERTURB_ALPHA" \
+    --compliance_perturbed_only "$COMPLIANCE_PERTURBED_ONLY" \
+    $FILM_ARG \
     --data_dir      "$DATA_DIR" \
     --num_maps      "$NUM_MAPS" \
     --num_agents    3072 \
