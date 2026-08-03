@@ -85,6 +85,15 @@ def parse_args():
                         "approaches and this empties the class. Compare the "
                         "reported n_stop_dirs / n_approach_dirs columns before "
                         "turning it on.")
+    p.add_argument("--clique_sweep", type=str, default="",
+                   help="comma list of clique distances, e.g. "
+                        "'25,45,60,75'. Classifies at each in ONE pass and "
+                        "prints the table instead of writing a CSV. This is "
+                        "the decisive test for whether the threshold is "
+                        "splitting real 4-way stops: widening should convert "
+                        "n_stop=1/2 zones into n_stop=4 zones, and the "
+                        "n_stop>=6 count is the canary for over-merging two "
+                        "adjacent junctions into one.")
     p.add_argument("--progress", type=int, default=200)
     return p.parse_args()
 
@@ -234,9 +243,10 @@ def classify(n_stop, n_cross, n_axes, n_stop_dirs, n_appr_dirs, args):
     return "uncontrolled"
 
 
-def scene_rows(m, args):
+def scene_rows(m, args, dist=None, tracks=None):
     roads, objs = m["roads"], m["objects"]
     sid = m["scenario_id"]
+    dist = args.clique_dist if dist is None else dist
     lanes = [(r["x"], r["y"]) for r in roads if r["type"] == 4]
 
     stops = np.array([[r["x"][0], r["y"][0]] for r in roads if r["type"] == 7],
@@ -245,16 +255,15 @@ def scene_rows(m, args):
                         for r in roads if r["type"] == 8],
                        dtype=float).reshape(-1, 2)
 
-    tracks = vehicle_tracks(objs)
+    tracks = vehicle_tracks(objs) if tracks is None else tracks
 
     rows = []
     # Zones are seeded from stop signs (clique) and, separately, from
     # crosswalks -- so a signalised junction still gets a row instead of
     # silently vanishing, which is what a stop-sign-only pipeline would do.
-    seeds = [("stop", clique_clusters(stops, args.clique_dist), stops)]
+    seeds = [("stop", clique_clusters(stops, dist), stops)]
     if len(crosses):
-        seeds.append(("cross", clique_clusters(crosses, args.clique_dist),
-                      crosses))
+        seeds.append(("cross", clique_clusters(crosses, dist), crosses))
 
     used = []
     for seed_kind, groups, M in seeds:
@@ -317,9 +326,90 @@ def scene_rows(m, args):
                 n_traversals=n_trav, n_copresent_pairs=n_pairs,
             ))
 
-    sl = single_link_count(np.vstack([stops, crosses]) if len(stops) or len(crosses)
-                           else np.empty((0, 2)), args.single_link_eps)
+    # Single-link at the SAME distance as the clique. Comparing clique@45 with
+    # single-link@20 conflates method and threshold: it reported 1.18 in one
+    # run and 0.94 in another purely because the thresholds differed, which
+    # says nothing about chaining. Same distance, so the only difference left
+    # is mutual-proximity vs transitive-reachability.
+    M = (np.vstack([stops, crosses]) if len(stops) or len(crosses)
+         else np.empty((0, 2)))
+    sl = single_link_count(M, dist)
     return rows, len(used), sl, len(tracks)
+
+
+def sweep(files, args):
+    """Classify at several clique distances in one pass and print the table.
+
+    The point is the SHAPE of the sign histogram as the threshold widens. A
+    genuine all-way stop at a crossroads has exactly 4 signs, so if the
+    threshold is truncating junctions, widening it moves mass from n_stop=1/2
+    into n_stop=4. If instead n_stop>=6 grows, two adjacent junctions are being
+    merged and the threshold has gone too far.
+    """
+    dists = [float(d) for d in args.clique_sweep.split(",") if d.strip()]
+    print(f"[audit] SWEEP over clique={dists} on {len(files)} maps", flush=True)
+
+    acc = {d: dict(zones=0, single=0, cls=Counter(), hist=Counter(),
+                   allway_zones=0, allway_pairs=0, allway_scenes=set(),
+                   spread=[]) for d in dists}
+    bad = 0
+    for i, fp in enumerate(files):
+        try:
+            m = read_map_binary(fp)
+            tracks = vehicle_tracks(m["objects"])
+        except Exception as e:
+            bad += 1
+            if bad <= 3:
+                print(f"  FAIL {fp.name}: {type(e).__name__}: {e}")
+            continue
+        for d in dists:
+            try:
+                rows, nz, sl, _ = scene_rows(m, args, dist=d, tracks=tracks)
+            except Exception as e:
+                bad += 1
+                continue
+            a = acc[d]
+            a["zones"] += nz
+            a["single"] += sl
+            for r in rows:
+                a["cls"][r["control"]] += 1
+                if r["n_stop"] >= 1:
+                    a["hist"][min(r["n_stop"], 6)] += 1
+                if r["n_stop"] >= 2:
+                    a["spread"].append(r["stop_spread"])
+                if r["control"] == "all_way_stop":
+                    a["allway_zones"] += 1
+                    a["allway_pairs"] += r["n_copresent_pairs"]
+                    if r["n_copresent_pairs"] >= 1:
+                        a["allway_scenes"].add(r["scenario_id"])
+        if args.progress and (i + 1) % args.progress == 0:
+            print(f"  {i+1}/{len(files)}", flush=True)
+
+    n_ok = len(files) - 0
+    print(f"\n  {'clique':>7} {'zones':>7} {'single':>7} {'allway':>7} "
+          f"{'pairs':>7} {'scenes':>7} | " +
+          " ".join(f"n={k if k<6 else '6+':<3}" for k in range(1, 7)))
+    for d in dists:
+        a = acc[d]
+        h = a["hist"]
+        print(f"  {d:>7.0f} {a['zones']:>7} {a['single']:>7} "
+              f"{a['allway_zones']:>7} {a['allway_pairs']:>7} "
+              f"{len(a['allway_scenes']):>7} | " +
+              " ".join(f"{h.get(k,0):<5}" for k in range(1, 7)))
+
+    print(f"\n  spread of stop signs within a zone (m), n_stop>=2:")
+    for d in dists:
+        sp = np.asarray(acc[d]["spread"], float)
+        if len(sp):
+            print(f"    clique={d:>5.0f}  med={np.median(sp):>5.1f} "
+                  f"p90={np.percentile(sp,90):>5.1f} max={sp.max():>5.1f} "
+                  f"(max is capped at the threshold by construction)")
+
+    print(f"\n  READ IT AS: widening should move mass from n=1/n=2 into n=4 "
+          f"(a crossroads all-way\n  stop has exactly 4 signs). Stop widening "
+          f"when n=6+ starts growing -- that is two\n  adjacent junctions "
+          f"merging into one zone.")
+    print(f"\n  maps scanned={len(files)} failures={bad}")
 
 
 def main():
@@ -329,6 +419,9 @@ def main():
         files = files[:args.limit]
     if not files:
         raise SystemExit(f"no map_*.bin in {args.data_dir}")
+    if args.clique_sweep:
+        return sweep(files, args)
+
     print(f"[audit] {len(files)} maps  clique={args.clique_dist}m "
           f"R={args.zone_radius}m", flush=True)
 
