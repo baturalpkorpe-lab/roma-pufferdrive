@@ -77,7 +77,14 @@ def parse_args():
                    help="Rahmani criterion (a): >=3 stop signs, which admits "
                         "T-shaped layouts")
     p.add_argument("--sector_deg", type=float, default=45.0,
-                   help="angular bin for counting covered approaches")
+                   help="angular separation for counting distinct directions")
+    p.add_argument("--require_sign_per_approach", type=int, default=0,
+                   help="opt-in: also demand n_stop_dirs >= n_approach_dirs "
+                        "(Rahmani criterion b). OFF by default -- without an "
+                        "entry/exit lane graph, turn connectors over-count "
+                        "approaches and this empties the class. Compare the "
+                        "reported n_stop_dirs / n_approach_dirs columns before "
+                        "turning it on.")
     p.add_argument("--progress", type=int, default=200)
     return p.parse_args()
 
@@ -158,18 +165,39 @@ def single_link_count(M, eps):
 # ---------------------------------------------------------------------------
 
 def _sectors(angles, sector_deg):
-    """How many distinct DIRECTIONS (mod 2pi) are occupied."""
+    """How many distinct DIRECTIONS (mod 2pi) are occupied.
+
+    Greedy separation from a representative, NOT hard bins on the circle.
+    _n_axes in intersection_features.py carries an explicit warning about this:
+    bin/gap-based grouping was tried on the real pool and rejected ~99% of
+    zones, because junction TURN CONNECTORS sweep continuously through every
+    angle between the two roads, so a real junction's bearing distribution is
+    continuous rather than a few clumps. Hard 45 deg bins reproduced that
+    failure exactly -- the first version of this file gated all_way_stop on
+    n_stop_dirs >= n_appr_dirs and returned ZERO all-way stops out of 218 zones
+    that had 3+ stop signs, because connectors inflated n_appr_dirs to 7-8.
+    """
     if not len(angles):
         return 0
-    return len(set(np.floor(np.mod(angles, 2 * np.pi) /
-                            np.deg2rad(sector_deg)).astype(int).tolist()))
+    tol = np.deg2rad(sector_deg)
+    reps = []
+    for a in np.sort(np.mod(np.asarray(angles, float), 2 * np.pi)):
+        for g in reps:
+            d = abs(a - g)
+            if min(d, 2 * np.pi - d) < tol:
+                break
+        else:
+            reps.append(a)
+    return len(reps)
 
 
 def _approach_dirs(centre, lanes, radius, sector_deg):
     """Directions from which lane centrelines reach a zone centre.
 
     Direction of the lane's own bearing, not of its position -- an approach is
-    defined by which way traffic on it travels.
+    defined by which way traffic on it travels. Still only a DIAGNOSTIC: with
+    connectors present this over-counts, and it is not used as a gate unless
+    --require_sign_per_approach is passed explicitly.
     """
     b = []
     for x, y in lanes:
@@ -185,15 +213,20 @@ def _approach_dirs(centre, lanes, radius, sector_deg):
 def classify(n_stop, n_cross, n_axes, n_stop_dirs, n_appr_dirs, args):
     """Right-of-way class of one zone.
 
-    Deliberately reports the INPUTS too, so the strictness of the all-way rule
-    stays a decision made on the measured numbers rather than baked in here.
-    Rahmani criterion (b) -- one sign per approach -- is the
-    n_stop_dirs >= n_appr_dirs test, approximated by angular coverage.
+    The gate is Rahmani criterion (a) only -- >=3 stop signs, which is what
+    they state admits three-leg (T-shaped) layouts. Their criterion (b), one
+    sign per approach, needs the entry/exit lane graph of an HD map; here the
+    road id is a SEGMENT id and turn connectors make any bearing-based
+    approximation over-count approaches (see _sectors). So the coverage numbers
+    are REPORTED per zone and available as an opt-in gate, but not imposed:
+    a broken approximation of (b) silently emptied this class once already.
     """
     if n_axes < 2:
         return "not_a_junction"
     if n_stop >= args.min_stop_allway:
-        return "all_way_stop" if n_stop_dirs >= n_appr_dirs else "stop_partial_cover"
+        if args.require_sign_per_approach and n_stop_dirs < n_appr_dirs:
+            return "stop_partial_cover"
+        return "all_way_stop"
     if n_stop >= 1:
         return "partial_stop"
     if n_cross >= 1:
@@ -241,12 +274,21 @@ def scene_rows(m, args):
             n_cross = int((np.hypot(crosses[:, 0] - centre[0],
                                     crosses[:, 1] - centre[1])
                            <= args.zone_radius).sum()) if len(crosses) else 0
+            # stop_spread is the diagnostic for --clique_dist being too tight:
+            # if a 4-way stop's signs sit further apart than the threshold, the
+            # clique splits one junction into two "partial_stop" zones, and the
+            # all-way class empties out for a purely parametric reason.
+            stop_spread = 0.0
             if n_stop:
                 sel = stops[np.hypot(stops[:, 0] - centre[0],
                                      stops[:, 1] - centre[1]) <= args.zone_radius]
                 n_stop_dirs = _sectors(np.arctan2(sel[:, 1] - centre[1],
                                                   sel[:, 0] - centre[0]),
                                        args.sector_deg)
+                if len(sel) > 1:
+                    dd = np.hypot(sel[:, 0, None] - sel[None, :, 0],
+                                  sel[:, 1, None] - sel[None, :, 1])
+                    stop_spread = float(dd.max())
             else:
                 n_stop_dirs = 0
             n_appr = _approach_dirs(centre, lanes, args.zone_radius,
@@ -271,6 +313,7 @@ def scene_rows(m, args):
                                  n_appr, args),
                 n_stop=n_stop, n_crosswalk=n_cross, n_axes=n_axes,
                 n_stop_dirs=n_stop_dirs, n_approach_dirs=n_appr,
+                stop_spread=round(stop_spread, 1),
                 n_traversals=n_trav, n_copresent_pairs=n_pairs,
             ))
 
@@ -327,6 +370,35 @@ def main():
         n2 = sum(1 for r in sub if r["n_traversals"] >= 2)
         pairs = sum(r["n_copresent_pairs"] for r in sub)
         print(f"  {k:<20} {n:>7} {100*n/len(rows):>5.1f}% {n2:>13} {pairs:>16}")
+
+    # --- is --clique_dist the reason a class is empty? --------------------
+    sg = [r for r in rows if r["n_stop"] >= 1]
+    if sg:
+        hist = Counter(min(r["n_stop"], 6) for r in sg)
+        print(f"\n  STOP SIGNS PER ZONE (of {len(sg)} zones with any)")
+        for k in sorted(hist):
+            lbl = f"{k}" if k < 6 else "6+"
+            print(f"    n_stop={lbl:<3} {hist[k]:>7}  {100*hist[k]/len(sg):>5.1f}%")
+        sp = np.array([r["stop_spread"] for r in sg if r["n_stop"] >= 2])
+        if len(sp):
+            print(f"    stop-sign spread within a zone (m): med={np.median(sp):.1f} "
+                  f"p90={np.percentile(sp,90):.1f} max={sp.max():.1f}")
+            print(f"    -> if p90 is near --clique_dist ({args.clique_dist:.0f} m), "
+                  f"the threshold is truncating real junctions; re-run wider")
+
+    # coverage diagnostic: what the opt-in criterion (b) would cost
+    cand = [r for r in rows if r["n_stop"] >= args.min_stop_allway
+            and r["n_axes"] >= 2]
+    if cand:
+        pass_b = sum(1 for r in cand
+                     if r["n_stop_dirs"] >= r["n_approach_dirs"])
+        print(f"\n  CRITERION (b) one-sign-per-approach, as a DIAGNOSTIC:")
+        print(f"    {pass_b}/{len(cand)} zones with >={args.min_stop_allway} "
+              f"signs would survive it "
+              f"({'ON' if args.require_sign_per_approach else 'OFF'} in this run)")
+        print(f"    median n_stop_dirs={np.median([r['n_stop_dirs'] for r in cand]):.1f} "
+              f"vs n_approach_dirs={np.median([r['n_approach_dirs'] for r in cand]):.1f}"
+              f"  (approach dirs are inflated by turn connectors)")
 
     scenes_all = len({r["scenario_id"] for r in rows
                       if r["control"] == "all_way_stop"
