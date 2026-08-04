@@ -40,10 +40,20 @@ ZONES=${ZONES:-$SCRATCH_ROOT/regimes/junction_control_audit.csv}
 OUT=${OUT:-$SCRATCH_ROOT/regimes_rollout/$(basename "$(dirname "$CKPT")")}
 EPISODES=${EPISODES:-6}
 MAP_POOL=${MAP_POOL:-1000}
-# SLURM --export splits on commas, so a comma list of alphas is shredded into
-# separate variables and you silently get a one-point "sweep". Semicolons
-# survive; regime_rollout accepts either.   ALPHAS='-2;-1;0;1;2'
+# DO NOT pass a list of alphas through --export. Commas are the separator, so a
+# comma list is shredded into separate variables (that silently ran a one-point
+# "sweep" at alpha=-2), and the semicolon form arrived EMPTY, which argparse
+# rejected with "--alphas: expected one argument". Both failures were silent or
+# late. Use SWEEP=1 instead: the list is built INSIDE the script, where commas
+# are harmless, and nothing special has to survive --export.
+#
+#   SWEEP=1              -> -2,-1,0,1,2   (the standard dose-response)
+#   ALPHAS=0             -> natural only  (default)
+#   ALPHAS=<one number>  -> a single forced point
 ALPHAS=${ALPHAS:-0}
+SWEEP=${SWEEP:-0}
+case "$SWEEP" in 1|true|yes) ALPHAS="-2,-1,0,1,2" ;; esac
+[ -n "$ALPHAS" ] || { echo "ERROR: ALPHAS resolved to empty. Use SWEEP=1 for the"    "standard sweep, or ALPHAS=<single number>."; exit 1; }
 AXIS=${AXIS:-PC1}
 AXES=${AXES:-}
 DATA_DIR=${DATA_DIR:-pufferlib/resources/drive/binaries/training}
@@ -79,7 +89,7 @@ export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-16}
 mkdir -p "$OUT"
 echo "[roll] ckpt=$CKPT"
 echo "[roll] code=$CODE_DIR branch=$(git -C "$CODE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ?)"
-echo "[roll] alphas=$ALPHAS axis=$AXIS episodes=$EPISODES map_pool=$MAP_POOL"
+echo "[roll] alphas=$ALPHAS (sweep=$SWEEP) axis=$AXIS episodes=$EPISODES map_pool=$MAP_POOL"
 echo "[roll] out=$OUT"
 
 # C binding loads pufferlib/config/ocean/drive.ini via a relative path.
