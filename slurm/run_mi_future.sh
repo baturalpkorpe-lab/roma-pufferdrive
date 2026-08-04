@@ -62,6 +62,14 @@ IC=$(sbatch --parsable --dependency=afterok:$J \
      --export="$E,CKPT=$SAVE_DIR/roma_dim${D}_final.pt,OUT=$SCRATCH_ROOT/role_icc/mifutagent_${RUN}" \
      "$HERE/role_scene_icc.sbatch")
 echo "scene ICC (map-independence metric)    : $IC  (afterok:$J)"
+# ANALYZE=<analyze_*.sh>: queue the paired role analysis + video grid on the
+# same afterok, so the whole chain is submitted in one go instead of having to
+# come back once training lands. _analyze_common.sh skips its checkpoint-exists
+# check when WAIT_FOR is set, because the checkpoint cannot exist yet.
+if [ -n "${ANALYZE:-}" ]; then
+    echo
+    WAIT_FOR=$J ROLE_DIM=$D SCRATCH_ROOT=$SCRATCH_ROOT         bash "$HERE/$ANALYZE"
+fi
 echo
 echo "arch        -> road=$ROAD partner=$PARTNER mi_target=${MI_TARGET:-ego_partner} film=${ROLE_FILM:-0}"
 echo "div_weight  -> $DIV_WEIGHT"
