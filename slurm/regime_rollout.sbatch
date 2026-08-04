@@ -47,6 +47,12 @@ MAP_POOL=${MAP_POOL:-1000}
 # late. Use SWEEP=1 instead: the list is built INSIDE the script, where commas
 # are harmless, and nothing special has to survive --export.
 #
+# The python call below uses --alphas=<value>, NOT --alphas <value>. argparse
+# treats a token starting with "-" as an option unless it is a bare negative
+# number, so "--alphas -2,-1,0,1,2" is rejected with "expected one argument"
+# while "--alphas -2" is accepted. That is exactly why the first one-point run
+# went through and every list since did not.
+#
 #   SWEEP=1              -> -2,-1,0,1,2   (the standard dose-response)
 #   ALPHAS=0             -> natural only  (default)
 #   ALPHAS=<one number>  -> a single forced point
@@ -105,7 +111,7 @@ python "$CODE_DIR/regime_rollout.py" \
     --out_dir    "$OUT" \
     --episodes   "$EPISODES" \
     --map_pool   "$MAP_POOL" \
-    --alphas     "$ALPHAS" \
+    --alphas="$ALPHAS" \
     --axis       "$AXIS" \
     --device     cpu \
     $AXES_ARG $EXTRA \
