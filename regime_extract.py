@@ -247,6 +247,13 @@ def scene(m, args):
             min_dist_to_zone=(round(d_zone, 2) if np.isfinite(d_zone) else ""),
             nearest_zone_control=z_ctrl,
             v_at_t0=round(float(D["V"][e][np.flatnonzero(D["M"][e])[0]]), 3),
+            # GT trip geometry. The role encoder sees relative-goal x/y in the
+            # ego observation slice (drive.h), and the goal is the GT endpoint,
+            # so trip length is directly readable from the observation. If the
+            # role tracks these it is encoding the TASK, not a driving style.
+            gt_path_len=round(float(tr["s"][-1]), 2),
+            gt_goal_dist=round(float(np.hypot(tr["x"][-1] - tr["x"][0],
+                                              tr["y"][-1] - tr["y"][0])), 2),
             n_zones_scene=int(len(centres)),
         ))
     return conflicts, rows, len(tracks), n_reject
