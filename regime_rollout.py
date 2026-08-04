@@ -79,7 +79,17 @@ def parse_args():
                         "natural role (no shift), which is the reference arm.")
     p.add_argument("--axis", default="PC1")
     p.add_argument("--axes_csv", default="",
-                   help="role_paired_axes.csv; required for any alpha != 0")
+                   help="role_paired_axes.csv. OPTIONAL: without it the axis is "
+                        "derived from this checkpoint's own natural rollouts, "
+                        "which is safer -- role scales do NOT transfer between "
+                        "runs.")
+    p.add_argument("--axis_tol", type=float, default=10.0,
+                   help="abort if --axes_csv sigma differs from this "
+                        "checkpoint's measured natural sigma by more than this "
+                        "factor. A stale axes file gave sigma=729 against a "
+                        "measured 1.25 (580x), so alpha=-2 set the role to "
+                        "about -1458 and the whole sweep was off-manifold.")
+    p.add_argument("--skip_axis_check", action="store_true")
     p.add_argument("--device", default="cuda")
     p.add_argument("--dump_steps", action="store_true",
                    help="also write per-step z and regime arrays (npz) for the "
@@ -341,12 +351,38 @@ def main():
         raise SystemExit("role_dim=0 checkpoint -- nothing to analyse")
     print(f"[roll] role_dim={role_dim}")
 
-    alphas = [float(a) for a in args.alphas.split(",") if a.strip()]
+    alphas = [float(a) for a in args.alphas.replace(";", ",").split(",")
+              if a.strip()]
     axis_u = axis_sg = None
     if any(a != 0 for a in alphas):
-        if not args.axes_csv:
-            raise SystemExit("--axes_csv is required for any alpha != 0")
-        _, axis_u, axis_sg = load_axis(args.axes_csv, args.axis, role_dim)
+        # Measure the axis from THIS checkpoint. Role scales do not transfer
+        # between runs, and a stale axes file is silent: it just shifts the
+        # role somewhere the policy has never been.
+        from render_role_alpha import warmup_axes
+        _, ax_w = warmup_axes(env, policy, device, episodes=1,
+                              n_axes=max(1, role_dim))
+        if args.axis not in ax_w:
+            raise SystemExit(f"{args.axis} not derivable at role_dim={role_dim}; "
+                             f"have {sorted(ax_w)}")
+        u_w, sg_w = ax_w[args.axis]
+        print(f"[roll] measured natural sigma({args.axis}) = {sg_w:.4f}")
+        if args.axes_csv:
+            _, axis_u, axis_sg = load_axis(args.axes_csv, args.axis, role_dim)
+            ratio = axis_sg / max(sg_w, 1e-12)
+            print(f"[roll] axes_csv sigma = {axis_sg:.4f}  (ratio {ratio:.1f}x)")
+            if not args.skip_axis_check and (ratio > args.axis_tol
+                                             or ratio < 1.0 / args.axis_tol):
+                raise SystemExit(
+                    f"ABORT: --axes_csv sigma={axis_sg:.4g} but this "
+                    f"checkpoint's measured natural sigma={sg_w:.4g} "
+                    f"({ratio:.0f}x off).\n"
+                    f"       That axes file almost certainly belongs to a "
+                    f"DIFFERENT run -- role scales do not transfer.\n"
+                    f"       Drop --axes_csv to derive the axis from this "
+                    f"checkpoint, or pass --skip_axis_check if you mean it.")
+        else:
+            axis_u, axis_sg = u_w, sg_w
+            print(f"[roll] axis derived from this checkpoint")
         print(f"[roll] axis {args.axis} sigma={axis_sg:.4f}")
 
     from role_regime_analysis import _squeeze
