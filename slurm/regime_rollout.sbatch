@@ -40,6 +40,9 @@ ZONES=${ZONES:-$SCRATCH_ROOT/regimes/junction_control_audit.csv}
 OUT=${OUT:-$SCRATCH_ROOT/regimes_rollout/$(basename "$(dirname "$CKPT")")}
 EPISODES=${EPISODES:-6}
 MAP_POOL=${MAP_POOL:-1000}
+# SLURM --export splits on commas, so a comma list of alphas is shredded into
+# separate variables and you silently get a one-point "sweep". Semicolons
+# survive; regime_rollout accepts either.   ALPHAS='-2;-1;0;1;2'
 ALPHAS=${ALPHAS:-0}
 AXIS=${AXIS:-PC1}
 AXES=${AXES:-}
@@ -65,11 +68,13 @@ export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-16}
     echo "  git -C $CODE_DIR fetch -q origin baseline && \\"
     echo "  git -C $CODE_DIR checkout origin/baseline -- regime_rollout.py conflict_metrics.py"
     exit 1; }
-case "$ALPHAS" in
-    0|0.0) ;;
-    *) [ -n "$AXES" ] || { echo "ERROR: ALPHAS=$ALPHAS needs AXES=<role_paired_axes.csv>"; exit 1; }
-       [ -f "$AXES" ] || { echo "ERROR: axes csv not found: $AXES"; exit 1; } ;;
-esac
+# AXES is now OPTIONAL. Without it regime_rollout derives the axis from THIS
+# checkpoint's own natural rollouts, which is what you want: role scales do not
+# transfer between runs. A stale axes file declared sigma=729 against a measured
+# 1.25, so alpha=-2 set the role ~1200 sigma out of distribution and the job ran
+# three hours producing a plausible-looking table. If AXES is given,
+# regime_rollout scale-checks it and aborts on a mismatch.
+[ -z "$AXES" ] || [ -f "$AXES" ] || { echo "ERROR: axes csv not found: $AXES"; exit 1; }
 
 mkdir -p "$OUT"
 echo "[roll] ckpt=$CKPT"
