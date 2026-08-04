@@ -71,6 +71,14 @@ check("PET ~ 1.0 - clear time", mt["pet"], 0.67, 0.2)
 # leader then is at x=-20, so 2 s out -> TA = 3 - 2 = +1
 check("TA at decision", float(mt["ta_at_decision"]), 1.0, 0.25)
 check("both passed", mt["both_passed"], 1)
+# Regression guard: TA must not depend on tau_dec. The first version searched
+# for the step where the follower was tau_dec of travel out, which pinned
+# t_follower at tau_dec and left TA = tau_dec - t_leader -- a function of the
+# leader, which is the outcome. On the 10k pool that gave median TA 2.99 against
+# tau_dec 3.0 and a logistic fit separating at 98.5%.
+mt6 = CM.conflict_metrics(A, B, cp, kind, tau_dec=6.0)
+check("TA independent of tau_dec", float(mt6["ta_at_decision"]),
+      float(mt["ta_at_decision"]), 0.01)
 
 print("\n2. MERGING: converging from separated lanes, paths never intersect")
 # A holds y=0. B starts 12 m off to the side and closes to 1.2 m, so the paths

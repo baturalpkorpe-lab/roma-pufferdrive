@@ -364,21 +364,40 @@ def conflict_metrics(a, b, cp, kind, tau_dec=3.0, clear_pad=1.0,
     # --- PET: follower arrives minus leader clears ------------------------
     pet = (fo["i0"] + i_fo - s_clear) / HZ
 
-    # --- decision moment: follower ~tau_dec of travel from the point ------
-    # The covariate must describe the situation BEFORE it resolves, so it is
-    # read off when the follower is still tau_dec away, not at arrival.
+    # --- decision moment: the START of the encounter ----------------------
+    # Both projections are read at the SAME instant, and that instant is fixed
+    # by co-presence, not by either vehicle's own progress.
+    #
+    # The previous version searched for the step where the FOLLOWER was tau_dec
+    # of travel from the point. That pins t_follower at tau_dec by construction,
+    # so TA collapsed to (tau_dec - t_leader): a function of the leader alone,
+    # and the leader IS the outcome. Measured on the 10k pool it produced a
+    # median TA of 2.99 s against tau_dec=3.0, only 1.1% of conflicts looking
+    # contested, and a logistic fit that separated at 98.5% accuracy with the
+    # slope running to -59. Circular, and it left no residual variance for a
+    # role term to explain.
+    #
+    # Anchoring on any moment defined by the arrivals has the same defect: the
+    # vehicle that arrives first is nearer at every such anchor, so sign(TA)
+    # reproduces the outcome. The gap has to be read EARLY, while both are still
+    # approaching on pre-negotiation speeds -- which is also where Rahmani et al.
+    # find their informative cases, the ones where "the vehicle that ultimately
+    # passed first was temporarily projected to arrive second".
     ta_dec, i_dec = np.nan, None
-    pre = np.flatnonzero((np.arange(fo["n"]) < i_fo) & (fo["v"] > v_floor) &
-                         (d_fo > 0.1))
-    if len(pre):
-        tt = d_fo[pre] / fo["v"][pre]
-        i_dec = int(pre[int(np.argmin(np.abs(tt - tau_dec)))])
-        s_dec = fo["i0"] + i_dec
-        j = s_dec - ld["i0"]
-        if 0 <= j < ld["n"]:
-            t_fo = d_fo[i_dec] / max(fo["v"][i_dec], v_floor)
-            t_ld = max(d_ld[j], 0.0) / max(ld["v"][j], v_floor)
-            ta_dec = float(t_fo - t_ld)      # >0: follower projected later
+    for s in range(lo, min(sa, sb) + 1):
+        ja, jb = s - fo["i0"], s - ld["i0"]
+        if not (0 <= ja < fo["n"] and 0 <= jb < ld["n"]):
+            continue
+        if d_fo[ja] <= 0.5 or d_ld[jb] <= 0.5:       # one already arrived
+            continue
+        if fo["v"][ja] <= v_floor or ld["v"][jb] <= v_floor:
+            continue                                  # stopped: no projection
+        t_fo = d_fo[ja] / fo["v"][ja]
+        t_ld = d_ld[jb] / ld["v"][jb]
+        ta_dec = float(t_fo - t_ld)                   # >0: ego arrives later
+        i_dec = ja
+        break
+    _ = tau_dec                                       # kept for the CSV column
 
     return dict(
         leader_id=ld["id"], follower_id=fo["id"],
