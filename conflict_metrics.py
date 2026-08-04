@@ -110,6 +110,46 @@ def vehicle_tracks(objects, move_ms=MOVE_MS, min_steps=15):
     return out
 
 
+def tracks_from_arrays(xs, ys, hs, ids, keep, teleport_m=4.0,
+                       move_ms=MOVE_MS, min_steps=15,
+                       widths=None, lengths=None):
+    """Rollout arrays -> the same track dicts vehicle_tracks() builds from GT.
+
+    xs/ys/hs are (T, B) as the rollout loops produce them; `keep` is a boolean
+    mask over agents (vehicles with a real scenario id). This is what lets the
+    policy side reuse every conflict and regime function unchanged, so the human
+    reference and the swept policy are never measured by two implementations.
+
+    A rollout track is truncated at its first TELEPORT: when an agent's goal is
+    reached (or it is respawned) the position jumps, and differencing across that
+    invents a several-hundred-m/s step that would poison every speed-derived
+    metric. Same threshold the render and sweep paths use.
+    """
+    T, B = xs.shape
+    out = []
+    for a in range(B):
+        if not keep[a]:
+            continue
+        step = np.hypot(np.diff(xs[:, a]), np.diff(ys[:, a]))
+        jump = np.flatnonzero(step > teleport_m)
+        end = int(jump[0] + 1) if len(jump) else T
+        if end < min_steps:
+            continue
+        x = xs[:end, a].astype(float)
+        y = ys[:end, a].astype(float)
+        h = hs[:end, a].astype(float)
+        spd = np.hypot(np.gradient(x), np.gradient(y)) * HZ
+        if spd.max() <= move_ms:
+            continue
+        d = np.hypot(np.diff(x), np.diff(y))
+        out.append(dict(id=int(ids[a]), i0=0, n=end, x=x, y=y, h=h, v=spd,
+                        s=np.concatenate([[0.0], np.cumsum(d)]),
+                        slot=int(a),
+                        width=float(widths[a]) if widths is not None else 2.0,
+                        length=float(lengths[a]) if lengths is not None else 4.5))
+    return out
+
+
 def _overlap(a, b):
     """Absolute step range where two tracks are both valid."""
     lo = max(a["i0"], b["i0"])
