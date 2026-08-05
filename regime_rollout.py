@@ -90,6 +90,16 @@ def parse_args():
                         "measured 1.25 (580x), so alpha=-2 set the role to "
                         "about -1458 and the whole sweep was off-manifold.")
     p.add_argument("--skip_axis_check", action="store_true")
+    p.add_argument("--causal_csv", default="",
+                   help="role_causal_axis.csv. Sweep the MEASURED CAUSAL axis "
+                        "instead of a PC. role_causal_axis showed PC1 has "
+                        "NEGATIVE cos with the causal direction for speed in "
+                        "both dim-4 arms -- sweeping it moves behaviour the "
+                        "wrong way -- while the true axis carries 2.0-5.7x more "
+                        "effect. At role_dim=1 this degrades to the same single "
+                        "axis, harmlessly.")
+    p.add_argument("--causal_metric", default="speed_mean",
+                   help="which metric's causal axis to sweep from --causal_csv")
     p.add_argument("--device", default="cuda")
     p.add_argument("--dump_steps", action="store_true",
                    help="also write per-step z and regime arrays (npz) for the "
@@ -354,6 +364,7 @@ def main():
     alphas = [float(a) for a in args.alphas.replace(";", ",").split(",")
               if a.strip()]
     axis_u = axis_sg = None
+    axis_name = args.axis
     if any(a != 0 for a in alphas):
         # Measure the axis from THIS checkpoint. Role scales do not transfer
         # between runs, and a stale axes file is silent: it just shifts the
@@ -366,8 +377,34 @@ def main():
                              f"have {sorted(ax_w)}")
         u_w, sg_w = ax_w[args.axis]
         print(f"[roll] measured natural sigma({args.axis}) = {sg_w:.4f}")
-        if args.axes_csv:
+
+        if args.causal_csv:
+            # The causal axis is per-metric: g0..g{D-1} for the requested row.
+            # Scale stays this checkpoint's measured sigma, so alpha keeps
+            # meaning "sigmas of role movement" and the numbers stay comparable
+            # with the PC sweeps.
+            import pandas as pd
+            cdf = pd.read_csv(args.causal_csv)
+            row = cdf[cdf["metric"] == args.causal_metric]
+            if not len(row):
+                raise SystemExit(f"metric {args.causal_metric} not in "
+                                 f"{args.causal_csv}; have "
+                                 f"{sorted(cdf['metric'].unique())[:8]}...")
+            g = row[[f"g{i}" for i in range(role_dim)]].values[0].astype(float)
+            gn = float(np.linalg.norm(g))
+            if gn < 1e-9:
+                raise SystemExit("causal axis is all zeros for that metric")
+            axis_u, axis_sg = g / gn, sg_w
+            axis_name = f"CAUSAL-{args.causal_metric}"
+            cos_pc = float(np.dot(axis_u, u_w))
+            print(f"[roll] CAUSAL axis for '{args.causal_metric}': "
+                  f"{np.round(axis_u, 3).tolist()}")
+            print(f"[roll]   cos with {args.axis} = {cos_pc:+.3f}"
+                  + ("   <- the PC sweep moves this metric the WRONG WAY"
+                     if cos_pc < 0 else ""))
+        elif args.axes_csv:
             _, axis_u, axis_sg = load_axis(args.axes_csv, args.axis, role_dim)
+            axis_name = args.axis
             ratio = axis_sg / max(sg_w, 1e-12)
             print(f"[roll] axes_csv sigma = {axis_sg:.4f}  (ratio {ratio:.1f}x)")
             if not args.skip_axis_check and (ratio > args.axis_tol
@@ -381,13 +418,13 @@ def main():
                     f"       Drop --axes_csv to derive the axis from this "
                     f"checkpoint, or pass --skip_axis_check if you mean it.")
         else:
-            axis_u, axis_sg = u_w, sg_w
+            axis_u, axis_sg, axis_name = u_w, sg_w, args.axis
             print(f"[roll] axis derived from this checkpoint")
-        print(f"[roll] axis {args.axis} sigma={axis_sg:.4f}")
+        print(f"[roll] sweeping {axis_name}  sigma={axis_sg:.4f}")
 
     from role_regime_analysis import _squeeze
     for al in alphas:
-        tag = "natural" if al == 0 else f"{args.axis}{al:+g}"
+        tag = "natural" if al == 0 else f"{axis_name}{al:+g}"
         shift = None if al == 0 else al * axis_sg * axis_u
         C, R = [], []
         for ep in range(args.episodes):
