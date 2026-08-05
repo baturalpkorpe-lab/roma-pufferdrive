@@ -3,7 +3,7 @@
 #SBATCH --partition=compute
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem-per-cpu=4G
+#SBATCH --mem-per-cpu=3900M
 #SBATCH --time=05:00:00
 #SBATCH --account=research-ceg-tp
 #SBATCH --output=causal_ax_cpu_%j.out
