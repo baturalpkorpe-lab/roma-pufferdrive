@@ -53,7 +53,10 @@ def parse_args():
     p.add_argument("--conflicts", help="conflicts_gt.csv or a rollout equivalent")
     p.add_argument("--role_csv", default="",
                    help="optional: scenario_id, vehicle_id, <role_col>")
-    p.add_argument("--role_col", default="pc1")
+    p.add_argument("--role_col", default="pc1",
+                   help="role column. Taken from --role_csv if given, else used "
+                        "directly if the conflicts file already has it -- which "
+                        "regime_rollout output does, as role_dec_<d>.")
     p.add_argument("--out", default="", help="optional CSV of the fit table")
     p.add_argument("--boot", type=int, default=400)
     p.add_argument("--min_n", type=int, default=60,
@@ -185,6 +188,15 @@ def load(args):
         df = df[np.isfinite(pd.to_numeric(df[args.role_col], errors="coerce"))]
         print(f"[gap] role join kept {len(df)}/{n0} rows")
         role_col = args.role_col
+    elif args.role_col in df.columns:
+        # The rollout conflicts already carry role_dec_<d>: the role the policy
+        # was ACTING ON at the decision step, which is a better covariate than
+        # any episode mean joined in from outside. Use it directly rather than
+        # forcing a self-join.
+        df[args.role_col] = pd.to_numeric(df[args.role_col], errors="coerce")
+        df = df[np.isfinite(df[args.role_col])]
+        role_col = args.role_col
+        print(f"[gap] using in-file role column '{role_col}' ({len(df)} rows)")
     return df, role_col
 
 
