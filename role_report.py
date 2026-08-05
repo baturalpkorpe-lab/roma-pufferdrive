@@ -61,6 +61,9 @@ def parse_args():
     p.add_argument("--icc_csv", default="")
     p.add_argument("--top", type=int, default=10,
                    help="rows to show in the old/causal tables")
+    p.add_argument("--by", default="control",
+                   help="stratify section 5 by 'control' (right-of-way) or "
+                        "'kind' (merging vs crossing)")
     p.add_argument("--out", default="")
     return p.parse_args()
 
@@ -173,6 +176,64 @@ def regime_table(roll_dir, gt_regimes, gt_conflicts):
     return df
 
 
+def conflict_breakdown(roll_dir, gt_conflicts, by="control"):
+    """Conflict metrics split by right-of-way class -- the pre-registered
+    stratification.
+
+    Section 4 pools every junction type together, which hides the comparison the
+    whole thing was built for: the role should have the most room where
+    right-of-way is SYMMETRIC (all-way stop) and least where it is externally
+    imposed (traffic light). On ground truth 23.5% of the go/yield decision is
+    unexplained by geometry at all-way stops against 10.8% at signalised, so the
+    headroom is there -- this table says whether the role uses it.
+    """
+    rows = []
+    if gt_conflicts and os.path.exists(gt_conflicts):
+        g = pd.read_csv(gt_conflicts)
+        if by in g.columns:
+            for k, sub in g.groupby(by):
+                r = {"alpha": "HUMAN", by: k, "n_conf": len(sub) // 2}
+                for m in ("pet", "min_ttc", "mrd"):
+                    v, _ = _med(sub, m)
+                    r[m] = round(v, 3) if np.isfinite(v) else np.nan
+                rows.append(r)
+
+    for f in sorted(glob.glob(os.path.join(roll_dir, "conflicts_*.csv"))):
+        t = os.path.basename(f)[10:-4]
+        a = 0.0 if t == "natural" else float(
+            re.sub(r"^[A-Za-z0-9_\-]*?(?=[+-]\d)", "", t))
+        c = pd.read_csv(f)
+        if by not in c.columns:
+            continue
+        for k, sub in c.groupby(by):
+            r = {"alpha": a, by: k, "n_conf": len(sub) // 2}
+            for m in ("pet", "min_ttc", "mrd"):
+                v, _ = _med(sub, m)
+                r[m] = round(v, 3) if np.isfinite(v) else np.nan
+            if "ego_went_first" in sub.columns:
+                r["go_rate"] = round(float(
+                    pd.to_numeric(sub["ego_went_first"],
+                                  errors="coerce").mean()), 3)
+            rows.append(r)
+
+    if not rows:
+        print(f"  (no '{by}' column in the conflict files -- regenerate with a "
+              f"regime_rollout that emits it)")
+        return None
+    df = pd.DataFrame(rows)
+    order = ["all_way_stop", "partial_stop", "signalised_likely", "uncontrolled"]
+    df["_o"] = df[by].apply(lambda v: order.index(v) if v in order else 99)
+    df["_a"] = df["alpha"].apply(lambda v: -99 if v == "HUMAN" else float(v))
+    df = df.sort_values(["_o", "_a"]).drop(columns=["_o", "_a"])
+    print(df.to_string(index=False))
+    print("\n  Read DOWN each control block: does the role move the metrics")
+    print("  more where right-of-way is symmetric (all_way_stop) than where a")
+    print("  light decides (signalised_likely)? That ordering is the")
+    print("  pre-registered prediction. go_rate near 0.5 is forced by the")
+    print("  mirrored rows and is only a file check.")
+    return df
+
+
 def icc_row(path, tag):
     if not path or not os.path.exists(path):
         print(f"  (no {path})")
@@ -203,6 +264,12 @@ def main():
 
     section("4. NEW ANALYSIS -- style parameters in their own regimes")
     regime_table(args.rollout_dir, args.gt_regimes, args.gt_conflicts)
+
+    section("5. CONFLICTS BY RIGHT-OF-WAY -- the pre-registered stratification")
+    if args.rollout_dir and os.path.isdir(args.rollout_dir):
+        conflict_breakdown(args.rollout_dir, args.gt_conflicts, args.by)
+    else:
+        print(f"  (no rollout dir {args.rollout_dir})")
 
     print("\n" + "=" * 78)
     print("  READ IN THIS ORDER: the accel_mask_frac audit (section 2) gates")
