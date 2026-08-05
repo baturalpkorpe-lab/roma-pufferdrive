@@ -275,6 +275,17 @@ def scene_rows(sid, tracks, zs, zones, args, episode=0):
             fol[max(t0, 0):min(t1, tr["n"])] = True
         v_free = float(np.nanmean(D["V"][e][ff[e]])) if n_free else np.nan
 
+        fol_T = np.zeros(T, bool)
+        for t0, t1, _ in segs:
+            fol_T[max(t0, 0):min(t1, T)] = True
+        zone_T = np.zeros(T, bool)
+        if len(centres):
+            dd = np.hypot(D["X"][e][:, None] - centres[None, :, 0],
+                          D["Y"][e][:, None] - centres[None, :, 1])
+            zone_T = np.nan_to_num(dd.min(1), nan=np.inf) <= args.zone_radius
+        kin = CM.kinematics_by_regime(D, e, {"ff": ff[e], "fol": fol_T,
+                                             "zone": zone_T})
+
         zz = zt[e]
         def zmean(mask):
             return (zz[mask].mean(0) if mask.any()
@@ -294,6 +305,7 @@ def scene_rows(sid, tracks, zs, zones, args, episode=0):
             v_freeflow_rel=(round(v_free / v_ref, 4)
                             if np.isfinite(v_free) and np.isfinite(v_ref)
                             and v_ref > 0.1 else ""),
+            **kin,
         )
         for d in range(ndim):
             row[f"role_{d}"] = round(float(z_all[d]), 4)

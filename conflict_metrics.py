@@ -578,6 +578,43 @@ def freeflow_mask(D, e, leader_row, zones, zone_radius=25.0, v_min=2.0):
     return m
 
 
+def kinematics_by_regime(D, e, masks):
+    """Classic kinematics measured SEPARATELY IN EACH REGIME.
+
+    The style parameters (desired speed, headway, gap acceptance) answer "what
+    kind of driver is this". The classic kinematics answer "what did it do", and
+    pooling them across situations is exactly the dilution the regime split
+    exists to remove: mean speed while free-flowing and mean speed while
+    following a queue are different quantities, and an effect present in one can
+    be cancelled by the other. The old analysis reports only the pooled version.
+
+    masks: {"ff": (T,) bool, "fol": ..., "zone": ...}. They may overlap -- an
+    agent can follow a leader INSIDE a junction -- because these are situations,
+    not a partition.
+
+    Shared so the human reference and the policy are measured identically.
+    """
+    V = np.nan_to_num(D["V"][e])
+    H = np.nan_to_num(D["H"][e])
+    acc = np.gradient(V) * HZ
+    jrk = np.gradient(acc) * HZ
+    trn = np.abs(np.concatenate([[0.0], wrap(np.diff(H))])) * HZ
+    out = {}
+    for name, m in masks.items():
+        m = np.asarray(m, bool) & D["M"][e]
+        n = int(m.sum())
+        out[f"n_{name}"] = n
+        if n < 3:
+            for k in ("speed", "accel", "jerk", "turn"):
+                out[f"{k}_{name}"] = ""
+            continue
+        out[f"speed_{name}"] = round(float(V[m].mean()), 3)
+        out[f"accel_{name}"] = round(float(np.abs(acc[m]).mean()), 3)
+        out[f"jerk_{name}"] = round(float(np.abs(jrk[m]).mean()), 3)
+        out[f"turn_{name}"] = round(float(trn[m].mean()), 4)
+    return out
+
+
 def scene_reference_speed(D, masks, q=85.0):
     """What the scene AFFORDS: the q-th percentile of free-flow speed over
     every moving vehicle in it.

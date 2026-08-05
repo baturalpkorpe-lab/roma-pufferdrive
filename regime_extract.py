@@ -218,6 +218,18 @@ def scene(m, args):
                 d_zone = float(np.nanmin(dd))
                 z_ctrl = Z[int(np.nanargmin(np.nanmin(dd, axis=0)))]["control"]
 
+        # classic kinematics measured separately in each situation
+        fol_m = np.zeros(T_STEPS, bool)
+        for t0, t1, _ in segs:
+            fol_m[max(t0, 0):min(t1, T_STEPS)] = True
+        zone_m = np.zeros(T_STEPS, bool)
+        if len(centres):
+            dd = np.hypot(D["X"][e][:, None] - centres[None, :, 0],
+                          D["Y"][e][:, None] - centres[None, :, 1])
+            zone_m = np.nan_to_num(dd.min(1), nan=np.inf) <= args.zone_radius
+        kin = CM.kinematics_by_regime(D, e, {"ff": ff[e], "fol": fol_m,
+                                             "zone": zone_m})
+
         fr = {"conflict": 1.0 if tr["id"] in in_conf else 0.0,
               "following": n_follow / max(n_valid, 1),
               "freeflow": n_free / max(n_valid, 1)}
@@ -255,6 +267,7 @@ def scene(m, args):
             gt_goal_dist=round(float(np.hypot(tr["x"][-1] - tr["x"][0],
                                               tr["y"][-1] - tr["y"][0])), 2),
             n_zones_scene=int(len(centres)),
+            **kin,
         ))
     return conflicts, rows, len(tracks), n_reject
 

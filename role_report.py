@@ -61,6 +61,9 @@ def parse_args():
     p.add_argument("--icc_csv", default="")
     p.add_argument("--top", type=int, default=10,
                    help="rows to show in the old/causal tables")
+    p.add_argument("--classic", default="speed,accel",
+                   help="comma list of classic kinematics to show per regime: "
+                        "speed, accel, jerk, turn")
     p.add_argument("--by", default="control",
                    help="stratify section 5 by 'control' (right-of-way) or "
                         "'kind' (merging vs crossing)")
@@ -234,6 +237,58 @@ def conflict_breakdown(roll_dir, gt_conflicts, by="control"):
     return df
 
 
+def classic_by_regime(roll_dir, gt_regimes, metric="speed"):
+    """A CLASSIC kinematic measured separately in each situation.
+
+    The old analysis reports speed/accel/jerk pooled over everything the agent
+    did. That is the dilution the regime split exists to remove: on a synthetic
+    trajectory that free-flows at 19.8 m/s then follows at 5.0, the pooled mean
+    is 12.3 -- a number describing neither half. An effect confined to one
+    situation can be cancelled by another in the pooled figure.
+
+    Columns are <metric>_ff (free flow), _fol (following), _zone (inside a
+    junction). They overlap on purpose: an agent can follow a leader INSIDE a
+    junction, because these are situations, not a partition.
+    """
+    cols = [f"{metric}_{r}" for r in ("ff", "fol", "zone")]
+    rows = []
+    if gt_regimes and os.path.exists(gt_regimes):
+        g = pd.read_csv(gt_regimes)
+        if any(c in g.columns for c in cols):
+            r = {"alpha": "HUMAN"}
+            for c in cols:
+                v, n = _med(g, c)
+                r[c] = round(v, 3) if np.isfinite(v) else np.nan
+                r["n_" + c.split("_")[-1]] = n
+            rows.append(r)
+    for f in sorted(glob.glob(os.path.join(roll_dir, "regimes_*.csv"))):
+        t = os.path.basename(f)[8:-4]
+        a = 0.0 if t == "natural" else float(
+            re.sub(r"^[A-Za-z0-9_\-]*?(?=[+-]\d)", "", t))
+        d = pd.read_csv(f)
+        if not any(c in d.columns for c in cols):
+            continue
+        r = {"alpha": a}
+        for c in cols:
+            v, n = _med(d, c)
+            r[c] = round(v, 3) if np.isfinite(v) else np.nan
+            r["n_" + c.split("_")[-1]] = n
+        rows.append(r)
+    if not rows:
+        print(f"  (no {metric}_ff / _fol / _zone columns -- regenerate with a "
+              f"regime_extract and regime_rollout that emit them)")
+        return None
+    df = pd.DataFrame(rows)
+    df["_a"] = df["alpha"].apply(lambda v: -99 if v == "HUMAN" else float(v))
+    df = df.sort_values("_a").drop(columns=["_a"])
+    print(df.to_string(index=False))
+    print(f"\n  The old table reports ONE pooled {metric}. These three are the")
+    print("  same quantity in free flow, while following, and inside a")
+    print("  junction -- where a role effect can be strong in one and absent")
+    print("  in another, which pooling hides.")
+    return df
+
+
 def icc_row(path, tag):
     if not path or not os.path.exists(path):
         print(f"  (no {path})")
@@ -265,7 +320,16 @@ def main():
     section("4. NEW ANALYSIS -- style parameters in their own regimes")
     regime_table(args.rollout_dir, args.gt_regimes, args.gt_conflicts)
 
-    section("5. CONFLICTS BY RIGHT-OF-WAY -- the pre-registered stratification")
+    section("5. CLASSIC KINEMATICS, PER REGIME (not pooled)")
+    if args.rollout_dir and os.path.isdir(args.rollout_dir):
+        for m in args.classic.split(","):
+            if m.strip():
+                print(f"\n  --- {m.strip()} ---")
+                classic_by_regime(args.rollout_dir, args.gt_regimes, m.strip())
+    else:
+        print(f"  (no rollout dir {args.rollout_dir})")
+
+    section("6. CONFLICTS BY RIGHT-OF-WAY -- the pre-registered stratification")
     if args.rollout_dir and os.path.isdir(args.rollout_dir):
         conflict_breakdown(args.rollout_dir, args.gt_conflicts, args.by)
     else:
