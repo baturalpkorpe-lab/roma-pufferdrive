@@ -75,11 +75,19 @@ COMPLIANCE_WEIGHT=${COMPLIANCE_WEIGHT:-0}
 PERTURB_FRAC=${PERTURB_FRAC:-0}
 PERTURB_ALPHA=${PERTURB_ALPHA:-2.0}
 COMPLIANCE_PERTURBED_ONLY=${COMPLIANCE_PERTURBED_ONLY:-1}
+# MI_EXCLUDE_PERTURBED=1 fits the MI decoder on NATURAL roles only. Without it
+# the decoder is trained on the SHIFTED role against the perturbed agent's own
+# realised future, so it learns "this shift means whatever just happened" and
+# compliance is satisfied with no behaviour change. It goes in the arch tag
+# because it changes what the run IS -- and because a fixed run must not
+# auto-resume from a checkpoint of the broken one.
+MI_EXCLUDE_PERTURBED=${MI_EXCLUDE_PERTURBED:-0}
+case "$MI_EXCLUDE_PERTURBED" in 1|true|yes) MIFIX_TAG=_mifix ;; *) MIFIX_TAG= ;; esac
 case "$COMPLIANCE_WEIGHT" in 0|0.|0.0|0.00) COMPLY_TAG= ;; *) COMPLY_TAG=_comply ;; esac
 ROLE_FILM=${ROLE_FILM:-0}
 case "$ROLE_FILM" in 1|true|yes) FILM_ARG="--role_film"; FILM_TAG=_film ;;
                      *)          FILM_ARG=""          ; FILM_TAG=      ;; esac
-ARCH_TAG=_r${ROLE_ROAD_DIM}p${ROLE_PARTNER_DIM}_${MI_TAG}${FILM_TAG}${COMPLY_TAG}
+ARCH_TAG=_r${ROLE_ROAD_DIM}p${ROLE_PARTNER_DIM}_${MI_TAG}${FILM_TAG}${COMPLY_TAG}${MIFIX_TAG}
 
 # ---- The ablation ---------------------------------------------------------
 DIV_WEIGHT=${DIV_WEIGHT:-0.1}                # 0 = diversity loss OFF
@@ -212,7 +220,7 @@ echo "[mifut] role view: road=$ROLE_ROAD_DIM partner=$ROLE_PARTNER_DIM  mi_targe
 # the only report that proves it.
 echo "[mifut] FiLM conditioning: ${FILM_ARG:-off}"
 echo "[mifut] compliance=$COMPLIANCE_WEIGHT perturb_frac=$PERTURB_FRAC alpha=$PERTURB_ALPHA"
-echo "[mifut] compliance_perturbed_only=$COMPLIANCE_PERTURBED_ONLY"
+echo "[mifut] compliance_perturbed_only=$COMPLIANCE_PERTURBED_ONLY mi_exclude_perturbed=$MI_EXCLUDE_PERTURBED"
 echo "[mifut] div_weight=$DIV_WEIGHT  mi_weight=$MI_WEIGHT  wandb_name=$WANDB_NAME"
 echo "[mifut] code=$CODE_DIR  save=$SAVE_DIR"
 echo "[mifut] branch=$(git -C "$CODE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ?) commit=$(git -C "$CODE_DIR" rev-parse --short HEAD 2>/dev/null || echo ?)"
@@ -232,6 +240,7 @@ python "$CODE_DIR/roma_pufferdrive/train_roma.py" \
     --perturb_frac      "$PERTURB_FRAC" \
     --perturb_alpha     "$PERTURB_ALPHA" \
     --compliance_perturbed_only "$COMPLIANCE_PERTURBED_ONLY" \
+    --mi_exclude_perturbed "$MI_EXCLUDE_PERTURBED" \
     $FILM_ARG \
     --data_dir      "$DATA_DIR" \
     --num_maps      "$NUM_MAPS" \

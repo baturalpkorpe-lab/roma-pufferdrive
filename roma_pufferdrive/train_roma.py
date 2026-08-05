@@ -216,6 +216,23 @@ def parse_args():
                         "agents, so natural driving stays governed by the task "
                         "reward and the policy cannot farm compliance by making "
                         "its behaviour trivially predictable.")
+    p.add_argument("--mi_exclude_perturbed", type=int, default=0,
+                   help="1 = fit the MI decoder on UNPERTURBED agents only. "
+                        "Off (the original behaviour), the MI loss is computed "
+                        "on the SHIFTED role against the perturbed agent's own "
+                        "realised future, so the decoder learns 'this shifted "
+                        "role means whatever just happened'. The compliance "
+                        "reward is then satisfied with no behaviour change at "
+                        "all: the target moves to meet the policy. And the "
+                        "decoder wins that race by construction -- it gets a "
+                        "direct supervised gradient while the policy only gets "
+                        "a scalar reward through PPO. Measured on dim-4: every "
+                        "causal effect shrank 4-11x with compliance on, and "
+                        "none changed sign. With this on, MIDecoder(z+shift) "
+                        "extrapolates the mapping learned from natural roles "
+                        "and is a FIXED target, so reducing the compliance "
+                        "error requires the policy to actually move. Only has "
+                        "any effect when --perturb_frac > 0.")
     p.add_argument("--role_film", action="store_true",
                    help="FiLM-condition the policy on the role: the role emits "
                         "a per-feature scale and shift for the env embedding "
@@ -1224,9 +1241,18 @@ def train(args):
                     # gradient to the role encoder.
                     # FUTURE MI: the target window is the one stored at t+H
                     # (embeddings t+1..t+H for H=8), masked where invalid.
+                    # MI target mask. With --mi_exclude_perturbed the decoder is
+                    # fit on NATURAL roles only, so MIDecoder(z+shift) stays a
+                    # fixed extrapolation rather than drifting onto whatever the
+                    # perturbed agent happened to do. Without it the decoder and
+                    # the policy co-adapt and the cheapest agreement is "the
+                    # shift means nothing" -- which is what the dim-4 arms did.
+                    mi_m = fut_ok[mb]
+                    if use_perturb and args.mi_exclude_perturbed:
+                        mi_m = mi_m & (b_pert[mb].abs().sum(-1) == 0)
                     aux = aux_loss_fn(role_info["role_z"], role_info["role_mean"],
                                       role_info["role_log_var"],
-                                      b_embwin[fut_idx[mb]], mi_mask=fut_ok[mb])
+                                      b_embwin[fut_idx[mb]], mi_mask=mi_m)
 
                     loss = (pl
                             + args.vf_coef * vl
