@@ -171,7 +171,7 @@ def rollout(env, policy, device, shift_vec=None):
     return xs, ys, hs, zs, gt
 
 
-def scene_rows(sid, tracks, zs, zones, args):
+def scene_rows(sid, tracks, zs, zones, args, episode=0):
     """Conflicts + per-trajectory regimes for ONE scene of a rollout.
 
     Mirrors regime_extract.scene(); the difference is that zones are given
@@ -238,7 +238,7 @@ def scene_rows(sid, tracks, zs, zones, args):
                             zrow = {f"role_dec_{d}": round(float(zt[ei][k, d]), 4)
                                     for d in range(ndim)}
                         conflicts.append(dict(
-                            scenario_id=sid, vehicle_id=ego["id"],
+                            scenario_id=sid, episode=episode, vehicle_id=ego["id"],
                             other_id=oth["id"], ego_went_first=went,
                             kind=kind, control=z["control"],
                             heading_diff_deg=round(float(dh), 1),
@@ -409,7 +409,7 @@ def main():
                 tr = CM.tracks_from_arrays(xs, ys, hs, vids, m, TELEPORT_M)
                 if not tr:
                     continue
-                c, r = scene_rows(sid, tr, zs, zones_by_sid.get(sid, []), args)
+                c, r = scene_rows(sid, tr, zs, zones_by_sid.get(sid, []), args, ep)
                 C += c
                 R += r
             print(f"[roll] {tag} ep {ep+1}/{args.episodes}: "

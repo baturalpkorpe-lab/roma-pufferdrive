@@ -169,6 +169,13 @@ def load(args):
     lo = np.minimum(df["vehicle_id"], df["other_id"]).astype(str)
     hi = np.maximum(df["vehicle_id"], df["other_id"]).astype(str)
     df["cid"] = df["scenario_id"].astype(str) + "_" + lo + "_" + hi
+    # Rollouts resample the map pool each episode, so the SAME scenario and
+    # vehicle pair recurs across episodes. Without the episode in the key those
+    # separate encounters collapse into one "conflict": the first rollout run
+    # gave 3026 rows over 349 unique ids, ~8.7 rows each, which both
+    # double-counts in the fit and starves the conflict-level bootstrap.
+    if "episode" in df.columns:
+        df["cid"] = df["cid"] + "_e" + df["episode"].astype(str)
 
     role_col = None
     if args.role_csv:
