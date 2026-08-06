@@ -200,6 +200,12 @@ def scene_rows(sid, tracks, zs, zones, args, episode=0):
 
     conflicts = []
     if zones:
+        # `seen` is per SCENE, not per zone. Resetting it inside the zone loop
+        # emitted a pair once for every zone it appeared in -- the rollout came
+        # out at 2766 rows over 763 conflicts, 3.6 per conflict instead of 2,
+        # which both double-counts in any fit and breaks the conflict-level
+        # bootstrap. regime_extract already scopes it correctly.
+        seen, tested = set(), 0
         for z in zones:
             here = []
             for e, tr in enumerate(tracks):
@@ -207,7 +213,6 @@ def scene_rows(sid, tracks, zs, zones, args, episode=0):
                 k = np.flatnonzero(d <= z["R"])
                 if len(k):
                     here.append((e, int(k[0]), int(k[-1])))
-            seen, tested = set(), 0
             for i in range(len(here)):
                 for j in range(i + 1, len(here)):
                     if tested >= args.max_pairs:
@@ -286,6 +291,15 @@ def scene_rows(sid, tracks, zs, zones, args, episode=0):
         kin = CM.kinematics_by_regime(D, e, {"ff": ff[e], "fol": fol_T,
                                              "zone": zone_T})
 
+        # which KIND of junction this vehicle was nearest to -- the column the
+        # human side already carries, needed for the stop-compliance comparison
+        z_ctrl = ""
+        if len(centres):
+            dd = np.hypot(D["X"][e][:, None] - centres[None, :, 0],
+                          D["Y"][e][:, None] - centres[None, :, 1])
+            if np.isfinite(dd).any():
+                z_ctrl = zones[int(np.nanargmin(np.nanmin(dd, axis=0)))]["control"]
+
         zz = zt[e]
         def zmean(mask):
             return (zz[mask].mean(0) if mask.any()
@@ -305,6 +319,7 @@ def scene_rows(sid, tracks, zs, zones, args, episode=0):
             v_freeflow_rel=(round(v_free / v_ref, 4)
                             if np.isfinite(v_free) and np.isfinite(v_ref)
                             and v_ref > 0.1 else ""),
+            nearest_zone_control=z_ctrl,
             **kin,
         )
         for d in range(ndim):
