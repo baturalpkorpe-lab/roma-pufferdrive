@@ -45,11 +45,12 @@ HZ = CM.HZ
 
 # One colour per situation, used identically in all three panels.
 COL = {"freeflow": "#2e9e5b", "following": "#2b6cb0",
-       "junction": "#d9822b", "other": "#b0b0b0"}
+       "conflict": "#d9822b", "zone": "#f0c48a", "other": "#b0b0b0"}
 LABEL = {"freeflow": "free flow (desired speed)",
          "following": "following (time headway)",
-         "junction": "junction (gap acceptance)",
-         "other": "stopped / unclassified"}
+         "conflict": "CONFLICT: junction + a partner (gap acceptance)",
+         "zone": "junction zone, no conflict partner",
+         "other": "not yet tracked / stopped"}
 
 
 def parse_args():
@@ -67,26 +68,36 @@ def parse_args():
     return p.parse_args()
 
 
-def regime_per_step(D, e, lead_row, centres, zone_radius):
-    """(T,) array of situation labels for one vehicle. Priority: junction >
-    following > free flow, so an agent following a leader INTO a junction is
-    drawn as the junction case -- that is the situation whose style parameter
-    we would read."""
+def regime_per_step(D, e, lead_row, zones, has_partner):
+    """(T,) situation labels for one vehicle.
+
+    Each zone uses ITS OWN radius -- max sign spread + buffer, floored -- the
+    same value the audit and the conflict gating use. An earlier version drew
+    the circle at that radius but labelled with a fixed 25 m, so the orange band
+    ran ~10 m past the drawn circle on narrow zones.
+
+    "conflict" requires a partner whose path actually crosses or merges with
+    this one. Inside a junction with nobody to negotiate against is a DIFFERENT
+    situation -- the gap-acceptance parameter is not identified there -- so it
+    gets its own paler label rather than being counted as a conflict.
+
+    Priority: conflict > zone > following > free flow.
+    """
     n = D["X"].shape[1]
     lab = np.array(["other"] * n, dtype=object)
     valid = D["M"][e]
     v = np.nan_to_num(D["V"][e])
     lab[valid & (lead_row < 0) & (v > 2.0)] = "freeflow"
     lab[valid & (lead_row >= 0)] = "following"
-    if len(centres):
-        d = np.hypot(D["X"][e][:, None] - centres[None, :, 0],
-                     D["Y"][e][:, None] - centres[None, :, 1])
-        inz = np.nan_to_num(d.min(1), nan=np.inf) <= zone_radius
-        lab[valid & inz] = "junction"
+    for z in zones:
+        d = np.hypot(D["X"][e] - z["centre"][0], D["Y"][e] - z["centre"][1])
+        inz = valid & (np.nan_to_num(d, nan=np.inf) <= z["R"])
+        lab[inz] = "conflict" if has_partner else "zone"
     return lab
 
 
-def draw(tr, D, e, lab, centres, zones, roads, sid, out, dpi):
+def draw(tr, D, e, lab, centres, zones, roads, sid, out, dpi,
+         partner=None, cpt=None):
     t = np.arange(len(lab)) / HZ
     v = np.nan_to_num(D["V"][e])
     m = D["M"][e]
@@ -101,15 +112,25 @@ def draw(tr, D, e, lab, centres, zones, roads, sid, out, dpi):
             ax.plot(rd["x"], rd["y"], color="#e8e8e8", lw=1.0, zorder=0)
     for z, c in zip(zones, centres):
         ax.add_patch(Circle(c, z["R"], fill=False, ls="--", lw=1.2,
-                            ec=COL["junction"], alpha=.7, zorder=1))
+                            ec=COL["conflict"], alpha=.7, zorder=1))
         ax.annotate(z["control"], (c[0], c[1] + z["R"]),
-                    color=COL["junction"], fontsize=8, ha="center",
+                    color=COL["conflict"], fontsize=8, ha="center",
                     va="bottom", alpha=.9)
     for k in range(len(lab) - 1):
         if not (m[k] and m[k + 1]):
             continue
         ax.plot(D["X"][e][k:k + 2], D["Y"][e][k:k + 2],
                 color=COL[lab[k]], lw=4, solid_capstyle="round", zorder=3)
+    if partner is not None:
+        ax.plot(partner["x"], partner["y"], color="#8a8a8a", lw=2.0, ls=":",
+                zorder=2, label="_")
+        ax.annotate(f"partner v{partner['id']}",
+                    (partner["x"][-1], partner["y"][-1]),
+                    fontsize=8, color="#6a6a6a")
+    if cpt is not None:
+        ax.plot(cpt[0], cpt[1], "x", ms=11, mew=2.4, color="#c0392b", zorder=5)
+        ax.annotate("conflict point", cpt, textcoords="offset points",
+                    xytext=(6, -12), fontsize=8, color="#c0392b")
     i0 = int(np.flatnonzero(m)[0])
     ax.plot(D["X"][e][i0], D["Y"][e][i0], "o", ms=9, mfc="w", mec="k",
             mew=1.6, zorder=4)
@@ -124,7 +145,7 @@ def draw(tr, D, e, lab, centres, zones, roads, sid, out, dpi):
                  f"(scenario {sid[:10]}, vehicle {tr['id']})",
                  fontsize=12, weight="bold")
     ax.set_xlabel("x (m)"); ax.set_ylabel("y (m)")
-    seen = [k for k in ("freeflow", "following", "junction", "other")
+    seen = [k for k in ("freeflow", "following", "conflict", "zone", "other")
             if (lab == k).any()]
     ax.legend([plt.Line2D([], [], color=COL[k], lw=4) for k in seen],
               [LABEL[k] for k in seen], loc="best", fontsize=9, framealpha=.9)
@@ -151,8 +172,9 @@ def draw(tr, D, e, lab, centres, zones, roads, sid, out, dpi):
 
     frac = {k: float((lab == k).mean()) for k in COL}
     fig.text(0.5, 0.005,
-             "  |  ".join(f"{LABEL[k].split(' (')[0]}: {100*frac[k]:.0f}%"
-                          for k in ("freeflow", "following", "junction")
+             "  |  ".join(f"{LABEL[k].split(' (')[0].split(':')[0]}: "
+                          f"{100*frac[k]:.0f}%"
+                          for k in ("freeflow", "following", "conflict", "zone")
                           if frac[k] > 0),
              ha="center", fontsize=9.5)
     fig.savefig(out, dpi=dpi, bbox_inches="tight")
@@ -187,7 +209,28 @@ def main():
         for e, tr in enumerate(tracks):
             if made >= args.n:
                 break
-            lab = regime_per_step(D, e, lead[e], centres, args.zone_radius)
+            # a real conflict partner: same zone, paths cross or merge, and it
+            # survives the same oncoming / same-lane-queue rejections the
+            # extraction uses
+            partner, cpt = None, None
+            for f, ot in enumerate(tracks):
+                if f == e or partner is not None:
+                    continue
+                if not any(
+                    np.hypot(tr["x"] - z["centre"][0],
+                             tr["y"] - z["centre"][1]).min() <= z["R"]
+                    and np.hypot(ot["x"] - z["centre"][0],
+                                 ot["y"] - z["centre"][1]).min() <= z["R"]
+                        for z in Z):
+                    continue
+                cp = CM.conflict_point(tr, ot, 2.0)
+                if cp is None:
+                    continue
+                kind, _ = CM.classify_conflict(tr, ot, cp)
+                if kind is None:
+                    continue
+                partner, cpt = ot, cp["pt"]
+            lab = regime_per_step(D, e, lead[e], Z, partner is not None)
             sw = int((lab[1:] != lab[:-1]).sum())
             if sw < args.min_switches:
                 continue
@@ -196,14 +239,15 @@ def main():
             out = out_dir / f"regime_{m['scenario_id'][:10]}_v{tr['id']}.png"
             try:
                 draw(tr, D, e, lab, centres, Z, m["roads"],
-                     m["scenario_id"], out, args.dpi)
+                     m["scenario_id"], out, args.dpi, partner, cpt)
             except Exception as ex:
                 print(f"  skip {out.name}: {type(ex).__name__}: {ex}")
                 continue
             made += 1
             print(f"  [{made}/{args.n}] {out.name}  switches={sw}  "
                   + " ".join(f"{k}={100*float((lab==k).mean()):.0f}%"
-                             for k in ("freeflow", "following", "junction")
+                             for k in ("freeflow", "following", "conflict",
+                                       "zone")
                              if (lab == k).any()))
 
     print(f"\n  wrote {made} figure(s) -> {out_dir}")
