@@ -44,7 +44,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import conflict_metrics as CM
 from render_regime_strip import (ZONE_TONE, ZONE_NAME, COL, LABEL,
                                  lab_color, lab_text, regime_per_step)
-from render_topdown import load_policy, rollout, vehicle_corners, BG
+from render_topdown import (load_policy, rollout, vehicle_corners,
+                            normalize_polylines, BG)
 
 T = 91
 TELEPORT_M = 4.0
@@ -241,11 +242,16 @@ def main():
             sw = int(sum((l[1:] != l[:-1]).sum() for l in labs))
             if sw < args.min_switches:
                 continue
-            roads_xy = []
-            for pl in (data["road_edges"] or []):
-                arr = np.asarray(pl, dtype=float)
-                if arr.ndim == 2 and arr.shape[0] >= 2:
-                    roads_xy.append((arr[:, 0], arr[:, 1]))
+            # get_road_edge_polylines() returns a DICT of flattened x/y plus
+            # per-polyline lengths, not a list of (K,2) arrays -- np.asarray on
+            # it yields the key strings and dies on float('x'). render_topdown
+            # already has the parser for every shape this can take.
+            try:
+                roads_xy = [(pl[:, 0], pl[:, 1])
+                            for pl in normalize_polylines(data["road_edges"])]
+            except Exception as ex:
+                print(f"  [road edges unusable: {type(ex).__name__}: {ex}]")
+                roads_xy = []          # roads are decoration; never fatal
             out = out_dir / f"regime_{sid[:10]}.mp4"
             try:
                 out = render(D, labs, tracks, zones, cpts, roads_xy, out,
