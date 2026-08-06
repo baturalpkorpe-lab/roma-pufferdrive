@@ -468,6 +468,12 @@ def main():
             for a in np.flatnonzero(keep):
                 by_sid[str(sids[a])].append(a)
             for sid, slots in by_sid.items():
+                # one instance only -- the pool contains several copies of the
+                # same scenario, and mixing slots across them invents conflicts
+                # between cars that were never in the same simulation
+                slots = CM.pick_one_instance(slots, vids)
+                if not slots:
+                    continue
                 m = np.zeros(len(vids), bool)
                 m[slots] = True
                 tr = CM.tracks_from_arrays(xs, ys, hs, vids, m, TELEPORT_M)

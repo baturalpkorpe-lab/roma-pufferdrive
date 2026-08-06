@@ -230,7 +230,10 @@ def main():
         for sid in cand:
             if made >= args.n_videos:
                 break
-            keep = np.zeros(len(vids), bool); keep[by_sid[sid]] = True
+            slots = CM.pick_one_instance(by_sid[sid], vids)
+            if not slots:
+                continue
+            keep = np.zeros(len(vids), bool); keep[slots] = True
             tracks = CM.tracks_from_arrays(data["xs"], data["ys"], data["hs"],
                                            vids, keep, TELEPORT_M,
                                            widths=data["width"],
@@ -263,7 +266,6 @@ def main():
             print(f"  [{made}/{args.n_videos}] {out.name}  "
                   f"{len(tracks)} vehicles  {len(zones)} zones  "
                   f"{sw} regime changes", flush=True)
-            break
 
     print(f"\n  wrote {made} video(s) -> {out_dir}")
     if made < args.n_videos:

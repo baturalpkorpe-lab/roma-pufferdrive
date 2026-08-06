@@ -110,6 +110,30 @@ def vehicle_tracks(objects, move_ms=MOVE_MS, min_steps=15):
     return out
 
 
+def pick_one_instance(slots, ids):
+    """PufferDrive deals ONE scenario into SEVERAL agent-slot instances, so the
+    same vehicle id occurs more than once in the pool. Keeping every slot draws
+    2-3 near-copies of each car stacked on top of each other -- and far worse,
+    slots from different instances are different simulations, so any "conflict"
+    detected between them never happened and any duplicated trajectory is
+    counted twice.
+
+    Instances are contiguous in slot order, so a repeated id marks a boundary.
+    Returns the slots of the LARGEST instance.
+    """
+    inst, cur, seen = [], [], set()
+    for a in slots:
+        v = int(ids[a])
+        if v in seen:
+            inst.append(cur)
+            cur, seen = [], set()
+        cur.append(a)
+        seen.add(v)
+    if cur:
+        inst.append(cur)
+    return max(inst, key=len) if inst else []
+
+
 def tracks_from_arrays(xs, ys, hs, ids, keep, teleport_m=4.0,
                        move_ms=MOVE_MS, min_steps=15,
                        widths=None, lengths=None):
