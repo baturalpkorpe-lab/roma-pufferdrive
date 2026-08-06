@@ -605,10 +605,21 @@ def kinematics_by_regime(D, e, masks):
         n = int(m.sum())
         out[f"n_{name}"] = n
         if n < 3:
-            for k in ("speed", "accel", "jerk", "turn"):
+            for k in ("speed", "accel", "jerk", "turn", "vmin",
+                      "stopfrac", "rollfrac"):
                 out[f"{k}_{name}"] = ""
             continue
         out[f"speed_{name}"] = round(float(V[m].mean()), 3)
+        # Minimum speed and near-stop share. In a junction zone these measure
+        # STOP COMPLIANCE, which is a legal requirement at a stop sign whether
+        # or not anyone else is there -- and therefore the one thing a zone with
+        # no conflict partner can still be scored on. Note what it measures for a
+        # POLICY: stop signs are not in the observation (drive.h keeps only
+        # types 4-6 in the grid), so a low rate here is an observation gap, not
+        # a driving failure.
+        out[f"vmin_{name}"] = round(float(V[m].min()), 3)
+        out[f"stopfrac_{name}"] = round(float((V[m] < 0.5).mean()), 4)
+        out[f"rollfrac_{name}"] = round(float((V[m] < 2.0).mean()), 4)
         out[f"accel_{name}"] = round(float(np.abs(acc[m]).mean()), 3)
         out[f"jerk_{name}"] = round(float(np.abs(jrk[m]).mean()), 3)
         out[f"turn_{name}"] = round(float(trn[m].mean()), 4)
