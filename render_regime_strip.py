@@ -280,7 +280,7 @@ def main():
             out = out_dir / f"regime_{m['scenario_id'][:10]}_v{tr['id']}.png"
             try:
                 draw(tr, D, e, lab, centres, Z, m["roads"],
-                     m["scenario_id"], out, args.dpi, partner, cpt)
+                     m["scenario_id"], out, args.dpi, partners, cpts)
             except Exception as ex:
                 print(f"  skip {out.name}: {type(ex).__name__}: {ex}")
                 continue
