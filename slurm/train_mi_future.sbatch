@@ -108,6 +108,24 @@ SAVE_DIR=${SAVE_DIR:-$SCRATCH_ROOT/checkpoints/roma_mifutagent_dim${ROLE_DIM}_H$
 TOTAL_STEPS=${TOTAL_STEPS:-3000000000}
 SAVE_INTERVAL=${SAVE_INTERVAL:-500000000}
 SEED=${SEED:-0}
+
+# ---- Fine-tuning off ANOTHER run's checkpoint ------------------------------
+# INIT_FROM seeds an EMPTY SAVE_DIR from a checkpoint that belongs to a
+# different run. It is deliberately distinct from the auto-resume below, which
+# is a recovery path within one run: once this SAVE_DIR has its own step
+# checkpoint, that wins and INIT_FROM is ignored, so a requeued fine-tune
+# continues instead of restarting from the seed.
+#
+# Point it at a step*.pt, NOT final.pt -- only step checkpoints carry
+# aux_loss_state (the MI decoder). Seeding from final.pt gives a randomly
+# initialised decoder, which makes the compliance target meaningless and, with
+# --freeze_role_encoder, freezes it that way.
+#
+# --resume CONTINUES global_step, so TOTAL_STEPS must exceed the seed's step
+# or train_roma exits with "nothing to train". A fine-tune of 500M off a 3B
+# checkpoint therefore needs TOTAL_STEPS=3500000000.
+INIT_FROM=${INIT_FROM:-}
+FREEZE_ROLE_ENCODER=${FREEZE_ROLE_ENCODER:-0}
 NUM_MAPS=${NUM_MAPS:-10000}
 # Mid-run WOSAC every 500M (lite: 10 batches). The terminal 3B tick is skipped
 # in train_roma.py (redundant with the full 100-batch eval that follows).
@@ -205,6 +223,23 @@ if [ -n "$LATEST" ]; then
     fi
     echo "[mifut] resuming from $LATEST (step $LATEST_STEP)"
     RESUME_ARGS="--resume $LATEST"
+elif [ -n "$INIT_FROM" ]; then
+    [ -f "$INIT_FROM" ] || { echo "ERROR: INIT_FROM not found: $INIT_FROM"; exit 1; }
+    case "$INIT_FROM" in
+        *final.pt) echo "ERROR: INIT_FROM points at final.pt, which carries no"
+                   echo "       aux_loss_state -- the MI decoder would be random."
+                   echo "       Use the highest roma_dim*_step*.pt instead."
+                   exit 1 ;;
+    esac
+    SEED_STEP=$(echo "$INIT_FROM" | sed 's/.*_step\([0-9]*\)\.pt/\1/')
+    if [ "$SEED_STEP" -ge "$TOTAL_STEPS" ] 2>/dev/null; then
+        echo "ERROR: INIT_FROM is at step $SEED_STEP but TOTAL_STEPS=$TOTAL_STEPS."
+        echo "       --resume continues the step counter, so raise TOTAL_STEPS"
+        echo "       above $SEED_STEP (e.g. $((SEED_STEP + 500000000)))."
+        exit 1
+    fi
+    echo "[mifut] FINE-TUNE seed: $INIT_FROM (step $SEED_STEP -> $TOTAL_STEPS)"
+    RESUME_ARGS="--resume $INIT_FROM"
 else
     echo "[mifut] no existing checkpoint in $SAVE_DIR -- fresh run"
 fi
@@ -221,6 +256,7 @@ echo "[mifut] role view: road=$ROLE_ROAD_DIM partner=$ROLE_PARTNER_DIM  mi_targe
 echo "[mifut] FiLM conditioning: ${FILM_ARG:-off}"
 echo "[mifut] compliance=$COMPLIANCE_WEIGHT perturb_frac=$PERTURB_FRAC alpha=$PERTURB_ALPHA"
 echo "[mifut] compliance_perturbed_only=$COMPLIANCE_PERTURBED_ONLY mi_exclude_perturbed=$MI_EXCLUDE_PERTURBED"
+echo "[mifut] freeze_role_encoder=$FREEZE_ROLE_ENCODER init_from=${INIT_FROM:-none}"
 echo "[mifut] div_weight=$DIV_WEIGHT  mi_weight=$MI_WEIGHT  wandb_name=$WANDB_NAME"
 echo "[mifut] code=$CODE_DIR  save=$SAVE_DIR"
 echo "[mifut] branch=$(git -C "$CODE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ?) commit=$(git -C "$CODE_DIR" rev-parse --short HEAD 2>/dev/null || echo ?)"
@@ -241,6 +277,7 @@ python "$CODE_DIR/roma_pufferdrive/train_roma.py" \
     --perturb_alpha     "$PERTURB_ALPHA" \
     --compliance_perturbed_only "$COMPLIANCE_PERTURBED_ONLY" \
     --mi_exclude_perturbed "$MI_EXCLUDE_PERTURBED" \
+    --freeze_role_encoder  "$FREEZE_ROLE_ENCODER" \
     $FILM_ARG \
     --data_dir      "$DATA_DIR" \
     --num_maps      "$NUM_MAPS" \

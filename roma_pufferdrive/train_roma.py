@@ -233,6 +233,18 @@ def parse_args():
                         "and is a FIXED target, so reducing the compliance "
                         "error requires the policy to actually move. Only has "
                         "any effect when --perturb_frac > 0.")
+    p.add_argument("--freeze_role_encoder", type=int, default=0,
+                   help="1 = no gradient reaches the role encoder (incl. its "
+                        "partner/road projections) or the MI decoder. For "
+                        "FINE-TUNING an existing checkpoint: it pins scene ICC "
+                        "at the resumed value and freezes the compliance "
+                        "target, so the only thing that can move is the "
+                        "policy's use of the role. Measured motivation: on the "
+                        "two dim-1 compliance+perturbation arms the encoder "
+                        "drifted to the map (ICC 0.170 -> 0.434) once the "
+                        "policy stopped reading z, which confounds 'did "
+                        "compliance keep the dial alive' with 'did the encoder "
+                        "survive'. Freezing separates them.")
     p.add_argument("--role_film", action="store_true",
                    help="FiLM-condition the policy on the role: the role emits "
                         "a per-feature scale and shift for the env embedding "
@@ -923,8 +935,27 @@ def train(args):
         mi_emb_dim = mi_emb_dim,
     ).to(device)
 
+    # ---- Optional freeze, for fine-tuning ----
+    # Must land BEFORE the optimizer is built so frozen tensors never enter it.
+    # role_partner_proj / role_road_proj are part of the role VIEW (they feed
+    # _role_input), so leaving them trainable would let the encoder's effective
+    # input drift even with the GRU frozen.
+    if args.freeze_role_encoder:
+        frozen = 0
+        for m in (policy.role_encoder, policy.role_partner_proj,
+                  policy.role_road_proj, aux_loss_fn.mi_decoder):
+            if m is None:
+                continue
+            for q in m.parameters():
+                q.requires_grad_(False)
+                frozen += q.numel()
+        print(f"[ROMA] FROZEN role encoder + MI decoder ({frozen:,} params). "
+              f"Scene ICC is pinned at the resumed checkpoint's value and the "
+              f"compliance target cannot move to meet the policy.")
+
     optimizer = Adam(
-        list(policy.parameters()) + list(aux_loss_fn.parameters()),
+        [q for q in (list(policy.parameters())
+                     + list(aux_loss_fn.parameters())) if q.requires_grad],
         lr=args.lr,
     )
     Path(args.save_dir).mkdir(parents=True, exist_ok=True)
@@ -958,14 +989,27 @@ def train(args):
     # original training curve is preserved.
     log_csv = Path(args.save_dir) / "training_log.csv"
     append_log = bool(args.resume) and log_csv.exists()
-    with open(log_csv, "a" if append_log else "w", newline="") as f:
-        if not append_log:
-            csv.writer(f).writerow([
-                "step", "sps", "policy_loss", "value_loss",
+    # compliance_error was wandb-only. Without it in the CSV there is no
+    # offline record of how big the compliance penalty actually was, and the
+    # answer decides whether --compliance_weight is doing anything: measured on
+    # the dim-1 mifix arms, cerr converged to ~1e-3, so at weight 0.05 the
+    # penalty was 0.05*1e-3*91 = 0.005/episode against a return of ~1.05 --
+    # 0.4%, i.e. perturbation with no compliance signal at all.
+    CSV_COLS = ["step", "sps", "policy_loss", "value_loss",
                 "mi_loss", "div_loss", "kl_loss", "score", "mean_return",
                 "ego_enc_delta", "partner_enc_delta", "road_enc_delta",
-                "role_std", "role_norm",
-            ])
+                "role_std", "role_norm", "compliance_error"]
+    if append_log:
+        with open(log_csv, newline="") as f:
+            old_cols = next(csv.reader(f), [])
+        if old_cols != CSV_COLS:
+            # Appending a wider row to a narrower file gives ragged CSV that
+            # pandas mis-parses. Keep the old curve, start a clean file.
+            log_csv.replace(log_csv.with_name("training_log.pre.csv"))
+            append_log = False
+    with open(log_csv, "a" if append_log else "w", newline="") as f:
+        if not append_log:
+            csv.writer(f).writerow(CSV_COLS)
     print(f"[ROMA] CSV log       : {log_csv}"
           + ("  (appending)" if append_log else ""))
 
@@ -1304,6 +1348,7 @@ def train(args):
                     round(enc_deltas["road"],    6),
                     round(role_std_all,          6),
                     round(role_norm_all,         6),
+                    round(comply_mean,           8),
                 ])
 
             # Wandb log
