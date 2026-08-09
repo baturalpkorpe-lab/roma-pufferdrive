@@ -88,6 +88,16 @@ def parse_args():
                         "to alpha=0 for the safety surrogates")
     p.add_argument("--ref_headway", type=float, default=1.02,
                    help="headway at alpha=0 to beat: ep_nodiv's value")
+    p.add_argument("--baseline_dir", default="",
+                   help="another rollout dir to compare alpha=0 against. Turns "
+                        "the report into a PROGRESS check: for each metric, is "
+                        "this checkpoint CLOSER TO HUMAN than the baseline? "
+                        "That is the question at every checkpoint of a run "
+                        "whose point is realism rather than the dial.")
+    p.add_argument("--min_improved", type=int, default=4,
+                   help="how many of the 8 realism metrics must have moved "
+                        "toward human for a --baseline_dir run to count as "
+                        "progressing")
     p.add_argument("--noise", type=float, default=0.05,
                    help="measurement noise floor in seconds, from four "
                         "independent rollouts of one checkpoint. Realism is "
@@ -297,6 +307,41 @@ def main():
             if np.isfinite(v):
                 print("     %-11s %.3f    %s" %
                       (c, v, ("human %.3f" % hv) if np.isfinite(hv) else ""))
+
+    # ---- 4. progress against a baseline -----------------------------------
+    # "Better" is not "bigger" or "smaller" -- it is CLOSER TO THE HUMAN VALUE,
+    # and the direction differs per metric (speed down, headway up, mrd down,
+    # min_ttc up). Comparing |new - human| against |base - human| gets the
+    # direction right for free and needs no per-metric sign table.
+    n_improved = None
+    if a.baseline_dir and os.path.isdir(a.baseline_dir):
+        base = load(a.baseline_dir)
+        print("\n  4. PROGRESS vs %s" % os.path.basename(a.baseline_dir))
+        if 0.0 not in arms or 0.0 not in base:
+            print("     one side has no alpha=0 arm -- skipped")
+        else:
+            print("     %-12s %9s %9s %9s   %s" %
+                  ("metric", "baseline", "this", "human", "toward human?"))
+            n_improved, n_total = 0, 0
+            for c, src in (("speed_ff", 0), ("speed_fol", 0), ("speed_zone", 0),
+                           ("headway_T", 0), ("accel_ff", 0),
+                           ("pet", 1), ("min_ttc", 1), ("mrd", 1)):
+                hv = med(human_reg if src == 0 else human_cf, c)
+                bv = med(base[0.0][src], c)
+                nv = med(arms[0.0][src], c)
+                if not all(np.isfinite(x) for x in (hv, bv, nv)):
+                    continue
+                n_total += 1
+                better = abs(nv - hv) < abs(bv - hv)
+                n_improved += int(better)
+                print("     %-12s %9.3f %9.3f %9.3f   %s" %
+                      (c, bv, nv, hv, "YES" if better else "no"))
+            print("\n     %d of %d metrics moved toward human." % (n_improved,
+                                                                  n_total))
+            verdicts.append(("realism: >= %d of %d metrics toward human"
+                             % (a.min_improved, n_total),
+                             n_improved >= a.min_improved,
+                             "%d improved" % n_improved))
 
     # ---- verdict ----------------------------------------------------------
     print("\n" + "=" * 72)
