@@ -126,6 +126,23 @@ SEED=${SEED:-0}
 # checkpoint therefore needs TOTAL_STEPS=3500000000.
 INIT_FROM=${INIT_FROM:-}
 FREEZE_ROLE_ENCODER=${FREEZE_ROLE_ENCODER:-0}
+
+# ---- Env-config overrides (empty = leave drive.ini alone) ------------------
+# Passed as flags rather than by editing drive.ini, because drive.ini is read
+# by regime_rollout and the WOSAC eval too: editing it would silently change
+# the conditions every previous arm was measured under.
+COLLISION_BEHAVIOR=${COLLISION_BEHAVIOR:-}
+OFFROAD_BEHAVIOR=${OFFROAD_BEHAVIOR:-}
+REWARD_VEHICLE_COLLISION=${REWARD_VEHICLE_COLLISION:-}
+REWARD_OFFROAD_COLLISION=${REWARD_OFFROAD_COLLISION:-}
+GOAL_SPEED=${GOAL_SPEED:-}
+
+ENV_ARGS=""
+[ -n "$COLLISION_BEHAVIOR" ]       && ENV_ARGS="$ENV_ARGS --collision_behavior $COLLISION_BEHAVIOR"
+[ -n "$OFFROAD_BEHAVIOR" ]         && ENV_ARGS="$ENV_ARGS --offroad_behavior $OFFROAD_BEHAVIOR"
+[ -n "$REWARD_VEHICLE_COLLISION" ] && ENV_ARGS="$ENV_ARGS --reward_vehicle_collision $REWARD_VEHICLE_COLLISION"
+[ -n "$REWARD_OFFROAD_COLLISION" ] && ENV_ARGS="$ENV_ARGS --reward_offroad_collision $REWARD_OFFROAD_COLLISION"
+[ -n "$GOAL_SPEED" ]               && ENV_ARGS="$ENV_ARGS --goal_speed $GOAL_SPEED"
 NUM_MAPS=${NUM_MAPS:-10000}
 # Mid-run WOSAC every 500M (lite: 10 batches). The terminal 3B tick is skipped
 # in train_roma.py (redundant with the full 100-batch eval that follows).
@@ -257,6 +274,7 @@ echo "[mifut] FiLM conditioning: ${FILM_ARG:-off}"
 echo "[mifut] compliance=$COMPLIANCE_WEIGHT perturb_frac=$PERTURB_FRAC alpha=$PERTURB_ALPHA"
 echo "[mifut] compliance_perturbed_only=$COMPLIANCE_PERTURBED_ONLY mi_exclude_perturbed=$MI_EXCLUDE_PERTURBED"
 echo "[mifut] freeze_role_encoder=$FREEZE_ROLE_ENCODER init_from=${INIT_FROM:-none}"
+echo "[mifut] env overrides:${ENV_ARGS:- none (drive.ini as-is)}"
 echo "[mifut] div_weight=$DIV_WEIGHT  mi_weight=$MI_WEIGHT  wandb_name=$WANDB_NAME"
 echo "[mifut] code=$CODE_DIR  save=$SAVE_DIR"
 echo "[mifut] branch=$(git -C "$CODE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ?) commit=$(git -C "$CODE_DIR" rev-parse --short HEAD 2>/dev/null || echo ?)"
@@ -278,6 +296,7 @@ python "$CODE_DIR/roma_pufferdrive/train_roma.py" \
     --compliance_perturbed_only "$COMPLIANCE_PERTURBED_ONLY" \
     --mi_exclude_perturbed "$MI_EXCLUDE_PERTURBED" \
     --freeze_role_encoder  "$FREEZE_ROLE_ENCODER" \
+    $ENV_ARGS \
     $FILM_ARG \
     --data_dir      "$DATA_DIR" \
     --num_maps      "$NUM_MAPS" \

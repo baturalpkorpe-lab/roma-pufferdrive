@@ -245,6 +245,26 @@ def parse_args():
                         "policy stopped reading z, which confounds 'did "
                         "compliance keep the dial alive' with 'did the encoder "
                         "survive'. Freezing separates them.")
+    # ---- Env-config overrides. None = leave drive.ini's value alone. -------
+    p.add_argument("--collision_behavior", type=int, default=None,
+                   help="0=Ignore (drive.ini default), 1=Stop, 2=Remove. With "
+                        "Ignore a collision costs only its -0.5 and the episode "
+                        "continues, so two extra respawn goals (+0.25 each) pay "
+                        "for it. Stop forfeits the rest of the episode.")
+    p.add_argument("--offroad_behavior", type=int, default=None,
+                   help="0=Ignore, 1=Stop, 2=Remove. Offroad already matches "
+                        "humans (0.153 vs 0.144), so this is unlikely to be "
+                        "the lever -- provided for symmetry.")
+    p.add_argument("--reward_vehicle_collision", type=float, default=None,
+                   help="drive.ini uses -0.5 against a +1.0 goal. A scalar the "
+                        "policy can still trade against; --collision_behavior "
+                        "changes the trade itself.")
+    p.add_argument("--reward_offroad_collision", type=float, default=None)
+    p.add_argument("--goal_speed", type=float, default=None,
+                   help="drive.ini sets 100.0 m/s, i.e. no speed regulation at "
+                        "all. Measured free-flow speed is 15.5 m/s against a "
+                        "human 10.5. Check how drive.h consumes this before "
+                        "assuming a lower value shapes speed.")
     p.add_argument("--role_film", action="store_true",
                    help="FiLM-condition the policy on the role: the role emits "
                         "a per-feature scale and shift for the env embedding "
@@ -897,6 +917,33 @@ def train(args):
         "num_agents":      args.num_agents,
         "map_dir":         args.data_dir,
     })
+
+    # ---- Env-config overrides, applied at construction only ----------------
+    # Editing drive.ini instead would change the env for EVERY job that reads
+    # it -- regime_rollout, eval, WOSAC -- so previous arms would have been
+    # trained AND measured under one reward and the new arm under another, and
+    # no comparison would survive. These override this process only, and land
+    # in the checkpoint's args dict, so a run's env is recoverable from the
+    # checkpoint alone (which is how every config question in this project has
+    # been settled after the fact).
+    #
+    # Why they exist: measured on the dim-1 arms, the agent collides 2.9x more
+    # than humans (0.109 vs 0.037) while matching them offroad (0.153 vs 0.144).
+    # drive.ini pays +1.0 for a goal, +0.25 for each respawn goal after it, and
+    # -0.5 for a collision with collision_behavior=0 (Ignore) -- the episode
+    # continues. Two extra respawn goals therefore pay for one collision.
+    # collision_behavior=1 (Stop) makes a collision forfeit the rest of the
+    # episode instead, which is a far larger change in incentive than any
+    # tweak to the -0.5.
+    for key, val in (("collision_behavior",       args.collision_behavior),
+                     ("offroad_behavior",         args.offroad_behavior),
+                     ("reward_vehicle_collision", args.reward_vehicle_collision),
+                     ("reward_offroad_collision", args.reward_offroad_collision),
+                     ("goal_speed",               args.goal_speed)):
+        if val is not None:
+            print(f"[ROMA] env override: {key} = {env_cfg.get(key)} -> {val}")
+            env_cfg[key] = val
+
     env = Drive(**env_cfg)
 
     # Auto-detect obs_dim
