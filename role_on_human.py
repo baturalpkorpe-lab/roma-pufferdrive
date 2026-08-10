@@ -77,10 +77,18 @@ def _sq(a):
 
 
 def as_agent_time(arr, B):
-    """GT arrays come out as (B,T) or (T,B); normalise to (B,T)."""
-    a = np.asarray(arr, dtype=float)
+    """GT per-step arrays -> (B, T).
+
+    They arrive with a leading or trailing singleton dimension, e.g.
+    (1, B, T) or (B, T, 1), and in either orientation. Squeeze first, then
+    orient on B -- guessing the layout without squeezing gave a (B, T, 1)
+    that summed along the wrong axis and produced a (512, 91) count.
+    """
+    a = np.squeeze(np.asarray(arr, dtype=float))
     if a.ndim == 1:
-        return a.reshape(B, -1)
+        a = a.reshape(B, -1)
+    elif a.ndim > 2:
+        a = a.reshape(B, -1) if a.shape[0] == B else a.reshape(-1, B).T
     return a if a.shape[0] == B else a.T
 
 
@@ -123,9 +131,17 @@ def main():
             obs_np, _, _, _, _ = env.step(act.cpu().numpy().reshape(B, 1))
             obs = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
 
+        if ep == 0:
+            print("[human] raw GT shapes: " + "  ".join(
+                "%s=%s" % (k, np.asarray(gt[k]).shape)
+                for k in ("x", "y", "valid", "id", "is_vehicle")
+                if k in gt))
         gx = as_agent_time(gt["x"], B)
         gy = as_agent_time(gt["y"], B)
         gv = as_agent_time(gt["valid"], B).astype(bool)
+        assert gx.shape == gy.shape == gv.shape and gx.shape[0] == B, (
+            "GT arrays did not normalise to (B, T): %s -- send this line and "
+            "the raw shapes above" % (gx.shape,))
         sids = _sq(np.asarray(gt["scenario_id"]).astype(str))
         vids = _sq(np.asarray(gt["id"])).reshape(-1)
         isv = _sq(np.asarray(gt["is_vehicle"])).astype(bool)
