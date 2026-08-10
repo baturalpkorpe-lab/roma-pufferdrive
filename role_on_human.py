@@ -26,6 +26,40 @@ are human roles. Agents that diverged were policy-driven and are dropped. If
 almost nothing was replayed, the control mode was wrong and the script says so
 instead of reporting numbers that look fine and mean nothing.
 
+RESULT: THIS CANNOT WORK AS WRITTEN, AND THE ENV IS WHY
+Run on control_sdc_only, 512 agents over 200 maps: 7 of 512 replayed, the
+other 505 diverging from ground truth by a median of 11 m. Not a wrong flag --
+a structural limit. drive.py sets
+
+    self.num_agents = agent_offsets[-1]
+
+so the observation tensor is allocated from the CONTROLLED set. init_mode
+"create_all_valid" creates the other cars, and they move from their logs, but
+they get no observation row and no action. control_sdc_only fills every slot
+with a map's SDC, which is exactly the agent the policy drives -- hence 505
+divergences. No control_mode hands you a log-replayed agent's observation.
+
+Getting a human's role therefore needs either an env change that exposes
+observations for uncontrolled agents, or inverse dynamics to turn a logged
+trajectory into the action sequence that reproduces it.
+
+THE CHEAPER ROUTE, WHICH DOES NOT NEED EITHER
+A role-conditioned BC anchor needs a role LABEL per human driver. It does not
+need that label to come from this encoder. regimes_gt.csv already carries every
+human's measured style, and human_style_spread.py shows within-scene headway sd
+is 0.858 against the policy's 0.32-0.36 -- 2.4x the spread, at a scene ICC of
+0.26, so it is genuinely driver variation. Defining
+
+    z_human = standardised within-scene headway_T   (or PC1 of the style set)
+
+gives an interpretable role grounded in real human variation, buildable today.
+The cost is that it is not on the same scale as the encoder's z and the two
+would need aligning.
+
+The script is kept because the replay check is the reusable part: any future
+attempt to read human observations should verify against ground truth the same
+way rather than trusting a control_mode.
+
     python role_on_human.py \
         --checkpoint /scratch/$USER/checkpoints/<run>/roma_dim1_final.pt \
         --gt_regimes /scratch/$USER/regimes/regimes_gt.csv \
