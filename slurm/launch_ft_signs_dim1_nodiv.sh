@@ -46,8 +46,7 @@ for v in ROLE_FILM COMPLIANCE_WEIGHT PERTURB_FRAC PERTURB_ALPHA \
          COMPLIANCE_PERTURBED_ONLY MI_EXCLUDE_PERTURBED DIV_WEIGHT MI_WEIGHT \
          MI_TARGET ROLE_ROAD_DIM ROLE_PARTNER_DIM SEED WANDB_NAME \
          FREEZE_ROLE_ENCODER TOTAL_STEPS SAVE_INTERVAL \
-         OFFROAD_BEHAVIOR GOAL_SPEED REWARD_OFFROAD_COLLISION \
-         REWARD_VEHICLE_COLLISION; do
+         OFFROAD_BEHAVIOR GOAL_SPEED; do
     case "$v" in
         COMPLIANCE_WEIGHT) : ;;
         *) unset "$v" 2>/dev/null || true ;;
@@ -76,6 +75,16 @@ export FREEZE_ROLE_ENCODER=0
 # Carried over unchanged from the collision-cost run, so the observation is
 # the only variable.
 export COLLISION_BEHAVIOR=${COLLISION_BEHAVIOR:-1}
+
+# THE REWARD FLAGS MUST BE RE-PASSED ON A FINE-TUNE. They are command-line
+# arguments, not drive.ini values -- paperrew was trained with
+# reward_vehicle_collision=-1.0 via a flag, so a fine-tune that omits it
+# silently reverts to drive.ini's -0.5 and changes the reward mid-experiment
+# with nothing in the log to say so. Left unset here, meaning "whatever
+# drive.ini says", which is correct for a collstop-seeded run and WRONG for a
+# paperrew-seeded one -- pass them explicitly there.
+[ -n "${REWARD_VEHICLE_COLLISION:-}" ] && export REWARD_VEHICLE_COLLISION
+[ -n "${REWARD_OFFROAD_COLLISION:-}" ] && export REWARD_OFFROAD_COLLISION
 export ROLE_FILM=0
 export COMPLIANCE_WEIGHT=${COMPLIANCE_WEIGHT:-2.5}
 export PERTURB_FRAC=0.15
@@ -94,6 +103,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 echo "[arm] FINE-TUNE from  : $INIT_FROM"
 echo "[arm] steps           : $SEED_STEP -> $TOTAL_STEPS (+${FT_STEPS})"
 echo "[arm] collision_behav : $COLLISION_BEHAVIOR   compliance $COMPLIANCE_WEIGHT   perturb 0.15"
+echo "[arm] collision reward: ${REWARD_VEHICLE_COLLISION:-drive.ini (-0.5)}   offroad: ${REWARD_OFFROAD_COLLISION:-drive.ini (-0.5)}"
 echo "[arm] save_dir        : $SAVE_DIR"
 echo
 bash "$HERE/run_mi_future.sh" 1 8
