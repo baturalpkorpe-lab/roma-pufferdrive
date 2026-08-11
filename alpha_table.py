@@ -47,7 +47,13 @@ CONF = ["pet", "min_ttc", "mrd"]
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--rollout_dir", required=True)
+    p.add_argument("--rollout_dir", action="append", required=True,
+                   help="repeatable. Given more than once the rows are POOLED "
+                        "before the median is taken, which is not the same as "
+                        "averaging each rep's median and is strictly better: "
+                        "one median over 3x the rows has lower variance than "
+                        "the mean of three medians, at no extra compute. The "
+                        "reps must be of the SAME checkpoint.")
     p.add_argument("--gt_regimes", default="")
     p.add_argument("--gt_conflicts", default="")
     p.add_argument("--controls", default="all_way_stop,partial_stop",
@@ -86,13 +92,37 @@ def alpha_of(tag):
         re.sub(r"^[A-Za-z0-9_\-]*?(?=[+-]\d)", "", tag))
 
 
-def load(d):
+def load(dirs):
+    """Alpha -> (regimes, conflicts), rows POOLED across dirs.
+
+    Pooling reps rather than averaging their medians is the cheap half of the
+    stability problem: the thin rows here are jam_s0 (~200-330 per alpha) and
+    the per-class conflicts (~350), and three reps triples both for free.
+
+    Caveat worth knowing: rollouts resample the map pool, so reps overlap in
+    scenes. The pooled sample is therefore not three times as INDEPENDENT as
+    one rep -- it is a bigger sample of the same scene distribution, which
+    lowers the median's variance but does not widen scene coverage. For that,
+    raise EPISODES and MAP_POOL.
+    """
+    acc = {}
+    for d in dirs:
+        for f in sorted(glob.glob(os.path.join(d, "regimes_*.csv"))):
+            t = os.path.basename(f)[8:-4]
+            cf = os.path.join(d, "conflicts_%s.csv" % t)
+            r = pd.read_csv(f)
+            c = pd.read_csv(cf) if os.path.exists(cf) else None
+            k = alpha_of(t)
+            if k not in acc:
+                acc[k] = ([r], [c] if c is not None else [])
+            else:
+                acc[k][0].append(r)
+                if c is not None:
+                    acc[k][1].append(c)
     out = {}
-    for f in sorted(glob.glob(os.path.join(d, "regimes_*.csv"))):
-        t = os.path.basename(f)[8:-4]
-        cf = os.path.join(d, "conflicts_%s.csv" % t)
-        out[alpha_of(t)] = (pd.read_csv(f),
-                            pd.read_csv(cf) if os.path.exists(cf) else None)
+    for k, (rs, cs) in acc.items():
+        out[k] = (pd.concat(rs, ignore_index=True),
+                  pd.concat(cs, ignore_index=True) if cs else None)
     return dict(sorted(out.items()))
 
 
@@ -100,7 +130,7 @@ def main():
     a = parse_args()
     arms = load(a.rollout_dir)
     if not arms:
-        raise SystemExit("no regimes_*.csv in %s" % a.rollout_dir)
+        raise SystemExit("no regimes_*.csv in %s" % ", ".join(a.rollout_dir))
     alphas = list(arms)
 
     hr = pd.read_csv(a.gt_regimes) if a.gt_regimes and os.path.exists(a.gt_regimes) else None
@@ -111,7 +141,10 @@ def main():
                                              for x in alphas)
     head += "  |%8s%8s  %s" % ("HUMAN", "rho", "n")
     print("=" * (len(head) + 4))
-    print("  ALPHA TABLE -- %s" % os.path.basename(a.rollout_dir.rstrip("/")))
+    names = [os.path.basename(x.rstrip("/")) for x in a.rollout_dir]
+    print("  ALPHA TABLE -- %s%s"
+          % (names[0], ("  + %d more, POOLED" % (len(names) - 1))
+             if len(names) > 1 else ""))
     print("=" * (len(head) + 4))
     print(head)
 
