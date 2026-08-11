@@ -45,7 +45,7 @@ set -eu
 for v in ROLE_FILM COMPLIANCE_WEIGHT PERTURB_FRAC PERTURB_ALPHA \
          COMPLIANCE_PERTURBED_ONLY MI_EXCLUDE_PERTURBED DIV_WEIGHT MI_WEIGHT \
          MI_TARGET ROLE_ROAD_DIM ROLE_PARTNER_DIM SEED WANDB_NAME \
-         INIT_FROM FREEZE_ROLE_ENCODER TOTAL_STEPS SAVE_INTERVAL \
+         FREEZE_ROLE_ENCODER TOTAL_STEPS SAVE_INTERVAL \
          OFFROAD_BEHAVIOR GOAL_SPEED REWARD_OFFROAD_COLLISION \
          REWARD_VEHICLE_COLLISION; do
     case "$v" in
@@ -58,9 +58,13 @@ SCRATCH_ROOT=${SCRATCH_ROOT:-/scratch/$USER}
 SRC=${SRC:-$SCRATCH_ROOT/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_collstop_nodiv}
 FT_STEPS=${FT_STEPS:-1000000000}
 
-INIT_FROM=$(ls "$SRC"/roma_dim1_step*.pt 2>/dev/null \
+# INIT_FROM=<checkpoint> seeds from a SPECIFIC step rather than the last one.
+# The final checkpoint is not automatically the best: on the collision-cost run,
+# 4.0B beat 5.0B on both dial ranges and on every conflict level, and accel_ff
+# degraded monotonically 3.620 -> 4.009 across the run.
+INIT_FROM=${INIT_FROM:-$(ls "$SRC"/roma_dim1_step*.pt 2>/dev/null \
             | sed 's/.*_step\([0-9]*\)\.pt/\1 &/' | sort -k1,1n | tail -1 \
-            | cut -d' ' -f2-)
+            | cut -d' ' -f2-)}
 [ -n "$INIT_FROM" ] || { echo "ERROR: no roma_dim1_step*.pt in $SRC"; exit 1; }
 SEED_STEP=$(echo "$INIT_FROM" | sed 's/.*_step\([0-9]*\)\.pt/\1/')
 
@@ -80,8 +84,11 @@ export COMPLIANCE_PERTURBED_ONLY=1
 export MI_EXCLUDE_PERTURBED=1
 export DIV_WEIGHT=0
 
-export SAVE_DIR=$SCRATCH_ROOT/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_signs_nodiv
-export WANDB_NAME=roma_mifutagent_dim1_ft_signs_nodiv
+# TAG keeps two seeds apart. Sharing a SAVE_DIR would let the auto-resume load
+# the other seed's weights and silently continue the wrong experiment.
+TAG=${TAG:-signs}
+export SAVE_DIR=$SCRATCH_ROOT/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_${TAG}_nodiv
+export WANDB_NAME=roma_mifutagent_dim1_ft_${TAG}_nodiv
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 echo "[arm] FINE-TUNE from  : $INIT_FROM"
