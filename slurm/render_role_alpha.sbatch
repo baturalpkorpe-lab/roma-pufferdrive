@@ -36,9 +36,15 @@ module load miniconda3
 source /apps/generic/miniforge3/25.11.0/etc/profile.d/conda.sh
 conda activate roma
 
-export PYTHONPATH=$HOME/roma_pufferdrive:/scratch/e452103/PufferDrive
+# CODE_DIR defaults to the SUBMITTING clone, not to $HOME/roma_pufferdrive.
+# That path is on role-agent-centric despite its name, so hardcoding it ran
+# another branch's policy classes against whatever checkpoint was passed --
+# a FiLM or agent-centric checkpoint then dies in load_state_dict on the extra
+# keys. Same fix already applied to role_natural_extremes.sbatch and
+# eval_wosac.sbatch; this one was missed.
+CODE_DIR=${CODE_DIR:-$SLURM_SUBMIT_DIR}
+export PYTHONPATH=$CODE_DIR:${PUFFER_DIR:-/scratch/$USER/PufferDrive}
 export PYTHONUNBUFFERED=1
-CODE_DIR=$HOME/roma_pufferdrive
 
 mkdir -p /scratch/e452103/logs "$OUT"
 [ -f "$CKPT" ] || { echo "ERROR: checkpoint not found: $CKPT"; exit 1; }
