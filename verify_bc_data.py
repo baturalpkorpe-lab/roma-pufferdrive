@@ -86,8 +86,10 @@ def as_agent_time(arr, B):
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--data_dir",
-                   default="pufferlib/resources/drive/binaries/training")
+    p.add_argument("--data_dir", default="",
+                   help="map binaries. Default: derived from the installed "
+                        "pufferlib package, so it works from any cwd and "
+                        "always matches the stack you activated")
     p.add_argument("--out_dir", required=True)
     p.add_argument("--map_pool", type=int, default=200)
     p.add_argument("--total_agents", type=int, default=512)
@@ -100,6 +102,32 @@ def parse_args():
                    help="skip prep_human_data=True (use if it makes Drive "
                         "raise, to see what the env exposes without it)")
     return p.parse_args()
+
+
+def resolve_data_dir(cli):
+    """Locate the map binaries.
+
+    A relative default only resolved from the clone root, which is not where
+    you run this from. Derive it from the INSTALLED pufferlib instead -- the
+    same package load_drive_config() reads drive.ini out of -- so the maps
+    always belong to the stack you activated rather than to whichever
+    directory you happened to be standing in.
+    """
+    if cli:
+        return cli
+    import pufferlib
+    pd = Path(pufferlib.__file__).resolve().parent
+    cands = [pd / "resources" / "drive" / "binaries" / "training",
+             pd.parent / "pufferlib" / "resources" / "drive" / "binaries" / "training",
+             Path("pufferlib/resources/drive/binaries/training")]
+    for c in cands:
+        if (c / "map_000.bin").exists():
+            return str(c)
+    raise SystemExit(
+        "Could not find map_000.bin. Tried:\n  " +
+        "\n  ".join(str(c) for c in cands) +
+        "\nPass --data_dir explicitly. Find it with:\n"
+        "  find /scratch/$USER -name 'map_000.bin' -printf '%h\\n' 2>/dev/null | head")
 
 
 def load_drive_config():
@@ -260,24 +288,33 @@ def main():
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
+    import pufferlib
     from pufferlib.ocean.drive.drive import Drive
+    data_dir = resolve_data_dir(a.data_dir)
+    print("[env] pufferlib   : %s" % Path(pufferlib.__file__).resolve().parent)
+    print("[env] map binaries: %s" % data_dir)
+
     env_cfg = dict(load_drive_config()["env"])
     env_cfg.update({
         "num_maps":       a.map_pool,
         "num_agents":     a.total_agents,
-        "map_dir":        a.data_dir,
+        "map_dir":        data_dir,
         "episode_length": EPISODE_LEN,
         "control_mode":   a.control_mode,
     })
     if not a.no_prep_flag:
         env_cfg["prep_human_data"] = True
 
+    prep_accepted = not a.no_prep_flag
     try:
         env = Drive(**env_cfg)
     except TypeError as e:
         print("[env] Drive(**cfg) rejected a kwarg: %s" % e)
-        print("[env] retrying WITHOUT prep_human_data -- note this in the "
-              "verdict, it means the flag is not in this build")
+        print("[env] retrying WITHOUT prep_human_data. This is itself a")
+        print("[env] finding: a build with no prep_human_data kwarg is not")
+        print("[env] the guid stack, and stage 1 is expected to come back")
+        print("[env] empty on it. Carried into the verdict.")
+        prep_accepted = False
         env_cfg.pop("prep_human_data", None)
         env = Drive(**env_cfg)
 
@@ -285,7 +322,7 @@ def main():
     B = env.num_agents
     print("[env] control_mode=%s  agents=%d  obs_dim=%d  prep_human_data=%s"
           % (a.control_mode, B, obs_np.shape[-1],
-             env_cfg.get("prep_human_data", "<absent>")))
+             "accepted" if prep_accepted else "NOT A KWARG ON THIS BUILD"))
 
     gt = env.get_ground_truth_trajectories()
     print("[env] ground-truth keys: %s" % sorted(gt.keys()))
@@ -301,12 +338,21 @@ def main():
         print("\nNO HUMAN ACTION SOURCE FOUND.")
         print("Stages 2 and 3 cannot run. This is the answer, not a crash:")
         print("this build does not hand over the logged action, so the")
-        print("teacher-forcing route to BC data is closed here. Next step is")
-        print("either (a) rerun on the guid stack, where infer_human_actions /")
-        print("sample_expert_data are compiled in, or (b) derive the actions")
-        print("yourself by inverse dynamics on the GT x/y/heading above --")
-        print("in which case stage 2 below is still the test that validates it.")
-        print("\nSend the [api] dump above; it names everything that IS here.")
+        print("teacher-forcing route to BC data is closed on THIS stack.")
+        if not prep_accepted:
+            print("\nAnd the two findings agree. Drive() here has no")
+            print("prep_human_data kwarg, so this is not the guid build --")
+            print("an empty stage 1 is the expected result, not a surprise.")
+            print("Rerun on the clone whose C env has it. Find that clone:")
+            print("  grep -rl prep_human_data /scratch/$USER/*/pufferlib/ocean/drive/")
+        else:
+            print("\nNote that prep_human_data WAS accepted here, so this")
+            print("build has the flag but exposes no accessor under any name")
+            print("I tried. The [api] dump is the important part of this run.")
+        print("\nThe fallback that needs nothing from the C env: derive the")
+        print("actions by inverse dynamics on the GT x/y/heading printed")
+        print("above. Stage 2 is still exactly the test that validates it.")
+        print("\nSend the [api] dump; it names everything that IS here.")
         return
 
     print("\nUsing: %s (mode=%s)" % (src.name, src.mode))
