@@ -49,16 +49,39 @@ import argparse
 import ast
 import configparser
 import os
-import sys
 from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from role_on_human import as_agent_time, _sq
-
 EPISODE_LEN = 91   # WOMD timesteps
 N_ACTIONS   = 91   # discrete action grid (coincidentally the same number)
+
+
+# --- copied, deliberately, from role_on_human.py --------------------------
+# This script has to run on the guid stack, where role_on_human.py does not
+# exist (it lives on baseline) and where importing it would drag in
+# render_topdown -> torch -> matplotlib for two numpy helpers. Everything
+# here is numpy-only so it runs on any stack. The orientation logic below is
+# the hard-won part (see 29167a9, "squeeze GT arrays before orienting them"):
+# guessing the layout without squeezing first silently sums the wrong axis.
+
+def _sq(a):
+    a = np.asarray(a)
+    return a.reshape(-1) if a.ndim > 1 and 1 in a.shape else a
+
+
+def as_agent_time(arr, B):
+    """GT per-step arrays -> (B, T).
+
+    They arrive with a leading or trailing singleton dimension, e.g. (1, B, T)
+    or (B, T, 1), and in either orientation. Squeeze first, then orient on B.
+    """
+    a = np.squeeze(np.asarray(arr, dtype=float))
+    if a.ndim == 1:
+        a = a.reshape(B, -1)
+    elif a.ndim > 2:
+        a = a.reshape(B, -1) if a.shape[0] == B else a.reshape(-1, B).T
+    return a if a.shape[0] == B else a.T
 
 
 def parse_args():
