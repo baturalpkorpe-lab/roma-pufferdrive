@@ -1,0 +1,67 @@
+[icc] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_paperrew_pc_nodiv/roma_dim1_final.pt out=/scratch/e452103/role_icc/paperrew_pc_final_rep3 (CPU / compute partition)
+[icc] branch=mi-future-agentcentric-film commit=c44e3b5
+[icc] role_dim=1 checkpoint=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_paperrew_pc_nodiv/roma_dim1_final.pt
+[icc] episode 1/3: 2254 vehicles
+[icc] episode 2/3: 2243 vehicles
+[icc] episode 3/3: 2327 vehicles
+[icc] 6824 rows -> 6427 unique (scenario, vehicle) after collapsing 397 repeats
+[icc] 1049 scenes with >=2 vehicles (99 single-vehicle scenes dropped), 6328 vehicles, mean 6.0 per scene
+[icc] role PCA explained var: ['100%']
+
+==================================================================
+  SCENE ICC  (1.0 = role is the map, 0.0 = role is the driver)
+==================================================================
+
+  role dims
+    role_0           ICC = +0.142   (between 0.7915 / within 4.793)
+
+  role PCs
+    pc1              ICC = +0.142   (between 0.7915 / within 4.793)
+
+  ROLE OVERALL
+    role_ALL_DIMS    ICC = +0.142   (between 0.7915 / within 4.793)
+
+  behaviour (control)
+    speed_mean       ICC = +0.609   (between 29.28 / within 18.81)
+    accel_abs        ICC = +0.184   (between 0.01744 / within 0.0776)
+    accel_pos        ICC = +0.234   (between 0.06479 / within 0.2119)
+    decel_abs        ICC = +0.149   (between 0.02083 / within 0.1188)
+    jerk_abs         ICC = +0.117   (between 3.034 / within 22.98)
+    turn_abs         ICC = +0.094   (between 0.001598 / within 0.01538)
+    event_rate       ICC = +0.179   (between 0.3246 / within 1.487)
+    decel_p95        ICC = +0.146   (between 0.2267 / within 1.331)
+    decel_max        ICC = +0.080   (between 0.07337 / within 0.8421)
+    accel_p95        ICC = -0.033   (between 0 / within 0.03154)
+    accel_max        ICC = -0.047   (between 0 / within 0.04125)
+    hard_brake_rate  ICC = +0.109   (between 0.000486 / within 0.003974)
+    severe_brake_rate ICC = -0.040   (between 0 / within 1.956e-06)
+    hard_accel_rate  ICC = +0.222   (between 0.004901 / within 0.01714)
+    jerk_p95         ICC = +0.060   (between 7.699 / within 120)
+    jerk_rms         ICC = +0.095   (between 2.91 / within 27.64)
+    jerk_spikiness   ICC = +0.103   (between 0.001019 / within 0.00889)
+    accel_kurt       ICC = +0.134   (between 0.1578 / within 1.021)
+    n_brake_events   ICC = +0.107   (between 0.1769 / within 1.474)
+    brake_per_100m   ICC = +0.172   (between 1.433 / within 6.885)
+    brake_peak_mean  ICC = +0.060   (between 0.02237 / within 0.3535)
+    brake_peak_max   ICC = +0.075   (between 0.0262 / within 0.3235)
+    brake_dur_mean   ICC = +0.040   (between 0.00132 / within 0.03158)
+    brake_dv_mean    ICC = +0.050   (between 0.02249 / within 0.4236)
+    brake_abrupt_mean ICC = -0.010   (between 0 / within 0.04085)
+    n_accel_ev_events ICC = +0.088   (between 0.3527 / within 3.677)
+    accel_ev_per_100m ICC = +0.416   (between 12.17 / within 17.05)
+    accel_ev_peak_mean ICC = +0.047   (between 0.003126 / within 0.06326)
+    accel_ev_peak_max ICC = -0.001   (between 0 / within 0.03461)
+    accel_ev_dur_mean ICC = +0.113   (between 0.009745 / within 0.0765)
+    accel_ev_dv_mean ICC = +0.129   (between 0.1234 / within 0.837)
+    accel_ev_abrupt_mean ICC = +0.047   (between 0.0007295 / within 0.01471)
+    accel_mask_frac  ICC = +0.086   (between 5.267e-05 / within 0.0005584)
+
+------------------------------------------------------------------
+  role overall ICC      : +0.142
+  behaviour median ICC  : +0.095   <- the honest reference
+  VERDICT: role tracks behaviour's own scene structure. Not obviously
+           map-driven; whatever caps per-scene consistency is elsewhere.
+------------------------------------------------------------------
+
+[icc] wrote role_scene_icc.csv / .png / _agents.csv -> /scratch/e452103/role_icc/paperrew_pc_final_rep3
+[icc] done -> /scratch/e452103/role_icc/paperrew_pc_final_rep3

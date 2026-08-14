@@ -1,0 +1,67 @@
+[icc] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ep_film_comply_mifix_nodiv/roma_dim1_final.pt out=/scratch/e452103/role_icc/dim1_film_comply_mifix_rep3 (CPU / compute partition)
+[icc] branch=mi-future-agentcentric-film commit=26046d4
+[icc] role_dim=1 checkpoint=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ep_film_comply_mifix_nodiv/roma_dim1_final.pt
+[icc] episode 1/3: 2160 vehicles
+[icc] episode 2/3: 2224 vehicles
+[icc] episode 3/3: 2233 vehicles
+[icc] 6617 rows -> 6297 unique (scenario, vehicle) after collapsing 320 repeats
+[icc] 1066 scenes with >=2 vehicles (115 single-vehicle scenes dropped), 6182 vehicles, mean 5.8 per scene
+[icc] role PCA explained var: ['100%']
+
+==================================================================
+  SCENE ICC  (1.0 = role is the map, 0.0 = role is the driver)
+==================================================================
+
+  role dims
+    role_0           ICC = +0.150   (between 5.655 / within 32.14)
+
+  role PCs
+    pc1              ICC = +0.150   (between 5.655 / within 32.14)
+
+  ROLE OVERALL
+    role_ALL_DIMS    ICC = +0.150   (between 5.655 / within 32.14)
+
+  behaviour (control)
+    speed_mean       ICC = +0.630   (between 34.67 / within 20.38)
+    accel_abs        ICC = +0.362   (between 0.06181 / within 0.1091)
+    accel_pos        ICC = +0.296   (between 0.1066 / within 0.2534)
+    decel_abs        ICC = +0.103   (between 0.009719 / within 0.08485)
+    jerk_abs         ICC = +0.247   (between 8.579 / within 26.12)
+    turn_abs         ICC = +0.278   (between 0.007171 / within 0.01866)
+    event_rate       ICC = +0.258   (between 0.1886 / within 0.5411)
+    decel_p95        ICC = +0.153   (between 0.2984 / within 1.653)
+    decel_max        ICC = +0.163   (between 0.3431 / within 1.767)
+    accel_p95        ICC = +0.021   (between 0.000227 / within 0.01051)
+    accel_max        ICC = +0.117   (between 0.005141 / within 0.03867)
+    hard_brake_rate  ICC = +0.058   (between 0.0001662 / within 0.002691)
+    severe_brake_rate ICC = +0.066   (between 1.854e-07 / within 2.633e-06)
+    hard_accel_rate  ICC = +0.286   (between 0.008053 / within 0.02009)
+    jerk_p95         ICC = +0.118   (between 22.46 / within 168)
+    jerk_rms         ICC = +0.193   (between 8.465 / within 35.29)
+    jerk_spikiness   ICC = +0.207   (between 0.006461 / within 0.02472)
+    accel_kurt       ICC = +0.181   (between 0.7333 / within 3.324)
+    n_brake_events   ICC = +0.070   (between 0.0503 / within 0.6703)
+    brake_per_100m   ICC = +0.123   (between 0.5448 / within 3.901)
+    brake_peak_mean  ICC = +0.027   (between 0.01345 / within 0.4856)
+    brake_peak_max   ICC = +0.039   (between 0.01979 / within 0.4871)
+    brake_dur_mean   ICC = +0.165   (between 0.007156 / within 0.03622)
+    brake_dv_mean    ICC = +0.187   (between 0.1143 / within 0.4962)
+    brake_abrupt_mean ICC = +0.002   (between 0.0001141 / within 0.04958)
+    n_accel_ev_events ICC = +0.225   (between 0.7796 / within 2.679)
+    accel_ev_per_100m ICC = +0.372   (between 5.826 / within 9.824)
+    accel_ev_peak_mean ICC = +0.056   (between 0.0023 / within 0.03909)
+    accel_ev_peak_max ICC = +0.069   (between 0.002355 / within 0.03163)
+    accel_ev_dur_mean ICC = +0.170   (between 0.06689 / within 0.3271)
+    accel_ev_dv_mean ICC = +0.193   (between 0.951 / within 3.983)
+    accel_ev_abrupt_mean ICC = +0.152   (between 0.002222 / within 0.01239)
+    accel_mask_frac  ICC = +0.160   (between 0.0001581 / within 0.000828)
+
+------------------------------------------------------------------
+  role overall ICC      : +0.150
+  behaviour median ICC  : +0.163   <- the honest reference
+  VERDICT: role tracks behaviour's own scene structure. Not obviously
+           map-driven; whatever caps per-scene consistency is elsewhere.
+------------------------------------------------------------------
+
+[icc] wrote role_scene_icc.csv / .png / _agents.csv -> /scratch/e452103/role_icc/dim1_film_comply_mifix_rep3
+[icc] done -> /scratch/e452103/role_icc/dim1_film_comply_mifix_rep3

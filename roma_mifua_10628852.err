@@ -1,0 +1,79 @@
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: baturalpkorpe (baturalpkorpe-bilkent-niversitesi) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.28.0
+wandb: Run data is saved locally in /scratch/e452103/PufferDrive/wandb/run-20260812_082043-hbivwe3g
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run roma_mifutagent_dim1_ft_paperrew_pc_nodiv
+wandb: ⭐️ View project at https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive
+wandb: 🚀 View run at https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive/runs/hbivwe3g
+wandb: updating run metadata
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading wandb-summary.json; uploading config.yaml
+wandb: uploading config.yaml
+wandb: uploading config.yaml; uploading data
+wandb: uploading config.yaml
+wandb: 
+wandb: Run history:
+wandb:        encoders/ego_delta ▅▆▅█▅▅▅▅▆▄▅▆▄▅▅▄▄▃▃▃▄▂▃▄▃▃▄▃▃▃▂▂▂▂▁▂▁▁▁▁
+wandb:    encoders/partner_delta █▆▆▆▅▇▆▅▇▆▆▆▅▅▇▅▄▄▅▅▄▄▄▄▃▃▃▃▃▂▂▂▂▂▂▂▂▂▁▁
+wandb:       encoders/road_delta ▇▅▅▅█▅▄▅▆▅▅▆▅▅▆▅▃▆▃▄▄▃▄▅▃▃▃▄▃▃▃▃▃▂▂▂▂▂▁▁
+wandb:  eval/wosac_angular_accel ▁
+wandb:  eval/wosac_angular_speed ▁
+wandb:      eval/wosac_collision ▁
+wandb:       eval/wosac_dist_obj ▁
+wandb: eval/wosac_dist_road_edge ▁
+wandb:    eval/wosac_interactive ▁
+wandb:      eval/wosac_kinematic ▁
+wandb:                       +21 ...
+wandb: 
+wandb: Run summary:
+wandb:        encoders/ego_delta 0.0
+wandb:    encoders/partner_delta 0.0
+wandb:       encoders/road_delta 0.0
+wandb:  eval/wosac_angular_accel 0.33952
+wandb:  eval/wosac_angular_speed 0.28621
+wandb:      eval/wosac_collision 0.90564
+wandb:       eval/wosac_dist_obj 0.30731
+wandb: eval/wosac_dist_road_edge 0.63299
+wandb:    eval/wosac_interactive 0.66836
+wandb:      eval/wosac_kinematic 0.2846
+wandb:                       +21 ...
+wandb: 
+wandb: 🚀 View run roma_mifutagent_dim1_ft_paperrew_pc_nodiv at: https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive/runs/hbivwe3g
+wandb: ⭐️ View project at: https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive
+wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: ./wandb/run-20260812_082043-hbivwe3g/logs

@@ -1,0 +1,15 @@
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: baturalpkorpe (baturalpkorpe-bilkent-niversitesi) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.28.0
+wandb: Run data is saved locally in /scratch/e452103/PufferDrive/wandb/run-20260801_190810-jhxolenk
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run roma_mifutagentH8_dim4_r16p64_ep_film_maps10000_0
+wandb: ⭐️ View project at https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive
+wandb: 🚀 View run at https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive/runs/jhxolenk
+Traceback (most recent call last):
+  File "/home/e452103/roma_film/roma_pufferdrive/train_roma.py", line 1340, in <module>
+    train(parse_args())
+  File "/home/e452103/roma_film/roma_pufferdrive/train_roma.py", line 1120, in train
+    don2d   = b_don[:ptr].reshape(T_steps, B)
+                                  ^^^^^^^
+UnboundLocalError: cannot access local variable 'T_steps' where it is not associated with a value

@@ -1,0 +1,11 @@
+[roll] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ep_nodiv/roma_dim1_final.pt
+[roll] code=/home/e452103/roma_film branch=mi-future-agentcentric-film
+[roll] alphas=-2,-1,0,1,2 (sweep=1) axis=PC1 episodes=6 map_pool=1000
+[roll] out=/scratch/e452103/regimes_rollout/dim1_v4
+[roll] zones for 9493 scenes  device=cpu
+[roll] role_dim=1
+[alpha] warmup axes from 2934 role vectors
+[roll] measured natural sigma(PC1) = 1.1716
+[roll] axis derived from this checkpoint
+[roll] sweeping PC1  sigma=1.1716
+[roll] PC1-2 ep 1/6: 2917 trajectories, 284 conflicts

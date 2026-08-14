@@ -1,0 +1,99 @@
+[roll] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_pc40_cb1_lr_half_nodiv/roma_dim1_step5251006464.pt
+[roll] code=/home/e452103/roma_film branch=mi-future-agentcentric-film
+[roll] alphas=-2,-1,0,1,2 (sweep=1) axis=PC1 episodes=6 map_pool=1000
+[roll] out=/scratch/e452103/regimes_rollout/pc40_cb1_lr_half_5251006464
+[roll] zones for 9493 scenes  device=cpu
+[roll] role_dim=1
+[alpha] warmup axes from 2970 role vectors
+[roll] measured natural sigma(PC1) = 4.7423
+[roll] axis derived from this checkpoint
+[roll] sweeping PC1  sigma=4.7423
+[roll] PC1-2 ep 1/6: 2220 trajectories, 122 conflicts
+[roll] PC1-2 ep 2/6: 4522 trajectories, 210 conflicts
+[roll] PC1-2 ep 3/6: 6670 trajectories, 332 conflicts
+[roll] PC1-2 ep 4/6: 9040 trajectories, 425 conflicts
+[roll] PC1-2 ep 5/6: 11421 trajectories, 565 conflicts
+[roll] PC1-2 ep 6/6: 13710 trajectories, 679 conflicts
+
+=== PC1-2: 13710 trajectories, 679 conflicts ===
+
+  ROLE VARIANCE SPLIT (is it a disposition or a reaction?)
+    dim 0: between-agent=19.1847  between-regime(within agent)=24.6484  step-level sd^2=18.4253
+            disposition share = 0.438  (-> 1.0 = a stable style; -> 0.5 = as much situational swing as driver difference)
+    desired speed (rel)    n=10836  med=0.787
+    time headway (s)       n=495    med=2.065
+  wrote /scratch/e452103/regimes_rollout/pc40_cb1_lr_half_5251006464/conflicts_PC1-2.csv + regimes_PC1-2.csv
+[roll] PC1-1 ep 1/6: 2185 trajectories, 114 conflicts
+[roll] PC1-1 ep 2/6: 4583 trajectories, 226 conflicts
+[roll] PC1-1 ep 3/6: 6831 trajectories, 323 conflicts
+[roll] PC1-1 ep 4/6: 9112 trajectories, 451 conflicts
+[roll] PC1-1 ep 5/6: 11427 trajectories, 569 conflicts
+[roll] PC1-1 ep 6/6: 13739 trajectories, 681 conflicts
+
+=== PC1-1: 13739 trajectories, 681 conflicts ===
+
+  ROLE VARIANCE SPLIT (is it a disposition or a reaction?)
+    dim 0: between-agent=20.6696  between-regime(within agent)=23.9923  step-level sd^2=19.5368
+            disposition share = 0.463  (-> 1.0 = a stable style; -> 0.5 = as much situational swing as driver difference)
+    desired speed (rel)    n=10928  med=0.794
+    time headway (s)       n=430    med=1.986
+  wrote /scratch/e452103/regimes_rollout/pc40_cb1_lr_half_5251006464/conflicts_PC1-1.csv + regimes_PC1-1.csv
+[roll] natural ep 1/6: 2253 trajectories, 126 conflicts
+[roll] natural ep 2/6: 4553 trajectories, 274 conflicts
+[roll] natural ep 3/6: 6763 trajectories, 401 conflicts
+[roll] natural ep 4/6: 9049 trajectories, 512 conflicts
+[roll] natural ep 5/6: 11369 trajectories, 621 conflicts
+[roll] natural ep 6/6: 13615 trajectories, 743 conflicts
+
+=== natural: 13615 trajectories, 743 conflicts ===
+
+  ROLE VARIANCE SPLIT (is it a disposition or a reaction?)
+    dim 0: between-agent=20.9819  between-regime(within agent)=24.4912  step-level sd^2=20.3862
+            disposition share = 0.461  (-> 1.0 = a stable style; -> 0.5 = as much situational swing as driver difference)
+    desired speed (rel)    n=10847  med=0.803
+    time headway (s)       n=431    med=1.802
+  wrote /scratch/e452103/regimes_rollout/pc40_cb1_lr_half_5251006464/conflicts_natural.csv + regimes_natural.csv
+[roll] PC1+1 ep 1/6: 2251 trajectories, 106 conflicts
+[roll] PC1+1 ep 2/6: 4562 trajectories, 263 conflicts
+[roll] PC1+1 ep 3/6: 6846 trajectories, 374 conflicts
+[roll] PC1+1 ep 4/6: 9064 trajectories, 509 conflicts
+[roll] PC1+1 ep 5/6: 11261 trajectories, 640 conflicts
+[roll] PC1+1 ep 6/6: 13448 trajectories, 767 conflicts
+
+=== PC1+1: 13448 trajectories, 767 conflicts ===
+
+  ROLE VARIANCE SPLIT (is it a disposition or a reaction?)
+    dim 0: between-agent=23.7095  between-regime(within agent)=25.2087  step-level sd^2=22.2252
+            disposition share = 0.485  (-> 1.0 = a stable style; -> 0.5 = as much situational swing as driver difference)
+    desired speed (rel)    n=10536  med=0.806
+    time headway (s)       n=402    med=1.610
+  wrote /scratch/e452103/regimes_rollout/pc40_cb1_lr_half_5251006464/conflicts_PC1+1.csv + regimes_PC1+1.csv
+[roll] PC1+2 ep 1/6: 2355 trajectories, 132 conflicts
+[roll] PC1+2 ep 2/6: 4562 trajectories, 270 conflicts
+[roll] PC1+2 ep 3/6: 6736 trajectories, 397 conflicts
+[roll] PC1+2 ep 4/6: 9007 trajectories, 548 conflicts
+[roll] PC1+2 ep 5/6: 11276 trajectories, 679 conflicts
+[roll] PC1+2 ep 6/6: 13603 trajectories, 821 conflicts
+
+=== PC1+2: 13603 trajectories, 821 conflicts ===
+
+  ROLE VARIANCE SPLIT (is it a disposition or a reaction?)
+    dim 0: between-agent=24.2713  between-regime(within agent)=25.1305  step-level sd^2=23.3430
+            disposition share = 0.491  (-> 1.0 = a stable style; -> 0.5 = as much situational swing as driver difference)
+    desired speed (rel)    n=10732  med=0.804
+    time headway (s)       n=412    med=1.456
+  wrote /scratch/e452103/regimes_rollout/pc40_cb1_lr_half_5251006464/conflicts_PC1+2.csv + regimes_PC1+2.csv
+[roll] done -> /scratch/e452103/regimes_rollout/pc40_cb1_lr_half_5251006464
+total 11879
+drwxr-xr-x  2 e452103 domain users      10 Aug 14 12:38 .
+drwxr-xr-x 54 e452103 domain users      52 Aug 14 12:03 ..
+-rw-r--r--  1 e452103 domain users  151313 Aug 14 12:29 conflicts_PC1+1.csv
+-rw-r--r--  1 e452103 domain users  161686 Aug 14 12:38 conflicts_PC1+2.csv
+-rw-r--r--  1 e452103 domain users  133540 Aug 14 12:17 conflicts_PC1-1.csv
+-rw-r--r--  1 e452103 domain users  133058 Aug 14 12:12 conflicts_PC1-2.csv
+-rw-r--r--  1 e452103 domain users  145371 Aug 14 12:22 conflicts_natural.csv
+-rw-r--r--  1 e452103 domain users 2254365 Aug 14 12:29 regimes_PC1+1.csv
+-rw-r--r--  1 e452103 domain users 2279799 Aug 14 12:38 regimes_PC1+2.csv
+-rw-r--r--  1 e452103 domain users 2299774 Aug 14 12:17 regimes_PC1-1.csv
+-rw-r--r--  1 e452103 domain users 2302295 Aug 14 12:12 regimes_PC1-2.csv
+-rw-r--r--  1 e452103 domain users 2299529 Aug 14 12:22 regimes_natural.csv

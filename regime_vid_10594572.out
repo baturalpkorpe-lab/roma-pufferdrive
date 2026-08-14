@@ -1,0 +1,28 @@
+[vid] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ep_nodiv/roma_dim1_final.pt
+[vid] code=/home/e452103/roma_film branch=mi-future-agentcentric-film
+[vid] out=/scratch/e452103/regime_videos  n_videos=10  map_pool=64
+[vid] ffmpeg: True
+[vid] zones for 9493 scenes  device=cpu
+[vid] role_dim=1  (natural roles, nothing forced)
+  [1/10] regime_cbcf017370.mp4  30 vehicles  3 zones  73 regime changes
+  [2/10] regime_4f56ea470d.mp4  41 vehicles  1 zones  101 regime changes
+  [3/10] regime_fd57b74119.mp4  48 vehicles  4 zones  125 regime changes
+  [4/10] regime_c68667dd33.mp4  30 vehicles  8 zones  118 regime changes
+  [5/10] regime_4f56ea470d.mp4  55 vehicles  1 zones  149 regime changes
+  [6/10] regime_c68667dd33.mp4  40 vehicles  8 zones  166 regime changes
+  [7/10] regime_fd57b74119.mp4  48 vehicles  4 zones  121 regime changes
+  [8/10] regime_fd57b74119.mp4  72 vehicles  4 zones  181 regime changes
+  [9/10] regime_3942a11753.mp4  30 vehicles  11 zones  108 regime changes
+  [10/10] regime_905d3f8219.mp4  24 vehicles  3 zones  73 regime changes
+
+  wrote 10 video(s) -> /scratch/e452103/regime_videos
+[vid] done -> /scratch/e452103/regime_videos
+total 2015
+drwxr-xr-x  2 e452103 domain users      6 Aug  6 21:52 .
+drwx------ 33 e452103 domain users     35 Aug  6 21:23 ..
+-rw-r--r--  1 e452103 domain users 384249 Aug  6 21:51 regime_3942a11753.mp4
+-rw-r--r--  1 e452103 domain users 497608 Aug  6 21:42 regime_4f56ea470d.mp4
+-rw-r--r--  1 e452103 domain users 218292 Aug  6 21:53 regime_905d3f8219.mp4
+-rw-r--r--  1 e452103 domain users 266166 Aug  6 21:44 regime_c68667dd33.mp4
+-rw-r--r--  1 e452103 domain users 279246 Aug  6 21:33 regime_cbcf017370.mp4
+-rw-r--r--  1 e452103 domain users 415590 Aug  6 21:49 regime_fd57b74119.mp4

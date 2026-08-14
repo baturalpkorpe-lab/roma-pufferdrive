@@ -1,0 +1,28 @@
+[roll] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_pc40_cb1_lr_half_nodiv/roma_dim1_step6251347968.pt
+[roll] code=/home/e452103/roma_film branch=mi-future-agentcentric-film
+[roll] alphas=-2,-1,0,1,2 (sweep=1) axis=PC1 episodes=6 map_pool=1000
+[roll] out=/scratch/e452103/regimes_rollout/pc40_cb1_lr_half_6251347968
+[roll] zones for 9493 scenes  device=cpu
+[roll] role_dim=1
+[alpha] warmup axes from 2958 role vectors
+[roll] measured natural sigma(PC1) = 5.2465
+[roll] axis derived from this checkpoint
+[roll] sweeping PC1  sigma=5.2465
+[roll] PC1-2 ep 1/6: 2266 trajectories, 134 conflicts
+[roll] PC1-2 ep 2/6: 4496 trajectories, 233 conflicts
+[roll] PC1-2 ep 3/6: 6831 trajectories, 347 conflicts
+[roll] PC1-2 ep 4/6: 9081 trajectories, 457 conflicts
+[roll] PC1-2 ep 5/6: 11333 trajectories, 592 conflicts
+[roll] PC1-2 ep 6/6: 13465 trajectories, 709 conflicts
+
+=== PC1-2: 13465 trajectories, 709 conflicts ===
+
+  ROLE VARIANCE SPLIT (is it a disposition or a reaction?)
+    dim 0: between-agent=23.2612  between-regime(within agent)=16.5106  step-level sd^2=20.5468
+            disposition share = 0.585  (-> 1.0 = a stable style; -> 0.5 = as much situational swing as driver difference)
+    desired speed (rel)    n=10595  med=0.779
+    time headway (s)       n=497    med=2.158
+  wrote /scratch/e452103/regimes_rollout/pc40_cb1_lr_half_6251347968/conflicts_PC1-2.csv + regimes_PC1-2.csv
+[roll] PC1-1 ep 1/6: 2305 trajectories, 124 conflicts
+[roll] PC1-1 ep 2/6: 4505 trajectories, 228 conflicts
+[roll] PC1-1 ep 3/6: 6654 trajectories, 341 conflicts

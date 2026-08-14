@@ -1,0 +1,17 @@
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: baturalpkorpe (baturalpkorpe-bilkent-niversitesi) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run jd76ajub
+wandb: Tracking run with wandb version 0.28.0
+wandb: Run data is saved locally in /scratch/e452103/PufferDrive/wandb/run-20260803_161242-jd76ajub
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run roma_mifutagentH8_dim4_r16p64_ep_film_comply_maps10000_0
+wandb: ⭐️ View project at https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive
+wandb: 🚀 View run at https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive/runs/jd76ajub
+Traceback (most recent call last):
+  File "/home/e452103/roma_film/roma_pufferdrive/train_roma.py", line 1354, in <module>
+    train(parse_args())
+  File "/home/e452103/roma_film/roma_pufferdrive/train_roma.py", line 1268, in train
+    with open(log_csv, "a", newline="") as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/scratch/e452103/checkpoints/roma_mifutagent_dim4_H8_r16p64_ep_film_comply/training_log.csv'
+slurmstepd: error: *** JOB 10560676 ON gpu019 CANCELLED AT 2026-08-03T18:12:31 ***

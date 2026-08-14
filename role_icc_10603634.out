@@ -1,0 +1,67 @@
+[icc] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ep_film_comply_mifix_nodiv/roma_dim1_final.pt out=/scratch/e452103/role_icc/dim1_film_comply_mifix_rep2 (CPU / compute partition)
+[icc] branch=mi-future-agentcentric-film commit=26046d4
+[icc] role_dim=1 checkpoint=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ep_film_comply_mifix_nodiv/roma_dim1_final.pt
+[icc] episode 1/3: 2191 vehicles
+[icc] episode 2/3: 2203 vehicles
+[icc] episode 3/3: 2276 vehicles
+[icc] 6670 rows -> 6164 unique (scenario, vehicle) after collapsing 506 repeats
+[icc] 1038 scenes with >=2 vehicles (128 single-vehicle scenes dropped), 6036 vehicles, mean 5.8 per scene
+[icc] role PCA explained var: ['100%']
+
+==================================================================
+  SCENE ICC  (1.0 = role is the map, 0.0 = role is the driver)
+==================================================================
+
+  role dims
+    role_0           ICC = +0.144   (between 5.332 / within 31.6)
+
+  role PCs
+    pc1              ICC = +0.144   (between 5.332 / within 31.6)
+
+  ROLE OVERALL
+    role_ALL_DIMS    ICC = +0.144   (between 5.332 / within 31.6)
+
+  behaviour (control)
+    speed_mean       ICC = +0.623   (between 31.74 / within 19.24)
+    accel_abs        ICC = +0.341   (between 0.05757 / within 0.1114)
+    accel_pos        ICC = +0.297   (between 0.1043 / within 0.2464)
+    decel_abs        ICC = +0.122   (between 0.01096 / within 0.07858)
+    jerk_abs         ICC = +0.246   (between 8.397 / within 25.69)
+    turn_abs         ICC = +0.270   (between 0.006807 / within 0.01842)
+    event_rate       ICC = +0.093   (between 0.08307 / within 0.8071)
+    decel_p95        ICC = +0.161   (between 0.3087 / within 1.615)
+    decel_max        ICC = +0.134   (between 0.2853 / within 1.85)
+    accel_p95        ICC = -0.016   (between 0 / within 0.01215)
+    accel_max        ICC = +0.133   (between 0.00606 / within 0.0394)
+    hard_brake_rate  ICC = +0.080   (between 0.0002164 / within 0.002495)
+    severe_brake_rate ICC = +0.045   (between 5.937e-08 / within 1.25e-06)
+    hard_accel_rate  ICC = +0.286   (between 0.007783 / within 0.01947)
+    jerk_p95         ICC = +0.123   (between 23.64 / within 168.2)
+    jerk_rms         ICC = +0.195   (between 8.434 / within 34.9)
+    jerk_spikiness   ICC = +0.218   (between 0.006865 / within 0.02463)
+    accel_kurt       ICC = +0.185   (between 0.8045 / within 3.554)
+    n_brake_events   ICC = +0.061   (between 0.04056 / within 0.6198)
+    brake_per_100m   ICC = +0.076   (between 0.2317 / within 2.821)
+    brake_peak_mean  ICC = -0.014   (between 0 / within 0.4938)
+    brake_peak_max   ICC = +0.007   (between 0.003422 / within 0.4762)
+    brake_dur_mean   ICC = -0.021   (between 0 / within 0.05072)
+    brake_dv_mean    ICC = -0.000   (between 0 / within 0.6995)
+    brake_abrupt_mean ICC = +0.042   (between 0.001949 / within 0.04456)
+    n_accel_ev_events ICC = +0.191   (between 0.6602 / within 2.792)
+    accel_ev_per_100m ICC = +0.331   (between 5.835 / within 11.77)
+    accel_ev_peak_mean ICC = +0.039   (between 0.00147 / within 0.03619)
+    accel_ev_peak_max ICC = +0.144   (between 0.003476 / within 0.02061)
+    accel_ev_dur_mean ICC = +0.171   (between 0.07008 / within 0.3404)
+    accel_ev_dv_mean ICC = +0.193   (between 0.9967 / within 4.174)
+    accel_ev_abrupt_mean ICC = +0.140   (between 0.001963 / within 0.01205)
+    accel_mask_frac  ICC = +0.080   (between 7.426e-05 / within 0.0008525)
+
+------------------------------------------------------------------
+  role overall ICC      : +0.144
+  behaviour median ICC  : +0.134   <- the honest reference
+  VERDICT: role tracks behaviour's own scene structure. Not obviously
+           map-driven; whatever caps per-scene consistency is elsewhere.
+------------------------------------------------------------------
+
+[icc] wrote role_scene_icc.csv / .png / _agents.csv -> /scratch/e452103/role_icc/dim1_film_comply_mifix_rep2
+[icc] done -> /scratch/e452103/role_icc/dim1_film_comply_mifix_rep2

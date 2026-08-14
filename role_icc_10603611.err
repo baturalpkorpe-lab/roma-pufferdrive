@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "/home/e452103/roma_film/role_scene_icc.py", line 312, in <module>
+    main()
+  File "/home/e452103/roma_film/role_scene_icc.py", line 190, in main
+    policy, role_dim = load_policy(args.checkpoint, obs_np.shape[-1], device)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/e452103/roma_film/render_topdown.py", line 100, in load_policy
+    policy.load_state_dict(ckpt[key])
+  File "/home/e452103/.conda/envs/roma/lib/python3.11/site-packages/torch/nn/modules/module.py", line 2584, in load_state_dict
+    raise RuntimeError(
+RuntimeError: Error(s) in loading state_dict for RomaPolicy:
+	Unexpected key(s) in state_dict: "role_partner_proj.weight", "role_partner_proj.bias", "role_road_proj.weight", "role_road_proj.bias", "film.weight", "film.bias". 
+	size mismatch for role_encoder.fc_obs.0.weight: copying a param with shape torch.Size([64, 112]) from checkpoint, the shape in current model is torch.Size([64, 128]).

@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "/home/e452103/roma_film/render_regime_video.py", line 269, in <module>
+    main()
+  File "/home/e452103/roma_film/render_regime_video.py", line 246, in main
+    arr = np.asarray(pl, dtype=float)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: could not convert string to float: 'x'

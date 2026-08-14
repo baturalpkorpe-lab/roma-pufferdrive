@@ -13,7 +13,7 @@
 # ===========================================================================
 # TRAJECTORY-CLUSTER role analysis for ANY finished checkpoint. Pass CKPT+TAG;
 # nothing here is specific to one run. EVERYTHING is stratified by TRAJECTORY
-# CLUSTER (trajectory_clusters_stopfrac.csv: mid-speed / fast / stop&go /
+# CLUSTER (trajectory_clusters_stopfrac.csv: fast / stop&go / mid-speed /
 # turning). Map-regime clustering is NOT used anywhere.
 #
 # The GPU part. The trajectory-cluster VIDEO grid is a separate CPU job --
@@ -66,8 +66,14 @@ if [ -z "${TRAJ:-}" ]; then
         TRAJ="$CODE_DIR/data/trajectory_clusters_stopfrac.csv"
     fi
 fi
-# Verified against the K=4 centroid plot: 0=mid-speed 1=fast 2=stop&go 3=turning
-TYPE_NAMES=${TYPE_NAMES:-0:mid-speed,1:fast,2:stop&go,3:turning}
+# 0=fast 1=stop&go 2=mid-speed 3=turning. This mapping is NOT from the centroid
+# plot -- the old comment claimed it was and had 0 and 2 swapped, which
+# mislabelled every per-cluster figure. It is what the cluster indices actually
+# are, corroborated by the per-cluster WOSAC runs: cluster0 gives ade 13.6 /
+# goal 38% (long fast trajectories) and cluster1 ade 3.9 / goal 64% (barely
+# moving). verify_cluster_names.py is still the independent check -- run it
+# before this mapping goes into a paper table.
+TYPE_NAMES=${TYPE_NAMES:-0:fast,1:stop&go,2:mid-speed,3:turning}
 
 ALPHAS=${ALPHAS:--2,-1,0,1,2}
 WARMUP_EP=${WARMUP_EP:-3}
@@ -212,7 +218,7 @@ cp -f "$SLURM_SUBMIT_DIR/role_an_${SLURM_JOB_ID}.err" "$OUT_ROOT/logs/" 2>/dev/n
 cat > "$OUT_ROOT/README.txt" <<READMEEOF
 Trajectory-cluster role analysis -- $TAG
 checkpoint: $CKPT
-trajectory clustering: $TRAJ  (0=mid-speed 1=fast 2=stop&go 3=turning)
+trajectory clustering: $TRAJ  (0=fast 1=stop&go 2=mid-speed 3=turning)
 generated: $(date)
 
 EVERYTHING here is stratified by TRAJECTORY CLUSTER. No map-regime clustering.
@@ -228,6 +234,9 @@ paired/                            role-pairing analysis
                                    x metric. "does forcing the role move behaviour?"
   role_paired_PC1.png              dose-response of the paired deltas along PC1
   role_paired_PC2.png              same along PC2 (0 at alpha=0 by construction)
+                                   ROLE_DIM=1 runs have ONE role axis, so there
+                                   is no PC2 here and the video grid is a
+                                   PC1-only sweep (no corners) -- not missing.
   role_scene_consistency.csv       within-scene role consistency, per trajectory
                                    cluster (does a scene's agents get consistent
                                    roles?)
@@ -247,7 +256,7 @@ paired/                            role-pairing analysis
 renders/role_grid/                 trajectory-cluster VIDEOS (from the CPU job)
   *.mp4                            scenes_per_type scenes PER TRAJECTORY CLUSTER,
                                    each rendered across the PC1xPC2 forcing grid --
-                                   watch how mid-speed/fast/stop&go/turning each
+                                   watch how fast/stop&go/mid-speed/turning each
                                    respond to role forcing.
   grid_summary.csv                 per-cell metric summary for the grid
 

@@ -1,0 +1,306 @@
+[role_an] tag=collstop role_dim=1
+[role_an] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_collstop_nodiv/roma_dim1_final.pt
+[role_an] out=/scratch/e452103/analysis/collstop  traj_clusters=/scratch/e452103/traj_atlas/trajectory_clusters_stopfrac.csv
+[role_an] branch=mi-future-agentcentric-film commit=06b78a3
+
+==================== 0/5 build scenario->trajectory scaffold ====================
+[scaffold] 9388 scenarios from 55279 labeled trajectories; cluster mix {2: 4302, 3: 1743, 0: 1698, 1: 1645}
+
+==================== 1/5 role_paired_sweep [GPU] ====================
+[paired] 8988 core scenarios, regimes [0, 1, 2, 3]
+[paired] warmup 1/3: 2249 (role, behavior) pairs
+[paired] warmup 2/3: 4541 (role, behavior) pairs
+[paired] warmup 3/3: 6751 (role, behavior) pairs
+[paired] PCA: explained var ['100%']  sigma=[2.837]
+
+[paired] === observational r (natural, plausibility-masked) ===
+[paired]   PC1 vs speed_mean : r=+0.383
+[paired]   PC1 vs turn_abs   : r=+0.059
+[paired]   PC1 vs event_rate : r=-0.188
+[paired]   PC1 vs accel_p95  : r=+0.025
+[paired]   PC1 vs hard_accel_rate: r=-0.026
+[paired]   PC1 vs accel_ev_peak_mean: r=-0.059
+[paired]   PC1 vs accel_ev_dur_mean: r=-0.139
+[paired]   PC1 vs decel_p95  : r=-0.075
+[paired]   PC1 vs hard_brake_rate: r=-0.224
+[paired]   PC1 vs brake_peak_mean: r=-0.162
+[paired]   PC1 vs brake_dur_mean: r=-0.248
+[paired]   PC1 vs accel_mask_frac: r=+0.439
+[paired] 5 conditions per episode x 6 episodes (natural-offset forcing)
+[paired] ep0   natural: 337 focals
+[paired] ep0    PC1|-2: 337 focals
+[paired] ep0    PC1|-1: 337 focals
+[paired] ep0    PC1|+1: 337 focals
+[paired] ep0    PC1|+2: 337 focals
+[paired] ep1   natural: 392 focals
+[paired] ep1    PC1|-2: 392 focals
+[paired] ep1    PC1|-1: 392 focals
+[paired] ep1    PC1|+1: 392 focals
+[paired] ep1    PC1|+2: 392 focals
+[paired] ep2   natural: 376 focals
+[paired] ep2    PC1|-2: 376 focals
+[paired] ep2    PC1|-1: 376 focals
+[paired] ep2    PC1|+1: 376 focals
+[paired] ep2    PC1|+2: 375 focals
+[paired] ep3   natural: 372 focals
+[paired] ep3    PC1|-2: 372 focals
+[paired] ep3    PC1|-1: 372 focals
+[paired] ep3    PC1|+1: 372 focals
+[paired] ep3    PC1|+2: 372 focals
+[paired] ep4   natural: 375 focals
+[paired] ep4    PC1|-2: 375 focals
+[paired] ep4    PC1|-1: 375 focals
+[paired] ep4    PC1|+1: 375 focals
+[paired] ep4    PC1|+2: 375 focals
+[paired] ep5   natural: 357 focals
+[paired] ep5    PC1|-2: 358 focals
+[paired] ep5    PC1|-1: 357 focals
+[paired] ep5    PC1|+1: 357 focals
+[paired] ep5    PC1|+2: 357 focals
+
+[paired] === accel mask rate per condition (audit) ===
+[paired]         PC1|+1: mean=0.0016  max=0.663  n=2209
+[paired]         PC1|+2: mean=0.0016  max=0.652  n=2208
+[paired]         PC1|-1: mean=0.0017  max=0.663  n=2209
+[paired]         PC1|-2: mean=0.0016  max=0.663  n=2210
+[paired]        natural: mean=0.0017  max=0.663  n=2209
+[paired]   spread across conditions: 0.0001
+
+[paired] === HEADLINE: alpha=+2 vs -2, SAME (map, vehicle) ===
+[paired]   PC1  speed_mean : diff=+0.218 ± 0.058  t=+7.4  n=2208 pairs
+[paired]   PC1  accel_abs  : diff=-0.142 ± 0.008  t=-33.4  n=2208 pairs
+[paired]   PC1  accel_pos  : diff=-0.023 ± 0.012  t=-3.5  n=2208 pairs
+[paired]   PC1  decel_abs  : diff=-0.119 ± 0.010  t=-22.9  n=2208 pairs
+[paired]   PC1  jerk_abs   : diff=-0.165 ± 0.171  t=-1.9  n=2207 pairs
+[paired]   PC1  turn_abs   : diff=-0.038 ± 0.005  t=-15.3  n=2208 pairs
+[paired]   PC1  event_rate : diff=+0.071 ± 0.077  t=+1.8  n=2208 pairs
+[paired]   PC1  decel_p95  : diff=-0.253 ± 0.035  t=-14.3  n=2208 pairs
+[paired]   PC1  decel_max  : diff=-0.047 ± 0.022  t=-4.2  n=2208 pairs
+[paired]   PC1  accel_p95  : diff=+0.000 ± 0.003  t=+0.2  n=2208 pairs
+[paired]   PC1  accel_max  : diff=+0.001 ± 0.002  t=+0.7  n=2208 pairs
+[paired]   PC1  hard_brake_rate: diff=-0.028 ± 0.002  t=-25.6  n=2208 pairs
+[paired]   PC1  severe_brake_rate: diff=+0.000 ± 0.000  t=+1.6  n=2208 pairs
+[paired]   PC1  hard_accel_rate: diff=-0.011 ± 0.004  t=-5.8  n=2208 pairs
+[paired]   PC1  jerk_p95   : diff=-2.422 ± 0.407  t=-11.7  n=2207 pairs
+[paired]   PC1  jerk_rms   : diff=-0.725 ± 0.181  t=-7.8  n=2207 pairs
+[paired]   PC1  jerk_spikiness: diff=-0.021 ± 0.003  t=-13.8  n=2207 pairs
+[paired]   PC1  accel_kurt : diff=+0.099 ± 0.030  t=+6.4  n=2208 pairs
+[paired]   PC1  n_brake_events: diff=-0.365 ± 0.055  t=-13.0  n=2208 pairs
+[paired]   PC1  brake_per_100m: diff=-0.685 ± 0.108  t=-12.4  n=2087 pairs
+[paired]   PC1  brake_peak_mean: diff=-0.127 ± 0.033  t=-7.5  n=1003 pairs
+[paired]   PC1  brake_peak_max: diff=-0.098 ± 0.032  t=-5.9  n=1003 pairs
+[paired]   PC1  brake_dur_mean: diff=-0.056 ± 0.015  t=-7.2  n=1003 pairs
+[paired]   PC1  brake_dv_mean: diff=-0.251 ± 0.055  t=-9.0  n=1003 pairs
+[paired]   PC1  brake_abrupt_mean: diff=+0.044 ± 0.013  t=+6.6  n=1003 pairs
+[paired]   PC1  n_accel_ev_events: diff=+0.157 ± 0.067  t=+4.6  n=2208 pairs
+[paired]   PC1  accel_ev_per_100m: diff=+0.196 ± 0.128  t=+3.0  n=2087 pairs
+[paired]   PC1  accel_ev_peak_mean: diff=-0.038 ± 0.010  t=-7.3  n=2191 pairs
+[paired]   PC1  accel_ev_peak_max: diff=-0.003 ± 0.004  t=-1.5  n=2191 pairs
+[paired]   PC1  accel_ev_dur_mean: diff=-0.044 ± 0.009  t=-9.3  n=2191 pairs
+[paired]   PC1  accel_ev_dv_mean: diff=-0.193 ± 0.029  t=-12.9  n=2191 pairs
+[paired]   PC1  accel_ev_abrupt_mean: diff=+0.034 ± 0.005  t=+13.9  n=2191 pairs
+[paired]   PC1  accel_mask_frac: diff=-0.000 ± 0.000  t=-0.5  n=2208 pairs
+
+[paired] outputs -> /scratch/e452103/analysis/collstop/paired/role_paired_*.png + *.csv
+
+==================== 3/5 role_scene_consistency [cpu] ====================
+[consistency] axes=['PC1']  metrics=['speed_mean', 'accel_abs', 'accel_pos', 'decel_abs', 'jerk_abs', 'turn_abs', 'event_rate', 'decel_p95', 'decel_max', 'accel_p95', 'accel_max', 'hard_brake_rate', 'severe_brake_rate', 'hard_accel_rate', 'jerk_p95', 'jerk_rms', 'jerk_spikiness', 'accel_kurt', 'n_brake_events', 'brake_per_100m', 'brake_peak_mean', 'brake_peak_max', 'brake_dur_mean', 'brake_dv_mean', 'brake_abrupt_mean', 'n_accel_ev_events', 'accel_ev_per_100m', 'accel_ev_peak_mean', 'accel_ev_peak_max', 'accel_ev_dur_mean', 'accel_ev_dv_mean', 'accel_ev_abrupt_mean', 'accel_mask_frac']  rows=11045
+
+=== ALL  PC1  (endpoint +/-PC1 sign-consistency) ===
+              metric    n  n_nonzero  pop_mean_delta  paired_t  consistency  monotone_rate  median_abs_delta  z_vs_50
+          speed_mean 2208       2207          0.2182       7.4        0.541          0.154            0.7036      3.8
+           accel_abs 2208       2207         -0.1418     -33.4        0.781          0.163            0.1747     26.4
+           accel_pos 2208       2207         -0.0225      -3.5        0.581          0.133            0.1774      7.6
+           decel_abs 2208       2207         -0.1193     -22.9        0.682          0.155            0.1393     17.1
+            jerk_abs 2207       2206         -0.1647      -1.9        0.524          0.076            2.5563      2.2
+            turn_abs 2208       2207         -0.0378     -15.3        0.633          0.152            0.0688     12.5
+          event_rate 2208        145          0.0714       1.8        0.669          0.949            0.0000      4.1
+           decel_p95 2208       2206         -0.2535     -14.3        0.680          0.114            0.0564     16.9
+           decel_max 2208       2175         -0.0470      -4.2        0.574          0.085            0.0134      6.9
+           accel_p95 2208       2206          0.0004       0.2        0.446          0.042            0.0058     -5.1
+           accel_max 2208       2166          0.0008       0.7        0.465          0.074            0.0077     -3.2
+     hard_brake_rate 2208       2072         -0.0275     -25.6        0.739          0.218            0.0298     21.8
+   severe_brake_rate 2208          3          0.0000       1.6        1.000          1.000            0.0000      1.7
+     hard_accel_rate 2208       2158         -0.0105      -5.8        0.598          0.159            0.0523      9.1
+            jerk_p95 2207       2205         -2.4217     -11.7        0.619          0.092            5.1097     11.2
+            jerk_rms 2207       2206         -0.7248      -7.8        0.581          0.088            2.7241      7.6
+      jerk_spikiness 2207       2206         -0.0214     -13.8        0.625          0.111            0.0465     11.8
+          accel_kurt 2208       2207          0.0991       6.4        0.622          0.120            0.2877     11.5
+      n_brake_events 2208       1185         -0.3650     -13.0        0.688          0.532            1.0000     12.9
+      brake_per_100m 2087       1508         -0.6845     -12.4        0.645          0.372            0.6625     11.2
+     brake_peak_mean 1003       1001         -0.1274      -7.5        0.607          0.089            0.0466      6.8
+      brake_peak_max 1003        995         -0.0975      -5.9        0.631          0.105            0.0162      8.3
+      brake_dur_mean 1003        798         -0.0556      -7.2        0.655          0.284            0.1000      8.8
+       brake_dv_mean 1003       1001         -0.2513      -9.0        0.671          0.126            0.3360     10.8
+   brake_abrupt_mean 1003       1001          0.0444       6.6        0.593          0.078            0.1232      5.9
+   n_accel_ev_events 2208       1607          0.1567       4.6        0.553          0.252            1.0000      4.3
+   accel_ev_per_100m 2087       2083          0.1965       3.0        0.549          0.081            1.4428      4.4
+  accel_ev_peak_mean 2191       2190         -0.0377      -7.3        0.592          0.081            0.0405      8.6
+   accel_ev_peak_max 2191       2154         -0.0031      -1.5        0.544          0.084            0.0087      4.1
+   accel_ev_dur_mean 2191       2125         -0.0435      -9.3        0.578          0.132            0.1000      7.2
+    accel_ev_dv_mean 2191       2190         -0.1934     -12.9        0.629          0.113            0.3121     12.1
+accel_ev_abrupt_mean 2191       2190          0.0339      13.9        0.630          0.098            0.0733     12.2
+     accel_mask_frac 2208         18         -0.0001      -0.5        0.611          0.995            0.0000      0.9
+
+=== C0:fast  PC1  (endpoint +/-PC1 sign-consistency) ===
+              metric   n  n_nonzero  pop_mean_delta  paired_t  consistency  monotone_rate  median_abs_delta  z_vs_50
+          speed_mean 538        538         -0.2372      -3.7        0.593          0.188            0.8788      4.3
+           accel_abs 538        538         -0.2294     -34.9        0.931          0.214            0.2284     20.0
+           accel_pos 538        538         -0.1282     -14.2        0.757          0.201            0.1676     11.9
+           decel_abs 538        538         -0.1011     -11.0        0.656          0.080            0.1297      7.2
+            jerk_abs 538        538          0.3126       1.9        0.506          0.067            2.4686      0.3
+            turn_abs 538        538         -0.0150      -2.7        0.524          0.110            0.0780      1.1
+          event_rate 538         30          0.0495       1.3        0.800          0.955            0.0000      3.3
+           decel_p95 538        538         -0.0665      -3.4        0.684          0.080            0.0143      8.5
+           decel_max 538        524         -0.0042      -0.7        0.550          0.067            0.0097      2.3
+           accel_p95 538        537          0.0012       0.2        0.391          0.026            0.0060     -5.0
+           accel_max 538        526         -0.0001      -0.2        0.549          0.072            0.0070      2.3
+     hard_brake_rate 538        523         -0.0337     -15.8        0.780          0.175            0.0348     12.8
+   severe_brake_rate 538          0          0.0000       NaN          NaN            NaN            0.0000      NaN
+     hard_accel_rate 538        526         -0.0449     -17.2        0.797          0.258            0.0520     13.6
+            jerk_p95 538        538         -2.7020      -7.7        0.649          0.082            3.6306      6.9
+            jerk_rms 538        538         -0.4385      -2.6        0.586          0.063            2.4350      4.0
+      jerk_spikiness 538        538         -0.0315     -12.6        0.690          0.160            0.0413      8.8
+          accel_kurt 538        538          0.0374       2.5        0.658          0.093            0.1823      7.3
+      n_brake_events 538        354         -0.2491      -4.1        0.596          0.322            1.0000      3.6
+      brake_per_100m 538        490         -0.2248      -4.8        0.586          0.173            0.6143      3.8
+     brake_peak_mean 391        391         -0.1638      -6.5        0.668          0.112            0.0743      6.6
+      brake_peak_max 391        386         -0.0632      -2.6        0.645          0.115            0.0160      5.7
+      brake_dur_mean 391        321         -0.0653      -6.4        0.664          0.268            0.0833      5.9
+       brake_dv_mean 391        391         -0.3213      -8.6        0.716          0.131            0.3288      8.5
+   brake_abrupt_mean 391        391          0.0600       5.8        0.647          0.112            0.1304      5.8
+   n_accel_ev_events 538        407          0.0167       0.2        0.528          0.223            1.0000      1.1
+   accel_ev_per_100m 538        537          0.0047       0.1        0.512          0.069            0.7209      0.6
+  accel_ev_peak_mean 531        531         -0.0789      -6.6        0.627          0.110            0.0939      5.9
+   accel_ev_peak_max 531        524         -0.0054      -1.0        0.582          0.089            0.0089      3.8
+   accel_ev_dur_mean 531        516         -0.0511      -7.2        0.661          0.164            0.0800      7.3
+    accel_ev_dv_mean 531        531         -0.2425     -11.1        0.710          0.157            0.2652      9.7
+accel_ev_abrupt_mean 531        531          0.0583      10.9        0.708          0.140            0.0852      9.6
+     accel_mask_frac 538          0          0.0000       NaN          NaN            NaN            0.0000      NaN
+
+=== C1:stop&go  PC1  (endpoint +/-PC1 sign-consistency) ===
+              metric  n  n_nonzero  pop_mean_delta  paired_t  consistency  monotone_rate  median_abs_delta  z_vs_50
+          speed_mean 44         44          0.3807       3.5        0.659          0.136            0.2422      2.1
+           accel_abs 44         44         -0.0496      -1.2        0.591          0.045            0.1570      1.2
+           accel_pos 44         44          0.0448       0.8        0.500          0.114            0.2159      0.0
+           decel_abs 44         44         -0.0944      -2.0        0.568          0.182            0.1366      0.9
+            jerk_abs 43         43         -0.9166      -1.1        0.581          0.093            2.6637      1.1
+            turn_abs 44         44          0.0294       2.8        0.659          0.114            0.0519      2.1
+          event_rate 44          0          0.0000       NaN          NaN            NaN            0.0000      NaN
+           decel_p95 44         44         -0.3087      -1.3        0.545          0.114            0.7060      0.6
+           decel_max 44         40          0.2499       0.8        0.425          0.227            0.0405     -0.9
+           accel_p95 44         44          0.0005       0.1        0.568          0.091            0.0065      0.9
+           accel_max 44         42          0.0423       1.0        0.524          0.136            0.0118      0.3
+     hard_brake_rate 44         31         -0.0178      -2.2        0.677          0.341            0.0241      2.0
+   severe_brake_rate 44          3          0.0013       1.6        1.000          0.977            0.0000      1.7
+     hard_accel_rate 44         42          0.0043       0.3        0.548          0.159            0.0642      0.6
+            jerk_p95 43         42         -0.0919      -0.0        0.548          0.093            5.6483      0.6
+            jerk_rms 43         43         -0.7154      -0.7        0.558          0.093            3.1769      0.8
+      jerk_spikiness 43         43          0.0171       1.1        0.512          0.093            0.0678      0.2
+          accel_kurt 44         44          0.6851       2.2        0.659          0.227            0.5850      2.1
+      n_brake_events 44          9         -0.1364      -1.1        0.667          0.864            0.0000      1.0
+      brake_per_100m  8          0          0.0000       NaN          NaN            NaN            0.0000      NaN
+     brake_peak_mean  6          6          0.0927       1.3        0.667          0.000            0.0328      0.8
+      brake_peak_max  6          6          0.0064       0.5        0.333          0.167            0.0197     -0.8
+      brake_dur_mean  6          6         -0.0833      -0.8        0.667          0.000            0.1167      0.8
+       brake_dv_mean  6          6         -0.2330      -0.7        0.667          0.000            0.6441      0.8
+   brake_abrupt_mean  6          6          0.0286       0.5        0.667          0.167            0.1258      0.8
+   n_accel_ev_events 44         30          0.0682       0.3        0.533          0.386            1.0000      0.4
+   accel_ev_per_100m  8          7         -0.4227      -0.3        0.429          0.125            3.4976     -0.4
+  accel_ev_peak_mean 42         42         -0.0089      -0.3        0.500          0.049            0.0250      0.0
+   accel_ev_peak_max 42         41          0.0018       0.3        0.439          0.098            0.0117     -0.8
+   accel_ev_dur_mean 42         38          0.0104       0.2        0.447          0.220            0.1061     -0.6
+    accel_ev_dv_mean 42         42         -0.0241      -0.2        0.571          0.098            0.3109      0.9
+accel_ev_abrupt_mean 42         42          0.0169       0.9        0.619          0.122            0.0790      1.5
+     accel_mask_frac 44          9         -0.0020      -0.4        0.556          0.841            0.0000      0.3
+
+=== C2:mid-speed  PC1  (endpoint +/-PC1 sign-consistency) ===
+              metric   n  n_nonzero  pop_mean_delta  paired_t  consistency  monotone_rate  median_abs_delta  z_vs_50
+          speed_mean 924        923          0.6145      14.7        0.677          0.224            0.6281     10.8
+           accel_abs 924        923         -0.1011     -15.6        0.726          0.135            0.1482     13.7
+           accel_pos 924        923          0.0629       6.5        0.559          0.129            0.1721      3.6
+           decel_abs 924        923         -0.1641     -21.1        0.777          0.211            0.1531     16.8
+            jerk_abs 924        923         -0.6505      -4.8        0.567          0.098            2.6530      4.0
+            turn_abs 924        923         -0.0522     -15.8        0.707          0.177            0.0634     12.6
+          event_rate 924         43          0.0837       1.2        0.698          0.964            0.0000      2.6
+           decel_p95 924        923         -0.4588     -15.8        0.743          0.142            0.2429     14.8
+           decel_max 924        917         -0.0931      -5.4        0.592          0.080            0.0152      5.6
+           accel_p95 924        923          0.0008       0.6        0.480          0.052            0.0058     -1.2
+           accel_max 924        908         -0.0002      -0.2        0.529          0.076            0.0078      1.7
+     hard_brake_rate 924        854         -0.0304     -18.8        0.779          0.255            0.0298     16.3
+   severe_brake_rate 924          0          0.0000       NaN          NaN            NaN            0.0000      NaN
+     hard_accel_rate 924        899          0.0143       5.3        0.534          0.139            0.0485      2.0
+            jerk_p95 924        923         -2.8241      -8.4        0.618          0.095            6.1642      7.1
+            jerk_rms 924        923         -1.1439      -7.8        0.603          0.113            2.9291      6.3
+      jerk_spikiness 924        923         -0.0138      -5.5        0.586          0.075            0.0489      5.2
+          accel_kurt 924        923          0.2072       8.7        0.662          0.144            0.3557      9.8
+      n_brake_events 924        455         -0.5411     -13.7        0.809          0.650            0.0000     13.2
+      brake_per_100m 898        594         -1.1416     -12.8        0.714          0.477            0.7902     10.4
+     brake_peak_mean 331        331         -0.1589      -4.6        0.571          0.089            0.0365      2.6
+      brake_peak_max 331        331         -0.1834      -5.5        0.650          0.100            0.0197      5.4
+      brake_dur_mean 331        247         -0.0571      -3.7        0.684          0.328            0.1000      5.8
+       brake_dv_mean 331        331         -0.2241      -4.1        0.662          0.139            0.3934      5.9
+   brake_abrupt_mean 331        331          0.0210       1.7        0.529          0.062            0.1241      1.0
+   n_accel_ev_events 924        656          0.2316       4.6        0.570          0.276            1.0000      3.6
+   accel_ev_per_100m 898        898          0.2747       2.5        0.577          0.088            1.8184      4.6
+  accel_ev_peak_mean 922        921         -0.0132      -1.8        0.557          0.062            0.0325      3.5
+   accel_ev_peak_max 922        903          0.0007       0.4        0.474          0.086            0.0082     -1.6
+   accel_ev_dur_mean 922        890         -0.0394      -5.0        0.538          0.114            0.1000      2.3
+    accel_ev_dv_mean 922        921         -0.1696      -6.6        0.579          0.083            0.3336      4.8
+accel_ev_abrupt_mean 922        921          0.0243       6.9        0.600          0.081            0.0688      6.1
+     accel_mask_frac 924          2         -0.0000      -1.4        1.000          1.000            0.0000      1.4
+
+=== C3:turning  PC1  (endpoint +/-PC1 sign-consistency) ===
+              metric   n  n_nonzero  pop_mean_delta  paired_t  consistency  monotone_rate  median_abs_delta  z_vs_50
+          speed_mean 394        394         -0.0459      -0.7        0.566          0.162            0.6986      2.6
+           accel_abs 394        394         -0.1198     -11.2        0.731          0.162            0.1681      9.2
+           accel_pos 394        394         -0.0474      -2.6        0.591          0.142            0.2143      3.6
+           decel_abs 394        394         -0.0724      -5.0        0.558          0.150            0.1461      2.3
+            jerk_abs 394        394          0.2381       1.2        0.523          0.079            2.4327      0.9
+            turn_abs 394        394         -0.0291      -4.8        0.602          0.157            0.0695      4.0
+          event_rate 394         45          0.0897       0.7        0.511          0.898            0.0000      0.1
+           decel_p95 394        394         -0.0883      -1.9        0.589          0.091            0.0750      3.5
+           decel_max 394        390         -0.0486      -2.1        0.577          0.096            0.0176      3.0
+           accel_p95 394        394         -0.0057      -1.7        0.546          0.076            0.0060      1.8
+           accel_max 394        387         -0.0009      -0.6        0.543          0.069            0.0097      1.7
+     hard_brake_rate 394        366         -0.0183      -6.7        0.639          0.203            0.0232      5.3
+   severe_brake_rate 394          0          0.0000       NaN          NaN            NaN            0.0000      NaN
+     hard_accel_rate 394        387         -0.0147      -2.8        0.592          0.185            0.0589      3.6
+            jerk_p95 394        394         -1.6816      -3.4        0.617          0.089            4.6400      4.6
+            jerk_rms 394        394         -0.2854      -1.3        0.533          0.069            2.6000      1.3
+      jerk_spikiness 394        394         -0.0271      -7.5        0.627          0.114            0.0441      5.0
+          accel_kurt 394        394         -0.0509      -1.3        0.472          0.081            0.3212     -1.1
+      n_brake_events 394        207         -0.2665      -3.6        0.623          0.503            1.0000      3.5
+      brake_per_100m 347        220         -0.5615      -3.0        0.627          0.416            1.1650      3.8
+     brake_peak_mean 146        144         -0.0216      -0.5        0.542          0.057            0.0438      1.0
+      brake_peak_max 146        143         -0.0569      -1.6        0.601          0.089            0.0128      2.4
+      brake_dur_mean 146        117         -0.0567      -2.9        0.615          0.268            0.0950      2.5
+       brake_dv_mean 146        144         -0.2539      -3.8        0.625          0.122            0.2953      3.0
+   brake_abrupt_mean 146        144          0.0701       3.6        0.604          0.033            0.1292      2.5
+   n_accel_ev_events 394        291          0.2005       2.3        0.560          0.244            1.0000      2.1
+   accel_ev_per_100m 347        347          0.5754       2.7        0.545          0.081            2.2757      1.7
+  accel_ev_peak_mean 392        392         -0.0455      -3.6        0.615          0.079            0.0423      4.5
+   accel_ev_peak_max 392        386         -0.0093      -1.8        0.541          0.094            0.0104      1.6
+   accel_ev_dur_mean 392        387         -0.0457      -4.0        0.558          0.130            0.1058      2.3
+    accel_ev_dv_mean 392        392         -0.1870      -5.1        0.625          0.117            0.3635      4.9
+accel_ev_abrupt_mean 392        392          0.0197       3.2        0.582          0.084            0.0754      3.2
+     accel_mask_frac 394          5          0.0000       0.4        0.600          0.990            0.0000      0.4
+
+[consistency] wrote /scratch/e452103/analysis/collstop/paired/role_scene_consistency.csv
+
+Read: consistency ~0.5 = per-scene coin-flip (average-only); ->1.0 = the dial works in nearly every scene. Trust the consistency column only for metrics whose paired_t is large (a real monotone effect); for V-shaped metrics read pop_mean/paired_t instead.
+
+==================== 4/5 role_space_map [cpu] ====================
+[map] 6751 agents, role_dim=1 (PCA from role vectors)
+[map] PC1 100%  PC2 0%  -> /scratch/e452103/analysis/collstop/paired/role_space_map.png
+
+==================== 5/5 role_feature_corr [cpu] ====================
+role dims: ['role_0']
+raw features found: ['speed_mean', 'accel_abs', 'jerk_abs', 'turn_abs', 'event_rate']
+saved /scratch/e452103/analysis/collstop/paired/role_role_corr.png
+max |off-diagonal r| = 0.000  -- fairly independent
+saved /scratch/e452103/analysis/collstop/paired/role_feature_corr.png
+
+[role_an] stats archive: /scratch/e452103/analysis/collstop_paired.tgz (4.9M)
+[role_an] DONE -> /scratch/e452103/analysis/collstop  (see README.txt for the file guide)
+[role_an] the chained render job adds renders/role_grid/ and zips the folder

@@ -1,0 +1,67 @@
+[icc] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_collstop_nodiv/roma_dim1_step4500750336.pt out=/scratch/e452103/role_icc/collstop_4500750336_rep1 (CPU / compute partition)
+[icc] branch=mi-future-agentcentric-film commit=0e4a1be
+[icc] role_dim=1 checkpoint=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_collstop_nodiv/roma_dim1_step4500750336.pt
+[icc] episode 1/3: 2341 vehicles
+[icc] episode 2/3: 2304 vehicles
+[icc] episode 3/3: 2294 vehicles
+[icc] 6939 rows -> 6407 unique (scenario, vehicle) after collapsing 532 repeats
+[icc] 1015 scenes with >=2 vehicles (95 single-vehicle scenes dropped), 6312 vehicles, mean 6.2 per scene
+[icc] role PCA explained var: ['100%']
+
+==================================================================
+  SCENE ICC  (1.0 = role is the map, 0.0 = role is the driver)
+==================================================================
+
+  role dims
+    role_0           ICC = +0.158   (between 1.108 / within 5.888)
+
+  role PCs
+    pc1              ICC = +0.158   (between 1.108 / within 5.888)
+
+  ROLE OVERALL
+    role_ALL_DIMS    ICC = +0.158   (between 1.108 / within 5.888)
+
+  behaviour (control)
+    speed_mean       ICC = +0.610   (between 29.66 / within 18.99)
+    accel_abs        ICC = +0.045   (between 0.002895 / within 0.06075)
+    accel_pos        ICC = +0.184   (between 0.03683 / within 0.1628)
+    decel_abs        ICC = +0.169   (between 0.02643 / within 0.13)
+    jerk_abs         ICC = +0.042   (between 0.8762 / within 19.96)
+    turn_abs         ICC = +0.156   (between 0.003835 / within 0.02068)
+    event_rate       ICC = +0.124   (between 0.5391 / within 3.825)
+    decel_p95        ICC = +0.109   (between 0.0894 / within 0.7292)
+    decel_max        ICC = +0.051   (between 0.01768 / within 0.3298)
+    accel_p95        ICC = -0.027   (between 0 / within 0.08375)
+    accel_max        ICC = -0.024   (between 0 / within 0.06076)
+    hard_brake_rate  ICC = +0.126   (between 0.0007359 / within 0.005109)
+    severe_brake_rate ICC = -0.100   (between 0 / within 1.582e-06)
+    hard_accel_rate  ICC = +0.169   (between 0.002654 / within 0.0131)
+    jerk_p95         ICC = +0.029   (between 2.542 / within 86.28)
+    jerk_rms         ICC = +0.034   (between 0.787 / within 22.59)
+    jerk_spikiness   ICC = +0.041   (between 0.0002096 / within 0.00492)
+    accel_kurt       ICC = +0.093   (between 0.03727 / within 0.3638)
+    n_brake_events   ICC = +0.129   (between 0.2597 / within 1.747)
+    brake_per_100m   ICC = +0.181   (between 1.867 / within 8.466)
+    brake_peak_mean  ICC = +0.047   (between 0.01607 / within 0.3278)
+    brake_peak_max   ICC = +0.068   (between 0.02186 / within 0.2983)
+    brake_dur_mean   ICC = +0.024   (between 0.0006956 / within 0.0284)
+    brake_dv_mean    ICC = +0.035   (between 0.01376 / within 0.3761)
+    brake_abrupt_mean ICC = +0.025   (between 0.0009619 / within 0.03735)
+    n_accel_ev_events ICC = +0.029   (between 0.1355 / within 4.607)
+    accel_ev_per_100m ICC = +0.422   (between 14.99 / within 20.56)
+    accel_ev_peak_mean ICC = +0.009   (between 0.0007352 / within 0.08265)
+    accel_ev_peak_max ICC = +0.033   (between 0.001392 / within 0.04096)
+    accel_ev_dur_mean ICC = +0.040   (between 0.001138 / within 0.02767)
+    accel_ev_dv_mean ICC = +0.055   (between 0.01659 / within 0.2833)
+    accel_ev_abrupt_mean ICC = +0.015   (between 0.0002363 / within 0.01545)
+    accel_mask_frac  ICC = +0.145   (between 8.409e-05 / within 0.0004943)
+
+------------------------------------------------------------------
+  role overall ICC      : +0.158
+  behaviour median ICC  : +0.047   <- the honest reference
+  VERDICT: the role is MORE scene-determined than the behaviour it
+           explains. Map-based-role diagnosis confirmed.
+------------------------------------------------------------------
+
+[icc] wrote role_scene_icc.csv / .png / _agents.csv -> /scratch/e452103/role_icc/collstop_4500750336_rep1
+[icc] done -> /scratch/e452103/role_icc/collstop_4500750336_rep1

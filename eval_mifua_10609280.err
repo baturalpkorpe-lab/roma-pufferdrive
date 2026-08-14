@@ -1,0 +1,88 @@
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: baturalpkorpe (s-rahmani-tu-delft) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.28.0
+wandb: Run data is saved locally in /scratch/e452103/PufferDrive/wandb/run-20260809_134020-k6og33v0
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run eval_mifutagentH8_dim1_r16p64_ep_nodiv
+wandb: ⭐️ View project at https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive
+wandb: 🚀 View run at https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive/runs/k6og33v0
+Traceback (most recent call last):
+  File "/home/e452103/roma_film/eval_roma.py", line 508, in evaluate
+    run_role_analysis(
+  File "/home/e452103/roma_film/eval_roma.py", line 426, in run_role_analysis
+    _save_log(_plot_dim_correlations(role_means, role_dim, ckpt_name),
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/e452103/roma_film/eval_roma.py", line 245, in _plot_dim_correlations
+    np.fill_diagonal(mask, False)
+  File "/home/e452103/.conda/envs/roma/lib/python3.11/site-packages/numpy/lib/index_tricks.py", line 899, in fill_diagonal
+    raise ValueError("array must be at least 2-d")
+ValueError: array must be at least 2-d
+wandb: updating run metadata
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml; uploading data
+wandb: uploading output.log; uploading wandb-summary.json; uploading config.yaml
+wandb: uploading output.log; uploading wandb-summary.json
+wandb: uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading output.log; uploading wandb-summary.json
+wandb: uploading output.log
+wandb: uploading output.log; uploading data
+wandb: uploading output.log
+wandb: 
+wandb: Run history:
+wandb:                           wosac/batch ▁▂▃▃▄▅▆▆▇██
+wandb:             wosac/interactive_metrics ▁▂▄█▆▄▄▇▆▅▅
+wandb:               wosac/kinematic_metrics ▁▄▆▆▆▆▇████
+wandb: wosac/likelihood_angular_acceleration ▁▃█▆█▇▆▇▇██
+wandb:        wosac/likelihood_angular_speed ▆▁▆▅▅▄▄▆▇██
+wandb:            wosac/likelihood_collision ▄▁▂▅▆▆██▆▇▇
+wandb:             wosac/likelihood_dist_obj ▁▅██▆▅▆▇▇▆▆
+wandb:       wosac/likelihood_dist_road_edge ▁▄▇█▆▇▆▇▆▆▆
+wandb:  wosac/likelihood_linear_acceleration ▁▅▆▆▇██████
+wandb:         wosac/likelihood_linear_speed ▁▅▅▆▆▇▇▇███
+wandb:                                    +6 ...
+wandb: 
+wandb: Run summary:
+wandb:                           wosac/batch 100
+wandb:             wosac/interactive_metrics 0.66068
+wandb:               wosac/kinematic_metrics 0.29608
+wandb: wosac/likelihood_angular_acceleration 0.41955
+wandb:        wosac/likelihood_angular_speed 0.33754
+wandb:            wosac/likelihood_collision 0.89059
+wandb:             wosac/likelihood_dist_obj 0.30005
+wandb:       wosac/likelihood_dist_road_edge 0.64633
+wandb:  wosac/likelihood_linear_acceleration 0.27208
+wandb:         wosac/likelihood_linear_speed 0.15839
+wandb:                                    +6 ...
+wandb: 
+wandb: 🚀 View run eval_mifutagentH8_dim1_r16p64_ep_nodiv at: https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive/runs/k6og33v0
+wandb: ⭐️ View project at: https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive
+wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: ./wandb/run-20260809_134020-k6og33v0/logs

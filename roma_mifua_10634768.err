@@ -1,0 +1,86 @@
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: baturalpkorpe (baturalpkorpe-bilkent-niversitesi) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run icsb7ohr
+wandb: Tracking run with wandb version 0.28.0
+wandb: Run data is saved locally in /scratch/e452103/PufferDrive/wandb/run-20260813_091506-icsb7ohr
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run roma_mifutagent_dim1_ft_pc40_cb1_nodiv
+wandb: ⭐️ View project at https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive
+wandb: 🚀 View run at https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive/runs/icsb7ohr
+wandb: updating run metadata
+wandb: uploading config.yaml
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json; uploading data
+wandb: uploading config.yaml; uploading output.log; uploading wandb-summary.json
+wandb: uploading output.log; uploading wandb-summary.json
+wandb: uploading wandb-summary.json
+wandb: uploading wandb-summary.json; uploading data
+wandb: uploading wandb-summary.json
+wandb: uploading wandb-summary.json; uploading data
+wandb: uploading wandb-summary.json
+wandb: uploading wandb-summary.json; uploading data
+wandb: uploading wandb-summary.json
+wandb: uploading data
+wandb: 
+wandb: Run history:
+wandb:     encoders/ego_delta ▇▆▆▅▆▆▆▆▆▇▆██▅▆▅▄▆▄▅▅▄▃▄▄▃▄▄▃▃▃▃▃▃▂▂▂▁▁▁
+wandb: encoders/partner_delta ▆█▇▇▇▇▅▇▇▅▆▆▆▅▄▅▅▆▅▅▅▄▄▅▅▄▄▃▃▄▃▂▂▂▂▂▁▁▁▁
+wandb:    encoders/road_delta █▆▆▆▆▅▆█▆▅▅▅▆▆▅▅▅▅▅▄▄▄▄▄▄▄▃▄▃▃▃▂▂▃▂▂▂▂▂▁
+wandb:         role/role_norm ▂▁▃▄▄▅▅▅▆▅▆▆▅▅▅▆▇▆▇▆▆▇▇▆▇▇▇▆▇█▇██▇█▇▆▇▇█
+wandb:          role/role_std ▄▁▅▇▄▃▄▄▅▁▅▂▃▃▃▄▅█▇▅▄▅▅▅▃▆▄▄▇▅▅▃▄▃▅▄▄▃▄▄
+wandb: train/compliance_error ▁▃▄▄▃▃▃▅▅▅▂▂▇███▅▄▃▃▆▃▄▄▃▄▄▄▆▄▂▃▂▄▃▄▄▅▆▄
+wandb:         train/div_loss ▁▂▃▃▅▅▅▆▆▅▅▅▆▇▇▇▇▅▅▄▆▅▆▆▆▇▇█▆▆▇█▇▇▇▇▇▇▇█
+wandb:          train/kl_loss ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:      train/mean_return █▇▄▄▂▂▂▂▂▄▄▄▄▄▃▅▆▆▆▆▆▆▅▄▃▂▁▂▃▂▄▄▄▄▅▆▆▆▆▆
+wandb:          train/mi_loss ▁▁▂▃▃▄▄▃▃▄▅▄▅▄▄▅▅▆▆▅▆▆▅▆▅▆▇▆▇▇▆█▇▇▇▇▇██▇
+wandb:                     +6 ...
+wandb: 
+wandb: Run summary:
+wandb:     encoders/ego_delta 0.0
+wandb: encoders/partner_delta 0.0
+wandb:    encoders/road_delta 0.0
+wandb:         role/role_norm 33.60681
+wandb:          role/role_std 5.54256
+wandb: train/compliance_error 0.00026
+wandb:         train/div_loss -0.20117
+wandb:          train/kl_loss 0
+wandb:      train/mean_return -0.06693
+wandb:          train/mi_loss 0.00147
+wandb:                     +6 ...
+wandb: 
+wandb: 🚀 View run roma_mifutagent_dim1_ft_pc40_cb1_nodiv at: https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive/runs/icsb7ohr
+wandb: ⭐️ View project at: https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive
+wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: ./wandb/run-20260813_091506-icsb7ohr/logs

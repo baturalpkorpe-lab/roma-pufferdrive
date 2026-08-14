@@ -1,0 +1,4 @@
+[causal_ax] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ep_film_comply_mifix_nodiv/roma_dim1_final.pt
+[causal_ax] out=/scratch/e452103/analysis/mifix_film/causal_axis episodes=6 warmup=2 alpha_max=2.0
+[causal_ax] branch=mi-future-agentcentric-film commit=26046d4
+[causal_ax] FAILED (python exit 1) -- see the traceback above

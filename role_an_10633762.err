@@ -1,0 +1,2 @@
+/home/e452103/roma_film/role_paired_sweep.py:545: RuntimeWarning: invalid value encountered in scalar divide
+  t = float(dd2.mean() / (dd2.std() / len(dd2) ** 0.5))

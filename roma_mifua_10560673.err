@@ -1,0 +1,9 @@
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: baturalpkorpe (baturalpkorpe-bilkent-niversitesi) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.28.0
+wandb: Run data is saved locally in /scratch/e452103/PufferDrive/wandb/run-20260803_093412-kdi7kpq7
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run roma_mifutagentH8_dim4_r16p64_ep_film_maps10000_0
+wandb: ⭐️ View project at https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive
+wandb: 🚀 View run at https://wandb.ai/s-rahmani-tu-delft/roma-pufferdrive/runs/kdi7kpq7
+slurmstepd: error: *** JOB 10560673 ON gpu019 CANCELLED AT 2026-08-04T00:58:59 ***

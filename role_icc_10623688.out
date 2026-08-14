@@ -1,0 +1,67 @@
+[icc] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_collstop_nodiv/roma_dim1_step4500750336.pt out=/scratch/e452103/role_icc/collstop_4500750336_rep2 (CPU / compute partition)
+[icc] branch=mi-future-agentcentric-film commit=0e4a1be
+[icc] role_dim=1 checkpoint=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_collstop_nodiv/roma_dim1_step4500750336.pt
+[icc] episode 1/3: 2231 vehicles
+[icc] episode 2/3: 2212 vehicles
+[icc] episode 3/3: 2202 vehicles
+[icc] 6645 rows -> 6289 unique (scenario, vehicle) after collapsing 356 repeats
+[icc] 1021 scenes with >=2 vehicles (110 single-vehicle scenes dropped), 6179 vehicles, mean 6.1 per scene
+[icc] role PCA explained var: ['100%']
+
+==================================================================
+  SCENE ICC  (1.0 = role is the map, 0.0 = role is the driver)
+==================================================================
+
+  role dims
+    role_0           ICC = +0.162   (between 1.155 / within 5.983)
+
+  role PCs
+    pc1              ICC = +0.162   (between 1.155 / within 5.983)
+
+  ROLE OVERALL
+    role_ALL_DIMS    ICC = +0.162   (between 1.155 / within 5.983)
+
+  behaviour (control)
+    speed_mean       ICC = +0.604   (between 27.97 / within 18.35)
+    accel_abs        ICC = +0.056   (between 0.003706 / within 0.06261)
+    accel_pos        ICC = +0.153   (between 0.02964 / within 0.1638)
+    decel_abs        ICC = +0.130   (between 0.01806 / within 0.1214)
+    jerk_abs         ICC = +0.043   (between 0.8811 / within 19.73)
+    turn_abs         ICC = +0.135   (between 0.00433 / within 0.02764)
+    event_rate       ICC = +0.157   (between 0.6522 / within 3.497)
+    decel_p95        ICC = +0.120   (between 0.09996 / within 0.7362)
+    decel_max        ICC = +0.080   (between 0.02836 / within 0.3281)
+    accel_p95        ICC = -0.033   (between 0 / within 0.06321)
+    accel_max        ICC = +0.042   (between 0.002143 / within 0.04903)
+    hard_brake_rate  ICC = +0.079   (between 0.0003907 / within 0.004566)
+    severe_brake_rate ICC = +0.327   (between 1.141e-07 / within 2.343e-07)
+    hard_accel_rate  ICC = +0.145   (between 0.002222 / within 0.01313)
+    jerk_p95         ICC = +0.028   (between 2.451 / within 86.43)
+    jerk_rms         ICC = +0.039   (between 0.8929 / within 22.29)
+    jerk_spikiness   ICC = +0.033   (between 0.0001814 / within 0.005313)
+    accel_kurt       ICC = +0.107   (between 0.04418 / within 0.3691)
+    n_brake_events   ICC = +0.128   (between 0.2543 / within 1.734)
+    brake_per_100m   ICC = +0.175   (between 1.728 / within 8.12)
+    brake_peak_mean  ICC = +0.050   (between 0.01861 / within 0.3562)
+    brake_peak_max   ICC = +0.075   (between 0.02677 / within 0.332)
+    brake_dur_mean   ICC = +0.048   (between 0.001237 / within 0.02452)
+    brake_dv_mean    ICC = +0.067   (between 0.02264 / within 0.3161)
+    brake_abrupt_mean ICC = +0.031   (between 0.001191 / within 0.03773)
+    n_accel_ev_events ICC = +0.064   (between 0.3033 / within 4.43)
+    accel_ev_per_100m ICC = +0.368   (between 14.16 / within 24.36)
+    accel_ev_peak_mean ICC = +0.013   (between 0.001076 / within 0.08461)
+    accel_ev_peak_max ICC = -0.027   (between 0 / within 0.04979)
+    accel_ev_dur_mean ICC = +0.034   (between 0.001 / within 0.02837)
+    accel_ev_dv_mean ICC = +0.052   (between 0.01571 / within 0.2878)
+    accel_ev_abrupt_mean ICC = +0.003   (between 5.171e-05 / within 0.01568)
+    accel_mask_frac  ICC = +0.113   (between 5.812e-05 / within 0.0004563)
+
+------------------------------------------------------------------
+  role overall ICC      : +0.162
+  behaviour median ICC  : +0.067   <- the honest reference
+  VERDICT: role tracks behaviour's own scene structure. Not obviously
+           map-driven; whatever caps per-scene consistency is elsewhere.
+------------------------------------------------------------------
+
+[icc] wrote role_scene_icc.csv / .png / _agents.csv -> /scratch/e452103/role_icc/collstop_4500750336_rep2
+[icc] done -> /scratch/e452103/role_icc/collstop_4500750336_rep2

@@ -1,0 +1,6 @@
+[grid_traj] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim4_H8_r16p64_ep_film/roma_dim4_final.pt
+[grid_traj] axes=/scratch/e452103/analysis/mifutfilm_dim4/paired/role_paired_axes.csv traj=/scratch/e452103/traj_atlas/trajectory_clusters_stopfrac.csv scenes_per_type=6 out=/scratch/e452103/analysis/mifutfilm_dim4/renders/role_grid
+[grid_traj] WARNING: render exited nonzero -- zipping whatever exists
+[grid_traj] zipping /scratch/e452103/analysis/mifutfilm_dim4 -> /scratch/e452103/analysis/mifutfilm_dim4.zip  (videos dominate the size)
+[grid_traj] SEND THIS ONE FILE: /scratch/e452103/analysis/mifutfilm_dim4.zip (8.2M)
+[grid_traj] done -> /scratch/e452103/analysis/mifutfilm_dim4/renders/role_grid

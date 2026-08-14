@@ -1,0 +1,71 @@
+[icc] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim4_H8_r16p64_ep_film_comply/roma_dim4_final.pt out=/scratch/e452103/role_icc/mifutfilm_comply_dim4_rep2 (CPU / compute partition)
+[icc] branch=mi-future-agentcentric-film commit=2994ddb
+[icc] role_dim=4 checkpoint=/scratch/e452103/checkpoints/roma_mifutagent_dim4_H8_r16p64_ep_film_comply/roma_dim4_final.pt
+[icc] episode 1/3: 2240 vehicles
+[icc] episode 2/3: 2230 vehicles
+[icc] episode 3/3: 2244 vehicles
+[icc] 6714 rows -> 6286 unique (scenario, vehicle) after collapsing 428 repeats
+[icc] 1064 scenes with >=2 vehicles (131 single-vehicle scenes dropped), 6155 vehicles, mean 5.8 per scene
+[icc] role PCA explained var: ['64%', '20%']
+
+==================================================================
+  SCENE ICC  (1.0 = role is the map, 0.0 = role is the driver)
+==================================================================
+
+  role dims
+    role_0           ICC = +0.438   (between 4.977 / within 6.398)
+    role_1           ICC = +0.361   (between 11.99 / within 21.21)
+    role_2           ICC = +0.456   (between 7.481 / within 8.929)
+    role_3           ICC = +0.298   (between 6.655 / within 15.71)
+
+  role PCs
+    pc1              ICC = +0.447   (between 24 / within 29.69)
+    pc2              ICC = +0.233   (between 3.867 / within 12.72)
+
+  ROLE OVERALL
+    role_ALL_DIMS    ICC = +0.373   (between 31.1 / within 52.24)
+
+  behaviour (control)
+    speed_mean       ICC = +0.621   (between 33.77 / within 20.58)
+    accel_abs        ICC = +0.298   (between 0.05166 / within 0.1216)
+    accel_pos        ICC = +0.261   (between 0.1 / within 0.2835)
+    decel_abs        ICC = +0.123   (between 0.01359 / within 0.09674)
+    jerk_abs         ICC = +0.187   (between 6.09 / within 26.56)
+    turn_abs         ICC = +0.281   (between 0.006607 / within 0.01691)
+    event_rate       ICC = +0.072   (between 0.1068 / within 1.373)
+    decel_p95        ICC = +0.136   (between 0.2722 / within 1.728)
+    decel_max        ICC = +0.135   (between 0.2871 / within 1.841)
+    accel_p95        ICC = +0.011   (between 0.0003121 / within 0.02758)
+    accel_max        ICC = +0.016   (between 0.0008348 / within 0.05011)
+    hard_brake_rate  ICC = +0.083   (between 0.0002706 / within 0.002995)
+    severe_brake_rate ICC = +0.038   (between 5.277e-08 / within 1.32e-06)
+    hard_accel_rate  ICC = +0.252   (between 0.007408 / within 0.02196)
+    jerk_p95         ICC = +0.097   (between 17.55 / within 164)
+    jerk_rms         ICC = +0.147   (between 6.039 / within 34.94)
+    jerk_spikiness   ICC = +0.159   (between 0.005518 / within 0.02928)
+    accel_kurt       ICC = +0.153   (between 0.5992 / within 3.325)
+    n_brake_events   ICC = +0.114   (between 0.08649 / within 0.6725)
+    brake_per_100m   ICC = +0.229   (between 0.9483 / within 3.192)
+    brake_peak_mean  ICC = +0.081   (between 0.03111 / within 0.3531)
+    brake_peak_max   ICC = +0.092   (between 0.03418 / within 0.3374)
+    brake_dur_mean   ICC = +0.077   (between 0.004444 / within 0.05302)
+    brake_dv_mean    ICC = +0.074   (between 0.05827 / within 0.7254)
+    brake_abrupt_mean ICC = +0.078   (between 0.003362 / within 0.03985)
+    n_accel_ev_events ICC = +0.203   (between 0.6677 / within 2.621)
+    accel_ev_per_100m ICC = +0.301   (between 5.328 / within 12.39)
+    accel_ev_peak_mean ICC = +0.004   (between 0.0001795 / within 0.04007)
+    accel_ev_peak_max ICC = +0.005   (between 0.000118 / within 0.02504)
+    accel_ev_dur_mean ICC = +0.129   (between 0.05187 / within 0.3516)
+    accel_ev_dv_mean ICC = +0.147   (between 0.7481 / within 4.326)
+    accel_ev_abrupt_mean ICC = +0.124   (between 0.001826 / within 0.01289)
+    accel_mask_frac  ICC = +0.107   (between 0.0001013 / within 0.0008489)
+
+------------------------------------------------------------------
+  role overall ICC      : +0.373
+  behaviour median ICC  : +0.124   <- the honest reference
+  VERDICT: the role is MORE scene-determined than the behaviour it
+           explains. Map-based-role diagnosis confirmed.
+------------------------------------------------------------------
+
+[icc] wrote role_scene_icc.csv / .png / _agents.csv -> /scratch/e452103/role_icc/mifutfilm_comply_dim4_rep2
+[icc] done -> /scratch/e452103/role_icc/mifutfilm_comply_dim4_rep2

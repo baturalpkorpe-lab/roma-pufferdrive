@@ -1,0 +1,67 @@
+[icc] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_collstop_nodiv/roma_dim1_step4000579584.pt out=/scratch/e452103/role_icc/collstop_4000579584_rep1 (CPU / compute partition)
+[icc] branch=mi-future-agentcentric-film commit=0e4a1be
+[icc] role_dim=1 checkpoint=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_collstop_nodiv/roma_dim1_step4000579584.pt
+[icc] episode 1/3: 2309 vehicles
+[icc] episode 2/3: 2325 vehicles
+[icc] episode 3/3: 2285 vehicles
+[icc] 6919 rows -> 6551 unique (scenario, vehicle) after collapsing 368 repeats
+[icc] 1052 scenes with >=2 vehicles (107 single-vehicle scenes dropped), 6444 vehicles, mean 6.1 per scene
+[icc] role PCA explained var: ['100%']
+
+==================================================================
+  SCENE ICC  (1.0 = role is the map, 0.0 = role is the driver)
+==================================================================
+
+  role dims
+    role_0           ICC = +0.150   (between 0.8608 / within 4.869)
+
+  role PCs
+    pc1              ICC = +0.150   (between 0.8608 / within 4.869)
+
+  ROLE OVERALL
+    role_ALL_DIMS    ICC = +0.150   (between 0.8608 / within 4.869)
+
+  behaviour (control)
+    speed_mean       ICC = +0.605   (between 28.58 / within 18.68)
+    accel_abs        ICC = +0.041   (between 0.002568 / within 0.05961)
+    accel_pos        ICC = +0.136   (between 0.02505 / within 0.1591)
+    decel_abs        ICC = +0.131   (between 0.01743 / within 0.1156)
+    jerk_abs         ICC = +0.026   (between 0.5188 / within 19.38)
+    turn_abs         ICC = +0.263   (between 0.007542 / within 0.02111)
+    event_rate       ICC = +0.072   (between 0.3237 / within 4.183)
+    decel_p95        ICC = +0.076   (between 0.06071 / within 0.7375)
+    decel_max        ICC = +0.025   (between 0.007895 / within 0.3097)
+    accel_p95        ICC = -0.017   (between 0 / within 0.05726)
+    accel_max        ICC = -0.016   (between 0 / within 0.05455)
+    hard_brake_rate  ICC = +0.094   (between 0.0004642 / within 0.004455)
+    severe_brake_rate ICC = -0.007   (between 0 / within 3.168e-06)
+    hard_accel_rate  ICC = +0.123   (between 0.001801 / within 0.01283)
+    jerk_p95         ICC = +0.019   (between 1.632 / within 83.5)
+    jerk_rms         ICC = +0.025   (between 0.5433 / within 21.28)
+    jerk_spikiness   ICC = +0.024   (between 0.0001239 / within 0.005141)
+    accel_kurt       ICC = +0.084   (between 0.03219 / within 0.353)
+    n_brake_events   ICC = +0.117   (between 0.26 / within 1.959)
+    brake_per_100m   ICC = +0.157   (between 1.836 / within 9.832)
+    brake_peak_mean  ICC = +0.066   (between 0.02628 / within 0.3709)
+    brake_peak_max   ICC = +0.080   (between 0.03036 / within 0.3497)
+    brake_dur_mean   ICC = +0.018   (between 0.0004578 / within 0.02513)
+    brake_dv_mean    ICC = +0.054   (between 0.01801 / within 0.3162)
+    brake_abrupt_mean ICC = +0.039   (between 0.001509 / within 0.03706)
+    n_accel_ev_events ICC = +0.075   (between 0.3656 / within 4.503)
+    accel_ev_per_100m ICC = +0.420   (between 17.42 / within 24.08)
+    accel_ev_peak_mean ICC = +0.001   (between 7.207e-05 / within 0.09086)
+    accel_ev_peak_max ICC = -0.006   (between 0 / within 0.06037)
+    accel_ev_dur_mean ICC = +0.009   (between 0.0002556 / within 0.02665)
+    accel_ev_dv_mean ICC = +0.020   (between 0.00561 / within 0.2784)
+    accel_ev_abrupt_mean ICC = -0.002   (between 0 / within 0.01591)
+    accel_mask_frac  ICC = +0.109   (between 6.475e-05 / within 0.000529)
+
+------------------------------------------------------------------
+  role overall ICC      : +0.150
+  behaviour median ICC  : +0.054   <- the honest reference
+  VERDICT: role tracks behaviour's own scene structure. Not obviously
+           map-driven; whatever caps per-scene consistency is elsewhere.
+------------------------------------------------------------------
+
+[icc] wrote role_scene_icc.csv / .png / _agents.csv -> /scratch/e452103/role_icc/collstop_4000579584_rep1
+[icc] done -> /scratch/e452103/role_icc/collstop_4000579584_rep1

@@ -1,0 +1,67 @@
+[icc] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_paperrew_pc_nodiv/roma_dim1_final.pt out=/scratch/e452103/role_icc/paperrew_pc_final_rep2 (CPU / compute partition)
+[icc] branch=mi-future-agentcentric-film commit=c44e3b5
+[icc] role_dim=1 checkpoint=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_paperrew_pc_nodiv/roma_dim1_final.pt
+[icc] episode 1/3: 2295 vehicles
+[icc] episode 2/3: 2296 vehicles
+[icc] episode 3/3: 2330 vehicles
+[icc] 6921 rows -> 6513 unique (scenario, vehicle) after collapsing 408 repeats
+[icc] 1050 scenes with >=2 vehicles (100 single-vehicle scenes dropped), 6413 vehicles, mean 6.1 per scene
+[icc] role PCA explained var: ['100%']
+
+==================================================================
+  SCENE ICC  (1.0 = role is the map, 0.0 = role is the driver)
+==================================================================
+
+  role dims
+    role_0           ICC = +0.139   (between 0.8003 / within 4.968)
+
+  role PCs
+    pc1              ICC = +0.139   (between 0.8003 / within 4.968)
+
+  ROLE OVERALL
+    role_ALL_DIMS    ICC = +0.139   (between 0.8003 / within 4.968)
+
+  behaviour (control)
+    speed_mean       ICC = +0.563   (between 25.91 / within 20.09)
+    accel_abs        ICC = +0.165   (between 0.01601 / within 0.08092)
+    accel_pos        ICC = +0.220   (between 0.06145 / within 0.2173)
+    decel_abs        ICC = +0.147   (between 0.02065 / within 0.1195)
+    jerk_abs         ICC = +0.110   (between 2.846 / within 23.13)
+    turn_abs         ICC = +0.125   (between 0.002231 / within 0.01556)
+    event_rate       ICC = +0.143   (between 0.1367 / within 0.8191)
+    decel_p95        ICC = +0.136   (between 0.2132 / within 1.357)
+    decel_max        ICC = +0.070   (between 0.06543 / within 0.8753)
+    accel_p95        ICC = +0.007   (between 0.0001841 / within 0.02574)
+    accel_max        ICC = +0.042   (between 0.001141 / within 0.02594)
+    hard_brake_rate  ICC = +0.110   (between 0.000486 / within 0.00395)
+    severe_brake_rate ICC = +0.220   (between 5.118e-08 / within 1.815e-07)
+    hard_accel_rate  ICC = +0.211   (between 0.004693 / within 0.01754)
+    jerk_p95         ICC = +0.065   (between 8.442 / within 121.7)
+    jerk_rms         ICC = +0.090   (between 2.789 / within 28.08)
+    jerk_spikiness   ICC = +0.082   (between 0.0008708 / within 0.009684)
+    accel_kurt       ICC = +0.120   (between 0.1529 / within 1.117)
+    n_brake_events   ICC = +0.103   (between 0.1748 / within 1.522)
+    brake_per_100m   ICC = +0.168   (between 1.534 / within 7.619)
+    brake_peak_mean  ICC = +0.016   (between 0.006144 / within 0.371)
+    brake_peak_max   ICC = +0.022   (between 0.008036 / within 0.3538)
+    brake_dur_mean   ICC = +0.116   (between 0.003747 / within 0.02861)
+    brake_dv_mean    ICC = +0.128   (between 0.0573 / within 0.39)
+    brake_abrupt_mean ICC = +0.033   (between 0.001363 / within 0.03951)
+    n_accel_ev_events ICC = +0.075   (between 0.289 / within 3.58)
+    accel_ev_per_100m ICC = +0.365   (between 11.2 / within 19.5)
+    accel_ev_peak_mean ICC = +0.008   (between 0.0005065 / within 0.06634)
+    accel_ev_peak_max ICC = +0.012   (between 0.0003302 / within 0.02816)
+    accel_ev_dur_mean ICC = +0.109   (between 0.009484 / within 0.07766)
+    accel_ev_dv_mean ICC = +0.133   (between 0.1305 / within 0.8539)
+    accel_ev_abrupt_mean ICC = +0.049   (between 0.0007837 / within 0.0151)
+    accel_mask_frac  ICC = +0.071   (between 5.316e-05 / within 0.0006969)
+
+------------------------------------------------------------------
+  role overall ICC      : +0.139
+  behaviour median ICC  : +0.110   <- the honest reference
+  VERDICT: role tracks behaviour's own scene structure. Not obviously
+           map-driven; whatever caps per-scene consistency is elsewhere.
+------------------------------------------------------------------
+
+[icc] wrote role_scene_icc.csv / .png / _agents.csv -> /scratch/e452103/role_icc/paperrew_pc_final_rep2
+[icc] done -> /scratch/e452103/role_icc/paperrew_pc_final_rep2

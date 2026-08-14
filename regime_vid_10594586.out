@@ -1,0 +1,32 @@
+[vid] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ep_nodiv/roma_dim1_final.pt
+[vid] code=/home/e452103/roma_film branch=mi-future-agentcentric-film
+[vid] out=/scratch/e452103/regime_videos_v2  n_videos=10  map_pool=64
+[vid] ffmpeg: True
+[vid] zones for 9493 scenes  device=cpu
+[vid] role_dim=1  (natural roles, nothing forced)
+  [1/10] regime_fd57b74119.mp4  24 vehicles  4 zones  47 regime changes
+  [2/10] regime_3942a11753.mp4  10 vehicles  11 zones  37 regime changes
+  [3/10] regime_4f56ea470d.mp4  14 vehicles  1 zones  28 regime changes
+  [4/10] regime_d3b03a63b9.mp4  12 vehicles  10 zones  46 regime changes
+  [5/10] regime_905d3f8219.mp4  7 vehicles  3 zones  12 regime changes
+  [6/10] regime_3fd17d034d.mp4  6 vehicles  5 zones  21 regime changes
+  [7/10] regime_a677070c8f.mp4  9 vehicles  2 zones  11 regime changes
+  [8/10] regime_f37a7b9d8d.mp4  9 vehicles  4 zones  17 regime changes
+  [9/10] regime_c68667dd33.mp4  10 vehicles  8 zones  32 regime changes
+  [10/10] regime_c344cd0fa2.mp4  4 vehicles  4 zones  8 regime changes
+
+  wrote 10 video(s) -> /scratch/e452103/regime_videos_v2
+[vid] done -> /scratch/e452103/regime_videos_v2
+total 2111
+drwxr-xr-x  2 e452103 domain users     10 Aug  6 22:22 .
+drwx------ 34 e452103 domain users     36 Aug  6 22:08 ..
+-rw-r--r--  1 e452103 domain users 270639 Aug  6 22:12 regime_3942a11753.mp4
+-rw-r--r--  1 e452103 domain users 150033 Aug  6 22:18 regime_3fd17d034d.mp4
+-rw-r--r--  1 e452103 domain users 297698 Aug  6 22:14 regime_4f56ea470d.mp4
+-rw-r--r--  1 e452103 domain users 154715 Aug  6 22:16 regime_905d3f8219.mp4
+-rw-r--r--  1 e452103 domain users 198681 Aug  6 22:19 regime_a677070c8f.mp4
+-rw-r--r--  1 e452103 domain users 192353 Aug  6 22:23 regime_c344cd0fa2.mp4
+-rw-r--r--  1 e452103 domain users 189628 Aug  6 22:22 regime_c68667dd33.mp4
+-rw-r--r--  1 e452103 domain users 245001 Aug  6 22:15 regime_d3b03a63b9.mp4
+-rw-r--r--  1 e452103 domain users 150808 Aug  6 22:20 regime_f37a7b9d8d.mp4
+-rw-r--r--  1 e452103 domain users 308063 Aug  6 22:11 regime_fd57b74119.mp4

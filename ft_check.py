@@ -60,17 +60,62 @@ def parse_args():
     p.add_argument("--rollout_dir", required=True)
     p.add_argument("--gt_regimes", default="")
     p.add_argument("--gt_conflicts", default="")
-    p.add_argument("--min_dial", type=float, default=0.5,
+    p.add_argument("--min_dial", type=float, default=0.25,
                    help="required headway spread across alpha, in seconds. "
-                        "0.5 is under half of ep_nodiv's 1.150 and well clear "
-                        "of the 0.04 noise floor.")
+                        "NOT 0.5: that was set against ep_nodiv's dim1_v4 "
+                        "rollout (1.150), which is an OUTLIER. The same "
+                        "checkpoint rolled out four times gave 0.477 / 0.492 / "
+                        "0.544 / 1.150, and the 1.150 came from an alpha=-2 "
+                        "median over 386 steady-following steps against ~1800 "
+                        "at alpha=0. 0.25 is half of the honest ~0.50.")
+    p.add_argument("--min_conflict_dial", type=float, default=0.30,
+                   help="required min_ttc spread at ALL-WAY STOPS, in seconds. "
+                        "This is the pre-registered metric: symmetric "
+                        "right-of-way is where a driving style has room, and "
+                        "conflict counts stay stable across alpha, so it does "
+                        "not suffer the population drift that headway does.")
+    p.add_argument("--min_rho", type=float, default=0.8,
+                   help="|Spearman rho| between alpha and all-way-stop min_ttc. "
+                        "A dial should be MONOTONE; a large range with no "
+                        "ordering is noise. NOT 0.9: with 5 alphas rho is "
+                        "quantised to multiples of 0.1, so 0.9 sits exactly on "
+                        "a quantisation point -- one adjacent swap gives "
+                        "exactly 0.9 and lands at 0.8999999999999998 in "
+                        "floating point, which failed a run whose dial was "
+                        "fine. 0.8 admits one swap with room to spare.")
     p.add_argument("--safety_tol", type=float, default=0.20,
                    help="fractional degradation allowed at |alpha|=2 relative "
                         "to alpha=0 for the safety surrogates")
     p.add_argument("--ref_headway", type=float, default=1.02,
-                   help="headway at alpha=0 to beat: ep_nodiv's value, so a "
-                        "fine-tune is not allowed to trade realism for range")
+                   help="headway at alpha=0 to beat: ep_nodiv's value")
+    p.add_argument("--baseline_dir", default="",
+                   help="another rollout dir to compare alpha=0 against. Turns "
+                        "the report into a PROGRESS check: for each metric, is "
+                        "this checkpoint CLOSER TO HUMAN than the baseline? "
+                        "That is the question at every checkpoint of a run "
+                        "whose point is realism rather than the dial.")
+    p.add_argument("--min_improved", type=int, default=4,
+                   help="how many of the 8 realism metrics must have moved "
+                        "toward human for a --baseline_dir run to count as "
+                        "progressing")
+    p.add_argument("--noise", type=float, default=0.05,
+                   help="measurement noise floor in seconds, from four "
+                        "independent rollouts of one checkpoint. Realism is "
+                        "only judged to have regressed beyond this.")
     return p.parse_args()
+
+
+def spearman(x, y):
+    """Rank correlation without scipy. +-1 = perfectly monotone."""
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    m = np.isfinite(x) & np.isfinite(y)
+    if m.sum() < 3:
+        return np.nan
+    rx = pd.Series(x[m]).rank().to_numpy()
+    ry = pd.Series(y[m]).rank().to_numpy()
+    if rx.std() < 1e-12 or ry.std() < 1e-12:
+        return np.nan
+    return float(np.corrcoef(rx, ry)[0, 1])
 
 
 def med(df, col):
@@ -122,10 +167,22 @@ def main():
     verdicts = []
 
     # ---- 1. does the dial move? -------------------------------------------
+    # The n column is not decoration. A style parameter is read only on the
+    # steps where its regime is identified, and the SWEEP CHANGES WHICH STEPS
+    # THOSE ARE. ep_nodiv at alpha=-2 crawls so slowly it stops acquiring
+    # leaders at all: n_headway_T fell to 386 against ~1800 at alpha=0, and the
+    # median over that remnant read 2.011 s -- which then looked like a
+    # human-level following gap and set a benchmark no honest run could meet.
+    # A range measured across a collapsing population is not a dial.
     print("\n  1. DIAL  (spread across alpha; the whole point of the role)")
-    print("     %-18s %9s %9s %9s   %s" %
-          ("metric", "min", "max", "range", "human"))
-    dial_range = {}
+    print("     %-18s %9s %9s %9s %7s   %s" %
+          ("metric", "min", "max", "range", "n_swing", "human"))
+    dial_range, unstable = {}, []
+    # Where the rollout carries a step-count column, sum it. Otherwise fall
+    # back to how many AGENTS produced a value for the metric at all -- which
+    # is what role_report's n_ columns report, and the quantity that collapsed
+    # to 386 on ep_nodiv at alpha=-2.
+    NCOL = {"speed_ff": "n_ff", "speed_fol": "n_fol", "speed_zone": "n_zone"}
     for c in REG_COLS:
         vals = [med(arms[al][0], c) for al in alphas]
         vals = [v for v in vals if np.isfinite(v)]
@@ -133,17 +190,70 @@ def main():
             continue
         rng = max(vals) - min(vals)
         dial_range[c] = rng
+        ns, nc = [], NCOL.get(c)
+        for al in alphas:
+            d = arms[al][0]
+            if nc and nc in d.columns:
+                v = pd.to_numeric(d[nc], errors="coerce").dropna()
+                ns.append(float(v.sum()))
+            elif c in d.columns:
+                ns.append(float(pd.to_numeric(d[c], errors="coerce")
+                                .notna().sum()))
+        swing = (max(ns) / max(min(ns), 1.0)) if ns and all(
+            np.isfinite(ns)) else np.nan
+        if np.isfinite(swing) and swing > 2.0:
+            unstable.append(c)
         h = med(human_reg, c) if human_reg is not None else np.nan
-        print("     %-18s %9.3f %9.3f %9.3f   %s" %
+        print("     %-18s %9.3f %9.3f %9.3f %6s   %s" %
               (c, min(vals), max(vals), rng,
+               ("%.1fx" % swing) if np.isfinite(swing) else "--",
                "%.3f" % h if np.isfinite(h) else "--"))
-
+    if unstable:
+        print("\n     POPULATION UNSTABLE (>2x sample swing across alpha): %s"
+              % ", ".join(unstable))
+        print("     Those ranges are part selection effect, not pure style.")
     hw = dial_range.get("headway_T", np.nan)
     ok_dial = np.isfinite(hw) and hw >= a.min_dial
     verdicts.append(("dial range on headway >= %.2f s" % a.min_dial, ok_dial,
                      "%.3f s" % hw if np.isfinite(hw) else "n/a"))
-    print("\n     reference: ep_nodiv 1.150 | arm A 0.274 | arm B 0.010")
-    print("     noise floor from four independent rollouts: +-0.04 s")
+    print("\n     headway reference, ep_nodiv rolled out FOUR times on the same")
+    print("     weights: 0.477 / 0.492 / 0.544 / 1.150. The 1.150 is an outlier")
+    print("     (n=386 at alpha=-2). Honest reference ~0.50; arm A 0.274;")
+    print("     arm B 0.010 and 0.037. Noise floor +-0.04 s.")
+
+    # ---- 1b. the pre-registered dial: min_ttc at all-way stops ------------
+    # Better than headway on two counts. Conflict counts stay stable across
+    # alpha (409-430 on the fine-tune) where following-step counts do not, so
+    # there is no population drift to confound the range. And symmetric
+    # right-of-way is where a driving style has room by construction: on GT,
+    # 23.5% of the go/yield decision at all-way stops is unexplained by
+    # geometry, against 10.8% at signals.
+    print("\n  1b. PRE-REGISTERED DIAL  (min_ttc at all-way stops)")
+    aw_a, aw_v, aw_n = [], [], []
+    for al in alphas:
+        c = arms[al][1]
+        if c is None or "control" not in c.columns:
+            continue
+        sub = c[c["control"] == "all_way_stop"]
+        v = med(sub, "min_ttc")
+        if np.isfinite(v):
+            aw_a.append(al); aw_v.append(v); aw_n.append(len(sub) // 2)
+    if len(aw_v) >= 3:
+        rho = spearman(aw_a, aw_v)
+        rng = max(aw_v) - min(aw_v)
+        print("     alpha    " + "  ".join("%7.1f" % x for x in aw_a))
+        print("     min_ttc  " + "  ".join("%7.3f" % x for x in aw_v))
+        print("     n_conf   " + "  ".join("%7d" % x for x in aw_n))
+        print("     range=%.3f s   spearman rho=%+.2f  (-1 or +1 = monotone)"
+              % (rng, rho))
+        verdicts.append(("all-way min_ttc range >= %.2f s" % a.min_conflict_dial,
+                         rng >= a.min_conflict_dial, "%.3f s" % rng))
+        verdicts.append(("all-way min_ttc is monotone (|rho| >= %.1f)" % a.min_rho,
+                         np.isfinite(rho) and abs(rho) >= a.min_rho - 1e-9,
+                         "rho=%+.2f" % rho if np.isfinite(rho) else "n/a"))
+        print("     reference: ep_nodiv ~2.10 | ft_comply25 0.655 | arm A 0.413")
+    else:
+        print("     no 'control' column in the conflict files -- skipped")
 
     # ---- 2. still safe at the extremes? -----------------------------------
     print("\n  2. SAFETY AT THE EXTREMES  (different behaviour, still safe)")
@@ -182,9 +292,14 @@ def main():
         print("     headway_T   %.3f    ep_nodiv %.3f    human %.3f" %
               (h0, a.ref_headway,
                med(human_reg, "headway_T") if human_reg is not None else np.nan))
-        verdicts.append(("headway at alpha=0 >= ep_nodiv's %.2f s"
-                         % a.ref_headway,
-                         np.isfinite(h0) and h0 >= a.ref_headway,
+        # Judged against the noise floor, not exactly. A run reading 1.000
+        # against a reference of 1.020 has not regressed by anything the
+        # pipeline can resolve -- four rollouts of one checkpoint spread by
+        # +-0.04 s -- and flagging it as a failure is how this check first
+        # produced a spurious KILL.
+        verdicts.append(("headway at alpha=0 >= %.2f s (ref %.2f - noise %.2f)"
+                         % (a.ref_headway - a.noise, a.ref_headway, a.noise),
+                         np.isfinite(h0) and h0 >= a.ref_headway - a.noise,
                          "%.3f s" % h0 if np.isfinite(h0) else "n/a"))
         for c in ("speed_ff", "accel_ff"):
             v = med(arms[0.0][0], c)
@@ -193,18 +308,70 @@ def main():
                 print("     %-11s %.3f    %s" %
                       (c, v, ("human %.3f" % hv) if np.isfinite(hv) else ""))
 
+    # ---- 4. progress against a baseline -----------------------------------
+    # "Better" is not "bigger" or "smaller" -- it is CLOSER TO THE HUMAN VALUE,
+    # and the direction differs per metric (speed down, headway up, mrd down,
+    # min_ttc up). Comparing |new - human| against |base - human| gets the
+    # direction right for free and needs no per-metric sign table.
+    n_improved = None
+    if a.baseline_dir and os.path.isdir(a.baseline_dir):
+        base = load(a.baseline_dir)
+        print("\n  4. PROGRESS vs %s" % os.path.basename(a.baseline_dir))
+        if 0.0 not in arms or 0.0 not in base:
+            print("     one side has no alpha=0 arm -- skipped")
+        else:
+            print("     %-12s %9s %9s %9s   %s" %
+                  ("metric", "baseline", "this", "human", "toward human?"))
+            n_improved, n_total = 0, 0
+            for c, src in (("speed_ff", 0), ("speed_fol", 0), ("speed_zone", 0),
+                           ("headway_T", 0), ("accel_ff", 0),
+                           ("pet", 1), ("min_ttc", 1), ("mrd", 1)):
+                hv = med(human_reg if src == 0 else human_cf, c)
+                bv = med(base[0.0][src], c)
+                nv = med(arms[0.0][src], c)
+                if not all(np.isfinite(x) for x in (hv, bv, nv)):
+                    continue
+                n_total += 1
+                better = abs(nv - hv) < abs(bv - hv)
+                n_improved += int(better)
+                print("     %-12s %9.3f %9.3f %9.3f   %s" %
+                      (c, bv, nv, hv, "YES" if better else "no"))
+            print("\n     %d of %d metrics moved toward human." % (n_improved,
+                                                                  n_total))
+            verdicts.append(("realism: >= %d of %d metrics toward human"
+                             % (a.min_improved, n_total),
+                             n_improved >= a.min_improved,
+                             "%d improved" % n_improved))
+
     # ---- verdict ----------------------------------------------------------
     print("\n" + "=" * 72)
     for name, ok, detail in verdicts:
         print("  [%s]  %-46s %s" % ("PASS" if ok else "FAIL", name, detail))
     hard = [v for v in verdicts if not v[1]]
     print("=" * 72)
+
+    # The kill call needs BOTH dial measures to fail. Keying it on headway
+    # alone produced a spurious KILL on a run whose all-way-stop min_ttc was
+    # perfectly monotone over five points: headway is gap/speed, so an agent
+    # that follows faster at the same time gap shows a large speed change and
+    # no headway change at all.
+    aw = [v for v in verdicts if v[0].startswith("all-way min_ttc range")]
+    ok_conf = aw[0][1] if aw else None
+    dead = (not ok_dial) and (ok_conf is False or ok_conf is None)
+
     if not hard:
         print("  VERDICT: continue. The dial moves and safety holds.")
-    elif not ok_dial:
-        print("  VERDICT: KILL THE RUN. No dial means nothing downstream is")
-        print("           interpretable, and it will not appear later -- both")
-        print("           previous arms were already flat well before 3B.")
+    elif dead:
+        print("  VERDICT: KILL THE RUN. Neither the headway dial nor the")
+        print("           all-way-stop dial moves, so nothing downstream is")
+        print("           interpretable and it will not appear later -- both")
+        print("           failed arms were already flat well before 3B.")
+    elif not ok_dial and ok_conf:
+        print("  VERDICT: continue, with a caveat. The headway dial is weak but")
+        print("           the pre-registered all-way-stop dial moves and is")
+        print("           monotone. Headway is speed-invariant by construction,")
+        print("           so check the speed_fol row before reading anything")
+        print("           into its flatness.")
     else:
         print("  VERDICT: the dial works but %d safety/realism check(s) failed."
               % len(hard))

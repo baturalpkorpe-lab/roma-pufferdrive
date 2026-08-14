@@ -1,0 +1,67 @@
+[icc] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_collstop_nodiv/roma_dim1_step4250664960.pt out=/scratch/e452103/role_icc/collstop_4250664960_rep2 (CPU / compute partition)
+[icc] branch=mi-future-agentcentric-film commit=0e4a1be
+[icc] role_dim=1 checkpoint=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_collstop_nodiv/roma_dim1_step4250664960.pt
+[icc] episode 1/3: 2417 vehicles
+[icc] episode 2/3: 2323 vehicles
+[icc] episode 3/3: 2315 vehicles
+[icc] 7055 rows -> 6705 unique (scenario, vehicle) after collapsing 350 repeats
+[icc] 1025 scenes with >=2 vehicles (102 single-vehicle scenes dropped), 6603 vehicles, mean 6.4 per scene
+[icc] role PCA explained var: ['100%']
+
+==================================================================
+  SCENE ICC  (1.0 = role is the map, 0.0 = role is the driver)
+==================================================================
+
+  role dims
+    role_0           ICC = +0.247   (between 1.3 / within 3.962)
+
+  role PCs
+    pc1              ICC = +0.247   (between 1.3 / within 3.962)
+
+  ROLE OVERALL
+    role_ALL_DIMS    ICC = +0.247   (between 1.3 / within 3.962)
+
+  behaviour (control)
+    speed_mean       ICC = +0.624   (between 29.97 / within 18.05)
+    accel_abs        ICC = +0.107   (between 0.007708 / within 0.06417)
+    accel_pos        ICC = +0.164   (between 0.03275 / within 0.1668)
+    decel_abs        ICC = +0.103   (between 0.01281 / within 0.1113)
+    jerk_abs         ICC = +0.030   (between 0.6494 / within 21.33)
+    turn_abs         ICC = +0.179   (between 0.004516 / within 0.02077)
+    event_rate       ICC = +0.058   (between 0.1524 / within 2.463)
+    decel_p95        ICC = +0.072   (between 0.07934 / within 1.019)
+    decel_max        ICC = +0.037   (between 0.01934 / within 0.5104)
+    accel_p95        ICC = -0.028   (between 0 / within 0.03902)
+    accel_max        ICC = +0.023   (between 0.0007286 / within 0.03104)
+    hard_brake_rate  ICC = +0.066   (between 0.0003097 / within 0.004365)
+    severe_brake_rate ICC = +0.030   (between 9.304e-08 / within 3.02e-06)
+    hard_accel_rate  ICC = +0.148   (between 0.002367 / within 0.01362)
+    jerk_p95         ICC = +0.014   (between 1.458 / within 103.4)
+    jerk_rms         ICC = +0.020   (between 0.5142 / within 25.22)
+    jerk_spikiness   ICC = +0.034   (between 0.0002054 / within 0.005914)
+    accel_kurt       ICC = +0.086   (between 0.04819 / within 0.5111)
+    n_brake_events   ICC = +0.100   (between 0.1445 / within 1.297)
+    brake_per_100m   ICC = +0.258   (between 2.228 / within 6.421)
+    brake_peak_mean  ICC = +0.059   (between 0.02453 / within 0.3918)
+    brake_peak_max   ICC = +0.066   (between 0.02615 / within 0.3707)
+    brake_dur_mean   ICC = +0.029   (between 0.0008379 / within 0.02789)
+    brake_dv_mean    ICC = +0.060   (between 0.02523 / within 0.392)
+    brake_abrupt_mean ICC = +0.032   (between 0.001364 / within 0.04193)
+    n_accel_ev_events ICC = +0.063   (between 0.2839 / within 4.205)
+    accel_ev_per_100m ICC = +0.402   (between 13.25 / within 19.68)
+    accel_ev_peak_mean ICC = +0.015   (between 0.00122 / within 0.0785)
+    accel_ev_peak_max ICC = -0.010   (between 0 / within 0.03825)
+    accel_ev_dur_mean ICC = +0.045   (between 0.001833 / within 0.0386)
+    accel_ev_dv_mean ICC = +0.065   (between 0.02699 / within 0.3897)
+    accel_ev_abrupt_mean ICC = +0.025   (between 0.0003872 / within 0.01493)
+    accel_mask_frac  ICC = +0.140   (between 6.914e-05 / within 0.0004246)
+
+------------------------------------------------------------------
+  role overall ICC      : +0.247
+  behaviour median ICC  : +0.060   <- the honest reference
+  VERDICT: the role is MORE scene-determined than the behaviour it
+           explains. Map-based-role diagnosis confirmed.
+------------------------------------------------------------------
+
+[icc] wrote role_scene_icc.csv / .png / _agents.csv -> /scratch/e452103/role_icc/collstop_4250664960_rep2
+[icc] done -> /scratch/e452103/role_icc/collstop_4250664960_rep2

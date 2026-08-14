@@ -1,0 +1,40 @@
+[roll] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_pc40_cb1_lr_half_nodiv/roma_dim1_step6500646912.pt
+[roll] code=/home/e452103/roma_film branch=mi-future-agentcentric-film
+[roll] alphas=-2,-1,0,1,2 (sweep=1) axis=PC1 episodes=6 map_pool=1000
+[roll] out=/scratch/e452103/regimes_rollout/pc40_cb1_lr_half_6500646912
+[roll] zones for 9493 scenes  device=cpu
+[roll] role_dim=1
+[alpha] warmup axes from 2943 role vectors
+[roll] measured natural sigma(PC1) = 5.5233
+[roll] axis derived from this checkpoint
+[roll] sweeping PC1  sigma=5.5233
+[roll] PC1-2 ep 1/6: 2288 trajectories, 112 conflicts
+[roll] PC1-2 ep 2/6: 4591 trajectories, 227 conflicts
+[roll] PC1-2 ep 3/6: 6883 trajectories, 328 conflicts
+[roll] PC1-2 ep 4/6: 9084 trajectories, 418 conflicts
+[roll] PC1-2 ep 5/6: 11302 trajectories, 528 conflicts
+[roll] PC1-2 ep 6/6: 13534 trajectories, 628 conflicts
+
+=== PC1-2: 13534 trajectories, 628 conflicts ===
+
+  ROLE VARIANCE SPLIT (is it a disposition or a reaction?)
+    dim 0: between-agent=30.6365  between-regime(within agent)=16.9094  step-level sd^2=23.1601
+            disposition share = 0.644  (-> 1.0 = a stable style; -> 0.5 = as much situational swing as driver difference)
+    desired speed (rel)    n=10627  med=0.772
+    time headway (s)       n=572    med=2.318
+  wrote /scratch/e452103/regimes_rollout/pc40_cb1_lr_half_6500646912/conflicts_PC1-2.csv + regimes_PC1-2.csv
+[roll] PC1-1 ep 1/6: 2131 trajectories, 100 conflicts
+[roll] PC1-1 ep 2/6: 4345 trajectories, 229 conflicts
+[roll] PC1-1 ep 3/6: 6722 trajectories, 360 conflicts
+[roll] PC1-1 ep 4/6: 9009 trajectories, 473 conflicts
+[roll] PC1-1 ep 5/6: 11235 trajectories, 557 conflicts
+[roll] PC1-1 ep 6/6: 13445 trajectories, 674 conflicts
+
+=== PC1-1: 13445 trajectories, 674 conflicts ===
+
+  ROLE VARIANCE SPLIT (is it a disposition or a reaction?)
+    dim 0: between-agent=30.8475  between-regime(within agent)=20.0637  step-level sd^2=24.3647
+            disposition share = 0.606  (-> 1.0 = a stable style; -> 0.5 = as much situational swing as driver difference)
+    desired speed (rel)    n=10595  med=0.777
+    time headway (s)       n=519    med=2.210
+  wrote /scratch/e452103/regimes_rollout/pc40_cb1_lr_half_6500646912/conflicts_PC1-1.csv + regimes_PC1-1.csv

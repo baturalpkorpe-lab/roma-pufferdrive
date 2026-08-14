@@ -1,0 +1,67 @@
+[icc] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_collstop_nodiv/roma_dim1_step3750494208.pt out=/scratch/e452103/role_icc/collstop_3750494208_rep3 (CPU / compute partition)
+[icc] branch=mi-future-agentcentric-film commit=0e4a1be
+[icc] role_dim=1 checkpoint=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ft_collstop_nodiv/roma_dim1_step3750494208.pt
+[icc] episode 1/3: 2265 vehicles
+[icc] episode 2/3: 2281 vehicles
+[icc] episode 3/3: 2178 vehicles
+[icc] 6724 rows -> 6330 unique (scenario, vehicle) after collapsing 394 repeats
+[icc] 1061 scenes with >=2 vehicles (91 single-vehicle scenes dropped), 6239 vehicles, mean 5.9 per scene
+[icc] role PCA explained var: ['100%']
+
+==================================================================
+  SCENE ICC  (1.0 = role is the map, 0.0 = role is the driver)
+==================================================================
+
+  role dims
+    role_0           ICC = +0.163   (between 0.5235 / within 2.691)
+
+  role PCs
+    pc1              ICC = +0.163   (between 0.5235 / within 2.691)
+
+  ROLE OVERALL
+    role_ALL_DIMS    ICC = +0.163   (between 0.5235 / within 2.691)
+
+  behaviour (control)
+    speed_mean       ICC = +0.610   (between 27.53 / within 17.64)
+    accel_abs        ICC = +0.067   (between 0.004153 / within 0.05771)
+    accel_pos        ICC = +0.229   (between 0.04431 / within 0.1495)
+    decel_abs        ICC = +0.208   (between 0.02716 / within 0.1032)
+    jerk_abs         ICC = +0.057   (between 1.162 / within 19.13)
+    turn_abs         ICC = +0.372   (between 0.01368 / within 0.02314)
+    event_rate       ICC = +0.031   (between 0.1517 / within 4.727)
+    decel_p95        ICC = +0.126   (between 0.09681 / within 0.6687)
+    decel_max        ICC = +0.031   (between 0.008671 / within 0.2716)
+    accel_p95        ICC = -0.023   (between 0 / within 0.07319)
+    accel_max        ICC = +0.026   (between 0.001015 / within 0.03856)
+    hard_brake_rate  ICC = +0.120   (between 0.0004986 / within 0.003653)
+    severe_brake_rate ICC = +0.173   (between 4.581e-08 / within 2.186e-07)
+    hard_accel_rate  ICC = +0.208   (between 0.003235 / within 0.01232)
+    jerk_p95         ICC = +0.028   (between 2.343 / within 80.82)
+    jerk_rms         ICC = +0.045   (between 1.018 / within 21.42)
+    jerk_spikiness   ICC = +0.072   (between 0.0003555 / within 0.004573)
+    accel_kurt       ICC = +0.137   (between 0.05197 / within 0.3264)
+    n_brake_events   ICC = +0.181   (between 0.4288 / within 1.944)
+    brake_per_100m   ICC = +0.197   (between 2.13 / within 8.693)
+    brake_peak_mean  ICC = +0.076   (between 0.02677 / within 0.3244)
+    brake_peak_max   ICC = +0.092   (between 0.03057 / within 0.3003)
+    brake_dur_mean   ICC = +0.065   (between 0.001108 / within 0.01582)
+    brake_dv_mean    ICC = +0.098   (between 0.02057 / within 0.1891)
+    brake_abrupt_mean ICC = +0.028   (between 0.001012 / within 0.03551)
+    n_accel_ev_events ICC = +0.052   (between 0.2491 / within 4.497)
+    accel_ev_per_100m ICC = +0.443   (between 18.01 / within 22.68)
+    accel_ev_peak_mean ICC = -0.014   (between 0 / within 0.09385)
+    accel_ev_peak_max ICC = -0.008   (between 0 / within 0.04947)
+    accel_ev_dur_mean ICC = +0.081   (between 0.002112 / within 0.0241)
+    accel_ev_dv_mean ICC = +0.092   (between 0.02582 / within 0.2548)
+    accel_ev_abrupt_mean ICC = -0.002   (between 0 / within 0.01547)
+    accel_mask_frac  ICC = +0.134   (between 8.831e-05 / within 0.000571)
+
+------------------------------------------------------------------
+  role overall ICC      : +0.163
+  behaviour median ICC  : +0.081   <- the honest reference
+  VERDICT: role tracks behaviour's own scene structure. Not obviously
+           map-driven; whatever caps per-scene consistency is elsewhere.
+------------------------------------------------------------------
+
+[icc] wrote role_scene_icc.csv / .png / _agents.csv -> /scratch/e452103/role_icc/collstop_3750494208_rep3
+[icc] done -> /scratch/e452103/role_icc/collstop_3750494208_rep3

@@ -1,0 +1,11 @@
+usage: regime_rollout.py [-h] --checkpoint CHECKPOINT --zones_csv ZONES_CSV
+                         [--data_dir DATA_DIR] --out_dir OUT_DIR
+                         [--episodes EPISODES] [--map_pool MAP_POOL]
+                         [--total_agents TOTAL_AGENTS] [--alphas ALPHAS]
+                         [--axis AXIS] [--axes_csv AXES_CSV]
+                         [--axis_tol AXIS_TOL] [--skip_axis_check]
+                         [--device DEVICE] [--dump_steps] [--buffer BUFFER]
+                         [--tau_dec TAU_DEC]
+                         [--min_approach_offset MIN_APPROACH_OFFSET]
+                         [--zone_radius ZONE_RADIUS] [--max_pairs MAX_PAIRS]
+regime_rollout.py: error: argument --alphas: expected one argument

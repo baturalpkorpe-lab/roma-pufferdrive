@@ -1,0 +1,7 @@
+[vid] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ep_nodiv/roma_dim1_final.pt
+[vid] code=/home/e452103/roma_film branch=mi-future-agentcentric-film
+[vid] out=/scratch/e452103/regime_videos  n_videos=10  map_pool=64
+[vid] ffmpeg: True
+[vid] zones for 9493 scenes  device=cpu
+[vid] role_dim=1  (natural roles, nothing forced)
+[vid] FAILED (python exit 1)

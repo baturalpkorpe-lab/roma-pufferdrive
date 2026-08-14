@@ -1,0 +1,3 @@
+[icc] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ep_film_comply_mifix_nodiv/roma_dim1_final.pt out=/scratch/e452103/role_icc/dim1_film_comply_mifix_rep1 (CPU / compute partition)
+[icc] branch=mi-future-agentcentric-film commit=26046d4
+[icc] FAILED (python exit 1) -- see the traceback above

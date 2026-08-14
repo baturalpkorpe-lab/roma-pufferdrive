@@ -1,0 +1,48 @@
+[causal_ax] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim4_H8_r16p64_ep_film/roma_dim4_final.pt
+[causal_ax] out=/scratch/e452103/analysis/mifutfilm_dim4/causal_axis episodes=6 warmup=2 alpha_max=2.0
+[causal_ax] branch=mi-future-agentcentric-film commit=92e1242
+====================================================================
+  POLICY SENSITIVITY TO THE ROLE  (architecture readout)
+====================================================================
+  mean |w| per env-embedding input dim : 4.1817  (128 dims)
+  mean |w| per ROLE input dim          : 2.9599  (4 dims)
+  role / env ratio                     : 0.708
+  -> the policy does read the role at a comparable weight per dim.
+     A weak dial would then be about WHICH direction is swept, not whether
+     the role is used.
+[causal] warmup 1/2: 391 focals
+[causal] warmup 2/2: 764 focals
+[causal] role sigma=0.9648  PC1 var=89%  PC2 var=9%
+[causal] observational gradient from 4449 agents in multi-agent scenes (33 metrics)
+[causal] ep1/6: 396 paired interventions
+[causal] ep2/6: 794 paired interventions
+[causal] ep3/6: 1197 paired interventions
+[causal] ep4/6: 1604 paired interventions
+[causal] ep5/6: 2017 paired interventions
+[causal] ep6/6: 2433 paired interventions
+
+[causal] fitting on 2433 paired interventions, role_dim=4
+
+============================================================================================
+  CAUSAL AXIS vs SWEPT AXIS   (per 1 sigma of role movement)
+============================================================================================
+  metric                   causal  via PC1  cos_pc1  cos_pc2   gain     r2   obs r  cohere
+  speed_mean                0.824   -0.419    -0.51    -0.39    2.0x   0.23    0.87    0.19
+  decel_p95                 0.650    0.282     0.43     0.27    2.3x   0.11    0.41    0.63
+  accel_ev_dur_mean         0.322   -0.148    -0.46    -0.64    2.2x   0.11   -0.40    0.08
+  brake_peak_mean           0.135    0.017     0.13    -0.62    7.7x   0.02   -0.10   -0.43
+  event_rate                0.100    0.086     0.86     0.28    1.2x   0.00    0.06   -0.44
+  hard_accel_rate           0.083   -0.042    -0.50    -0.49    2.0x   0.28   -0.58    0.40
+  turn_abs                  0.055   -0.038    -0.69    -0.47    1.4x   0.10   -0.32    0.24
+  accel_ev_peak_mean        0.044   -0.019    -0.44    -0.59    2.3x   0.02   -0.20    0.49
+  brake_dur_mean            0.043    0.020     0.46    -0.88    2.2x   0.01   -0.12    0.22
+  hard_brake_rate           0.018    0.008     0.44     0.10    2.3x   0.05    0.16    0.52
+  accel_p95                 0.005   -0.002    -0.37    -0.51    2.7x   0.00   -0.01    0.27
+  accel_mask_frac           0.000    0.000     0.43     0.31    2.3x   0.00   -0.19   -0.68
+
+  cos_pc1 is the fraction of the achievable effect that sweeping PC1 delivers.
+  NEGATIVE cos_pc1 = sweeping PC1 moves that metric the WRONG WAY.
+  Low r2 = the role acts non-linearly; no single direction is a good dial.
+
+[causal] -> /scratch/e452103/analysis/mifutfilm_dim4/causal_axis/role_causal_axis.csv + .png + policy_role_sensitivity.csv
+[causal_ax] done -> /scratch/e452103/analysis/mifutfilm_dim4/causal_axis

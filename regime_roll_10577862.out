@@ -1,0 +1,27 @@
+[roll] ckpt=/scratch/e452103/checkpoints/roma_mifutagent_dim1_H8_r16p64_ep_nodiv/roma_dim1_final.pt
+[roll] code=/home/e452103/roma_film branch=mi-future-agentcentric-film
+[roll] alphas=-2 axis=PC1 episodes=6 map_pool=1000
+[roll] out=/scratch/e452103/regimes_rollout/dim1_nodiv
+[roll] zones for 9493 scenes  device=cpu
+[roll] role_dim=1
+[roll] axis PC1 sigma=729.2712
+[roll] PC1-2 ep 1/6: 3070 trajectories, 419 conflicts
+[roll] PC1-2 ep 2/6: 6142 trajectories, 729 conflicts
+[roll] PC1-2 ep 3/6: 9211 trajectories, 955 conflicts
+[roll] PC1-2 ep 4/6: 12276 trajectories, 1239 conflicts
+[roll] PC1-2 ep 5/6: 15345 trajectories, 1537 conflicts
+[roll] PC1-2 ep 6/6: 18415 trajectories, 1804 conflicts
+
+=== PC1-2: 18415 trajectories, 1804 conflicts ===
+
+  ROLE VARIANCE SPLIT (is it a disposition or a reaction?)
+    dim 0: between-agent=0.5863  between-regime(within agent)=0.0010  step-level sd^2=1.7575
+            disposition share = 0.998  (-> 1.0 = a stable style; -> 0.5 = as much situational swing as driver difference)
+    desired speed (rel)    n=13901  med=0.730
+  wrote /scratch/e452103/regimes_rollout/dim1_nodiv/conflicts_PC1-2.csv + regimes_PC1-2.csv
+[roll] done -> /scratch/e452103/regimes_rollout/dim1_nodiv
+total 1908
+drwxr-xr-x 2 e452103 domain users       2 Aug  4 14:53 .
+drwxr-xr-x 4 e452103 domain users       2 Aug  4 14:46 ..
+-rw-r--r-- 1 e452103 domain users  371029 Aug  4 14:53 conflicts_PC1-2.csv
+-rw-r--r-- 1 e452103 domain users 1581539 Aug  4 14:53 regimes_PC1-2.csv
