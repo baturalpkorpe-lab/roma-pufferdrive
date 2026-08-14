@@ -17,6 +17,11 @@
 #
 #   sbatch slurm/role_natural_extremes.sbatch                    # dim-2 final
 #   sbatch --export=ALL,CKPT=...,AXES=...,OUT=... slurm/role_natural_extremes.sbatch
+#
+# ROLE_DIM=1 is fine: load_axes reads c0 only, and PC2 falls back to a zero
+# vector (role_natural_extremes.py:232), so pc2 is a constant column instead of
+# a crash. Note that at dim-1 the two "poles" are the TAILS of one scalar, not
+# two modes -- mifutagent_dim1_nodiv has Sarle BC=0.490, i.e. a continuum.
 
 CKPT=${CKPT:-/scratch/e452103/checkpoints/roma_baseline_dim2/roma_dim2_final.pt}
 AXES=${AXES:-/scratch/e452103/role_paired/dim2/role_paired_axes.csv}
@@ -24,22 +29,31 @@ TRAJ=${TRAJ:-/scratch/e452103/traj_atlas/trajectory_clusters_stopfrac.csv}
 OUT=${OUT:-/scratch/e452103/role_natural/dim2}
 CLUSTERS=${CLUSTERS:-0,1,2,3}
 PER_SIDE=${PER_SIDE:-1}
+# Read code from the clone that SUBMITTED, not a hardcoded one. $HOME/
+# roma_pufferdrive is on role-agent-centric despite the name, so the old
+# hardcoded CODE_DIR silently ran another branch's policy classes against this
+# checkpoint. Same fix as 74038b8 for eval_wosac.
+CODE_DIR=${CODE_DIR:-${SLURM_SUBMIT_DIR:-$HOME/roma_pufferdrive}}
+PUFFER_DIR=${PUFFER_DIR:-/scratch/e452103/PufferDrive}
 
 module purge
 module load miniconda3
 source /apps/generic/miniforge3/25.11.0/etc/profile.d/conda.sh
 conda activate roma
 
-export PYTHONPATH=$HOME/roma_pufferdrive:/scratch/e452103/PufferDrive
+export PYTHONPATH=$CODE_DIR:$PUFFER_DIR
 export PYTHONUNBUFFERED=1
-CODE_DIR=$HOME/roma_pufferdrive
 
 mkdir -p /scratch/e452103/logs "$OUT"
+[ -f "$CKPT" ] || { echo "ERROR: checkpoint not found: $CKPT"; exit 1; }
 [ -f "$AXES" ] || { echo "ERROR: axes csv not found: $AXES (run role_paired_sweep first)"; exit 1; }
 [ -f "$TRAJ" ] || { echo "ERROR: clusters csv not found: $TRAJ"; exit 1; }
+echo "[nat] code=$CODE_DIR branch=$(git -C "$CODE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ?)"
+echo "[nat] ckpt=$CKPT"
+echo "[nat] axes=$AXES"
 
 # C binding loads pufferlib/config/ocean/drive.ini via a relative path.
-cd /scratch/e452103/PufferDrive
+cd "$PUFFER_DIR"
 
 python "$CODE_DIR/role_natural_extremes.py" \
     --checkpoint    "$CKPT" \

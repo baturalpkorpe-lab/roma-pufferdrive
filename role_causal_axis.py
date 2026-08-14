@@ -105,10 +105,16 @@ def parse_args():
     return p.parse_args()
 
 
-def rollout(env, policy, device, shifts_by_slot=None):
+def rollout(env, policy, device, shifts_by_slot=None, all_agents=False):
     """One episode. shifts_by_slot: dict slot -> (role_dim,) shift added to
     that agent's OWN live role every step (None = natural).
-    Returns rows keyed by (sid, vid) plus the per-agent mean role."""
+    Returns rows keyed by (sid, vid) plus the per-agent mean role.
+
+    all_agents=True additionally returns EVERY vehicle's (sid, role, behaviour).
+    select_focals yields one focal per scene, so focal rows cannot be
+    scene-centred -- each scene would have a single member and centring would
+    return exactly zero. The observational gradient therefore needs the full
+    per-scene population, the same rows role_scene_icc decomposes."""
     B = env.num_agents
     obs_np, _ = env.reset()
     gt = env.get_ground_truth_trajectories()
@@ -149,6 +155,21 @@ def rollout(env, policy, device, shifts_by_slot=None):
     T_gt   = gx.shape[1]
     step_d = np.hypot(np.diff(xs, axis=0), np.diff(ys, axis=0))
 
+    everyone = []
+    if all_agents:
+        sids_all = _squeeze(np.asarray(gt["scenario_id"]).astype(str))
+        is_veh   = np.asarray(gt["is_vehicle"]).reshape(-1).astype(bool)
+        for a in range(B):
+            sid_a = str(sids_all[a])
+            if not is_veh[a] or not sid_a or sid_a.lower().startswith("map"):
+                continue
+            m = focal_metrics(a, xs, ys, hs, rews, gx, gy, gvalid, T_gt)
+            if m is None:
+                continue
+            jm = np.where(step_d[:, a] > TELEPORT_M)[0]
+            te = min(int(jm[0] + 1) if len(jm) else T, T_gt)
+            everyone.append((sid_a, rl[:te, a].mean(axis=0), m))
+
     rows = {}
     for slot, sid, vid, _rg in focals:
         m = focal_metrics(slot, xs, ys, hs, rews, gx, gy, gvalid, T_gt)
@@ -159,7 +180,7 @@ def rollout(env, policy, device, shifts_by_slot=None):
         m["_role"] = rl[:t_end, slot].mean(axis=0)
         m["_slot"] = slot
         rows[(sid, vid)] = m
-    return rows, focals
+    return (rows, focals, everyone) if all_agents else (rows, focals)
 
 
 def policy_role_sensitivity(policy):
@@ -225,12 +246,13 @@ def main():
                   "direction is swept, not whether\n     the role is used.")
 
     # ---- warmup: natural roles -> mu, sigma, PC1/PC2 ----------------------
-    vecs = []
+    vecs, pop = [], []
     for ep in range(args.warmup_episodes):
         if ep > 0:
             env.resample_maps()
-        rows, _ = rollout(env, policy, device, None)
+        rows, _, everyone = rollout(env, policy, device, None, all_agents=True)
         vecs.extend(r["_role"] for r in rows.values())
+        pop.extend(everyone)
         print(f"[causal] warmup {ep+1}/{args.warmup_episodes}: "
               f"{len(vecs)} focals", flush=True)
     R = np.asarray(vecs, dtype=np.float64)
@@ -242,6 +264,46 @@ def main():
     pc1, pc2 = vt[0], vt[1]
     print(f"[causal] role sigma={sigma:.4f}  PC1 var={100*evr[0]:.0f}%  "
           f"PC2 var={100*evr[1]:.0f}%")
+
+    # ---- observational gradient, SCENE-CENTRED --------------------------
+    # o_j = how the role covaries with metric j among agents in the SAME scene.
+    # Comparing it with the causal gradient g_j gives the coherence measure:
+    # does the role MEAN what it DOES? Scene-centring removes the between-scene
+    # confound, so a disagreement here is not the map.
+    o_hat = {}
+    if len(pop) > 50:
+        p_sid = np.array([q[0] for q in pop])
+        p_rol = np.asarray([q[1] for q in pop], dtype=np.float64)
+        p_beh = np.asarray([[q[2].get(m, np.nan) for m in METRICS]
+                            for q in pop], dtype=np.float64)
+        uniq, inv = np.unique(p_sid, return_inverse=True)
+        counts = np.bincount(inv, minlength=len(uniq))
+        keep = counts[inv] >= 2                 # a lone agent carries no
+        p_rol, p_beh, inv = p_rol[keep], p_beh[keep], inv[keep]
+        # subtract each scene's own mean from role and behaviour
+        def _center(M):
+            sums = np.zeros((len(uniq), M.shape[1]))
+            np.add.at(sums, inv, np.nan_to_num(M))
+            cnt = np.bincount(inv, minlength=len(uniq)).astype(float)[:, None]
+            return M - (sums / np.maximum(cnt, 1))[inv]
+        Rc = _center(p_rol)
+        for j, met in enumerate(METRICS):
+            y = p_beh[:, j]
+            ok = np.isfinite(y)
+            if ok.sum() < 50:
+                continue
+            yc = _center(y[:, None].copy())[:, 0]
+            if not np.isfinite(yc[ok]).all() or yc[ok].std() < 1e-12:
+                continue
+            ov, *_ = np.linalg.lstsq(Rc[ok], yc[ok], rcond=None)
+            n = np.linalg.norm(ov)
+            if n > 1e-12:
+                o_hat[met] = ov / n
+        print(f"[causal] observational gradient from {len(p_rol)} agents in "
+              f"multi-agent scenes ({len(o_hat)} metrics)")
+    else:
+        print("[causal] too few agents for a within-scene observational "
+              "gradient -- coherence will be blank")
 
     # ---- paired randomised intervention -----------------------------------
     d_rows, y_rows, obs_role, obs_beh = [], [], [], []
@@ -307,6 +369,9 @@ def main():
             "cos_pc1": c1, "cos_pc2": c2,
             "gain_vs_pc1": abs(gn) / (abs(float(g @ pc1)) + 1e-12),
             "obs_r_pc1": r_obs, "n": int(ok.sum()),
+            # cos(causal, observational-within-scene): +1 the role means what
+            # it does; -1 it means the exact opposite of what it does.
+            "coherence": (float(u_g @ o_hat[met]) if met in o_hat else np.nan),
             **{f"g{i}": float(u_g[i]) for i in range(role_dim)},
         })
     rdf = pd.DataFrame(res)
@@ -319,12 +384,12 @@ def main():
     print("  CAUSAL AXIS vs SWEPT AXIS   (per 1 sigma of role movement)")
     print("=" * 92)
     print(f"  {'metric':22}{'causal':>9}{'via PC1':>9}{'cos_pc1':>9}"
-          f"{'cos_pc2':>9}{'gain':>7}{'r2':>7}{'obs r':>8}")
+          f"{'cos_pc2':>9}{'gain':>7}{'r2':>7}{'obs r':>8}{'cohere':>8}")
     for _, r in sub.iterrows():
         print(f"  {r['metric']:22}{r['effect_causal_per_sigma']:9.3f}"
               f"{r['effect_pc1_per_sigma']:9.3f}{r['cos_pc1']:9.2f}"
               f"{r['cos_pc2']:9.2f}{r['gain_vs_pc1']:7.1f}x{r['r2']:7.2f}"
-              f"{r['obs_r_pc1']:8.2f}")
+              f"{r['obs_r_pc1']:8.2f}{r['coherence']:8.2f}")
     print("\n  cos_pc1 is the fraction of the achievable effect that sweeping "
           "PC1 delivers.\n  NEGATIVE cos_pc1 = sweeping PC1 moves that metric "
           "the WRONG WAY.\n  Low r2 = the role acts non-linearly; no single "
