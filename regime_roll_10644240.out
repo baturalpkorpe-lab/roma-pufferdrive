@@ -38,3 +38,7 @@
     desired speed (rel)    n=10595  med=0.777
     time headway (s)       n=519    med=2.210
   wrote /scratch/e452103/regimes_rollout/pc40_cb1_lr_half_6500646912/conflicts_PC1-1.csv + regimes_PC1-1.csv
+[roll] natural ep 1/6: 2199 trajectories, 122 conflicts
+[roll] natural ep 2/6: 4416 trajectories, 241 conflicts
+[roll] natural ep 3/6: 6684 trajectories, 355 conflicts
+[roll] natural ep 4/6: 8978 trajectories, 491 conflicts
