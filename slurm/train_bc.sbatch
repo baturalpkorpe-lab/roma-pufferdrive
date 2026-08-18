@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=roma_bc
-#SBATCH --partition=gpu-a100
+#SBATCH --partition=gpu-a100-mini
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=4G
 #SBATCH --gpus-per-task=1
-#SBATCH --time=01:00:00
+#SBATCH --time=00:30:00
 #SBATCH --account=research-ceg-tp
 #SBATCH --output=/scratch/e452103/logs/roma_bc_%j.out
 #SBATCH --error=/scratch/e452103/logs/roma_bc_%j.err
@@ -19,15 +19,24 @@
 # epochs. On a login-node CPU that is tens of minutes and against DelftBlue
 # policy; on an A100 it is a few minutes.
 #
-# MEMORY, not compute, is the thing to watch: train_bc.py loads the whole npz
-# into host RAM as float32. 289k x 1121 x 4 B ~ 1.3 GB, plus the decompressed
-# copy numpy makes while reading. 16 x 4G = 64 G leaves plenty of head room.
-# Note gpu-a100 caps mem-per-cpu at 8000 MB, so --mem-per-cpu=8G is rejected
-# outright; 16 x 4G is the combination train_cluster.sbatch already uses.
-# Raise --episodes in verify_bc_data.py far enough and host RAM is what breaks
-# first, not the GPU.
+# SIZED SMALL ON PURPOSE, hence gpu-a100-mini. Host RAM peaks near 3 GB:
+# the npz obs array is 289k x 1121 x 4 B ~ 1.3 GB, torch.from_numpy SHARES
+# that buffer rather than copying it, the train/val split is a view, and each
+# minibatch is an 18 MB gather. The model is ~100k params, so GPU memory is
+# nowhere near a MIG slice's limit either. 4 x 4G = 16 G is already 5x head
+# room. Raise --episodes in verify_bc_data.py far enough and host RAM is what
+# breaks first, not the GPU.
 #
-# One hour is generous: --patience 5 usually stops it well before 20 epochs.
+# PARTITION CAPS differ and are not guessable -- gpu-a100 rejects
+# --mem-per-cpu=8G because it caps at 8000 MB, compute-p1 caps at 3968 MB.
+# Check before changing:
+#   scontrol show partition gpu-a100-mini | grep -iE "maxmem|maxtime|maxnodes"
+# sbatch CLI flags override the directives above, so you can retarget without
+# editing this file:
+#   sbatch --partition=gpu-a100 --time=01:00:00 --export=ALL,DATA=... #          slurm/train_bc.sbatch
+#
+# Half an hour is generous: --patience 5 usually stops it well before 20
+# epochs, and on a MIG slice the epochs are still seconds, not minutes.
 
 set -u
 
