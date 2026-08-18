@@ -133,6 +133,39 @@ else
     echo "[anchor] seeding from $SEED_CKPT (step $SEED_STEP)"
 fi
 
+# ---- Derive the role geometry FROM THE CHECKPOINT --------------------------
+# The H8_r16p64 arms were trained with role_road_dim=16, role_partner_dim=64.
+# Omitting them silently rebuilds the role encoder at the defaults (128-dim
+# input instead of 112) and collapses role_partner_proj/role_road_proj to
+# identity -- nn.Linear(...) if dim != out else None -- so they carry no
+# parameters and the checkpoint's copies read as "unexpected keys". That is
+# exactly how 10667202 died. Read the shapes rather than trust a directory
+# name.
+GEOM=$(python - "$SEED_CKPT" <<'PYGEOM'
+import sys, torch
+sd = torch.load(sys.argv[1], map_location="cpu", weights_only=False)["policy_state"]
+pp, rp = sd.get("role_partner_proj.weight"), sd.get("role_road_proj.weight")
+fc = sd.get("role_encoder.fc_obs.0.weight")
+p = pp.shape[0] if pp is not None else 32          # None => identity, i.e. p_out
+r = rp.shape[0] if rp is not None else (fc.shape[1] - 32 - p if fc is not None else 64)
+print(p, r)
+PYGEOM
+) || { echo "ERROR: could not read role geometry from $SEED_CKPT"; exit 1; }
+ROLE_PARTNER_DIM=${ROLE_PARTNER_DIM:-$(echo "$GEOM" | cut -d' ' -f1)}
+ROLE_ROAD_DIM=${ROLE_ROAD_DIM:-$(echo "$GEOM" | cut -d' ' -f2)}
+
+# Pass them only if this clone's train_roma.py understands them: baseline has
+# no such flags, the agent-centric branches do.
+GEOM_ARGS=""
+if python "$CODE_DIR/roma_pufferdrive/train_roma.py" --help 2>/dev/null | grep -q -- --role_partner_dim; then
+    GEOM_ARGS="--role_partner_dim $ROLE_PARTNER_DIM --role_road_dim $ROLE_ROAD_DIM"
+    echo "[anchor] role geometry: partner=$ROLE_PARTNER_DIM road=$ROLE_ROAD_DIM (read from checkpoint)"
+else
+    echo "[anchor] this train_roma.py has no --role_partner_dim, so baseline geometry is assumed."
+    echo "[anchor] The checkpoint wants partner=$ROLE_PARTNER_DIM road=$ROLE_ROAD_DIM; if that is"
+    echo "[anchor] not 32/64 it will NOT load here. Submit from the mi-future-agentcentric clone."
+fi
+
 ANNEAL_ARG=""; [ "$REG_ANNEAL" = "1" ] && ANNEAL_ARG="--reg_anneal"
 BCINIT_ARG="";  [ "$BC_INIT"    = "1" ] && BCINIT_ARG="--bc_init"
 
@@ -150,7 +183,7 @@ python "$CODE_DIR/roma_pufferdrive/train_roma.py" \
     --resume        "$RESUME" \
     --bc_anchor     "$TAU" \
     --reg_weight    "$REG_WEIGHT" \
-    $ANNEAL_ARG $BCINIT_ARG \
+    $ANNEAL_ARG $BCINIT_ARG $GEOM_ARGS \
     --role_dim      "$ROLE_DIM" \
     --div_weight    "$DIV_WEIGHT" \
     --mi_weight     "$MI_WEIGHT" \
