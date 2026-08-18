@@ -75,7 +75,15 @@ def parse_args():
     p.add_argument("--total_agents", type=int, default=512)
     p.add_argument("--episodes", type=int, default=4)
     p.add_argument("--control_mode", default="control_sdc_only")
-    p.add_argument("--ade_tol", type=float, default=1.0)
+    p.add_argument("--ade_tol", type=float, default=1.0,
+                   help="reporting only -- pairs are filtered by --keep_tol")
+    p.add_argument("--keep_tol", type=float, default=0.5,
+                   help="metres. A pair is kept while the agent is still this "
+                        "close to the logged position. Beyond it the inferred "
+                        "action is a correction manoeuvre, not the human's")
+    p.add_argument("--lookahead", type=int, default=3,
+                   help="steps ahead to aim at. 1 is deadbeat and oscillates "
+                        "on a coarse actuator; 3 damps it (pure pursuit)")
     p.add_argument("--vehicle_length", type=float, default=4.5,
                    help="wheelbase L in the yaw-rate inversion. The env uses "
                         "per-agent length; this is the one approximation left, "
@@ -239,7 +247,7 @@ def main():
 
     keep_obs, keep_act, keep_ade = [], [], []
     diag = {"res_v": [], "res_h": [], "sat": [], "h_off": [],
-            "turn": [], "ade": [], "steer_ol": [], "v_err": [], "model_h": []}
+            "turn": [], "ade": [], "steer_ol": [], "v_err": [], "model_h": [], "yield": []}
     for ep in range(a.episodes):
         if ep > 0:
             env.resample_maps()
@@ -281,6 +289,7 @@ def main():
         ys = np.zeros((T, B))
         ep_obs = np.zeros((T, B, obs_np.shape[-1]), np.float32)
         ep_act = np.zeros((T, B), np.int64)
+        ep_keep = np.zeros((T, B), bool)
         # v_now is INTEGRATED, not estimated from positions. drive.h:1595 does
         # v <- v + a*dt on the instantaneous speed; hypot(dx,dy)/dt is the
         # AVERAGE speed over the interval, and mixing the two puts a half-step
@@ -319,9 +328,9 @@ def main():
             # drift cannot accumulate. Note the course is heading + slip: the
             # car travels along h + beta, not h (drive.h:1598).
             nt = min(t + 1, T - 1)
-            dx, dy = gx[:, nt] - x_t, gy[:, nt] - y_t
-            v_tgt = np.hypot(dx, dy) / dt
-            theta = np.arctan2(dy, dx)
+            la = min(t + max(1, a.lookahead), T - 1)
+            v_tgt = np.hypot(gx[:, nt] - x_t, gy[:, nt] - y_t) / dt
+            theta = np.arctan2(gy[:, la] - y_t, gx[:, la] - x_t)
 
             # accel bin: whose resulting speed covers that distance
             ai = np.argmin(np.abs(v_now[:, None] + ACC[None, :] * dt
@@ -354,6 +363,12 @@ def main():
                 diag["h_off"].append(wrap(h_t - gh[:, 0])[gv[:, 0]])
             diag["sat"].append(np.isin(si[live], [0, N_STEER - 1]))
 
+            # per-STEP keep mask: this pair is usable while the agent is
+            # still on the logged position. Filtering agents threw away every
+            # step of an agent that drifted at step 60; filtering steps keeps
+            # the first 60.
+            ep_keep[t] = (np.hypot(x_t - gx[:, t], y_t - gy[:, t])
+                          < a.keep_tol) & gv[:, t]
             ep_obs[t] = obs_np
             ep_act[t] = act
             obs_np, _, _, _, _ = env.step(act.reshape(B, 1))
@@ -375,15 +390,15 @@ def main():
               % (ep + 1, int(keep.sum()), int(pool.sum()), a.ade_tol,
                  float(np.median(ade[pool])) if pool.any() else np.nan,
                  float(np.median(ade[keep])) if keep.any() else np.nan))
-        if keep.any():
-            km = m[keep][:, :T].T                  # (T, n_keep) validity mask
-            keep_obs.append(ep_obs[:, keep][km])
-            keep_act.append(ep_act[:, keep][km])
-            keep_ade.append(ade[keep])
+        if ep_keep.any():
+            keep_obs.append(ep_obs[ep_keep])
+            keep_act.append(ep_act[ep_keep])
+            keep_ade.append(ade[pool])
+            diag["yield"].append(ep_keep[:, pool].sum(0))   # steps per agent
 
-    n_agents = int(sum(len(x) for x in keep_ade))
+    n_agents = int(sum(int((y > 0).sum()) for y in diag["yield"]))
     n_pairs = int(sum(len(x) for x in keep_act))
-    track_ok = n_pairs > 0
+    have_pairs = n_pairs > 0
 
     # ---- DIAGNOSE ---------------------------------------------------------
     print("\n" + "=" * 72)
@@ -396,7 +411,6 @@ def main():
     h_off = np.concatenate(diag["h_off"])
     turn = np.concatenate(diag["turn"])
     ade_all = np.concatenate(diag["ade"])
-    track_frac = float((ade_all < a.ade_tol).mean())
 
     print("  OPEN LOOP (from GT states -- no drift possible)")
     print("    speed residual   median %.4f m/s   p90 %.4f"
@@ -426,18 +440,34 @@ def main():
     print("      Compare against the OPEN LOOP heading residual above. If open")
     print("      loop is small and this is large, the grid can express human")
     print("      driving but drive.h:1595-1601 is not what the env executes.")
-    print("  SELECTION -- does tracking depend on how much the human turned?")
-    q = np.quantile(turn, [0.25, 0.5, 0.75]) if len(turn) else [0, 0, 0]
+    print("  YIELD -- how many usable steps per agent, and from whom?")
+    yld = np.concatenate(diag["yield"]) if diag["yield"] else np.zeros(len(turn))
+    n = min(len(yld), len(turn))
+    yld, turn2 = yld[:n], turn[:n]
+    print("    steps kept per agent  median %d  p25 %d  p75 %d  (of %d)"
+          % (np.median(yld), np.percentile(yld, 25),
+             np.percentile(yld, 75), EPISODE_LEN))
+    print("    agents contributing 0 steps: %.1f%%" % (100 * (yld == 0).mean()))
+    q = np.quantile(turn2, [0.25, 0.5, 0.75]) if len(turn2) else [0, 0, 0]
     lab = ["straightest 25%", "q2", "q3", "most turning 25%"]
-    b = np.digitize(turn, q)
+    b = np.digitize(turn2, q)
+    tot = max(yld.sum(), 1)
+    turn_share = 0.0
     for i in range(4):
-        s = b == i
-        if s.sum() < 5:
+        sel = b == i
+        if sel.sum() < 5:
             continue
-        print("    %-18s n=%4d  tracked %5.1f%%  median ADE %6.2f m  "
-              "total |dheading| %.2f rad"
-              % (lab[i], int(s.sum()), 100 * (ade_all[s] < a.ade_tol).mean(),
-                 float(np.median(ade_all[s])), float(np.median(turn[s]))))
+        share = 100 * yld[sel].sum() / tot
+        if i == 3:
+            turn_share = share
+        print("    %-18s n=%4d  median steps %3d  share of pairs %5.1f%%  "
+              "|dheading| %.2f rad"
+              % (lab[i], int(sel.sum()), int(np.median(yld[sel])), share,
+                 float(np.median(turn2[sel]))))
+    print("\n    Share of pairs is the bias metric now, not tracked-fraction.")
+    print("    Four balanced quartiles would be 25%% each. If the most-turning")
+    print("    quartile is far below that, tau still under-sees turns and the")
+    print("    anchor would be weakest exactly at junctions.")
     print("\n  Read it this way. Small open-loop residuals with a low")
     print("  open-loop saturation rate mean the grid CAN express human")
     print("  driving and the closed-loop failures are runaway after an early")
@@ -452,7 +482,7 @@ def main():
     print("  GRID -- is the 91-way action space actually used?")
     print("=" * 72)
     grid_ok = False
-    if track_ok:
+    if have_pairs:
         acts = np.concatenate(keep_act)
         hist = np.bincount(acts, minlength=N_ACTIONS).astype(float)
         p = hist / hist.sum()
@@ -473,35 +503,41 @@ def main():
         print("  steer marginal       : " + " ".join("%.2f" % v for v in sm))
         grid_ok = perp >= 5.0
     else:
-        print("  skipped -- nothing tracked")
+        print("  skipped -- no pairs survived the keep filter")
 
-    if track_ok:
+    if have_pairs:
         np.savez_compressed(
-            out / ("bc_dataset.npz" if track_frac >= 0.6
+            out / ("bc_dataset.npz" if (n_pairs >= 18000 and turn_share >= 15)
                    else "bc_dataset_BIASED.npz"),
             obs=np.concatenate(keep_obs).astype(np.float32),
             act=np.concatenate(keep_act).astype(np.int16),
             ade=np.concatenate(keep_ade).astype(np.float32),
             accel_values=ACC, steer_values=STEER, n_steer=N_STEER)
-        print("\n[save] %d pairs from %d agents (%.0f%% of vehicles) -> %s"
-              % (n_pairs, n_agents, 100 * track_frac,
-                 out / ("bc_dataset.npz" if track_frac >= 0.6
+        print("\n[save] %d pairs from %d agents, %.1f%% from the "
+              "most-turning quartile -> %s"
+              % (n_pairs, n_agents, turn_share,
+                 out / ("bc_dataset.npz" if (n_pairs >= 18000
+                                             and turn_share >= 15)
                         else "bc_dataset_BIASED.npz")))
 
     print("\n" + "=" * 72)
     print("  VERDICT")
     print("=" * 72)
-    track_ok = track_ok and track_frac >= 0.6
+    track_ok = n_pairs >= 18000 and turn_share >= 15.0
     print("  LAYOUT  see the block above -- it decides how tau reads obs")
-    print("  TRACK   %s -- %.0f%% of vehicles tracked, %d agents, %d pairs"
-          % ("PASS" if track_ok else "FAIL", 100 * track_frac,
-             n_agents, n_pairs))
+    print("  YIELD   %s -- %d pairs, most-turning quartile contributes %.1f%%"
+          % ("PASS" if track_ok else "FAIL", n_pairs, turn_share))
+    print("          (bar: 18k pairs, HR-PPO's ~30 min; and >=15%% from the")
+    print("           turning quartile against a balanced 25%%)")
     if n_pairs and not track_ok:
-        print("          Pairs were written, but from a MINORITY of vehicles.")
-        print("          Do not train tau on them until DIAGNOSE says the")
-        print("          survivors are not a straight-line subset: an anchor")
-        print("          that never saw a turn pulls the policy AWAY from")
-        print("          correct junction behaviour, which is worse than none.")
+        if n_pairs < 18000:
+            print("          Too few pairs. Raise --episodes or --map_pool, or")
+            print("          loosen --keep_tol (0.5 m is strict).")
+        if turn_share < 15.0:
+            print("          Turning agents are under-represented. tau would")
+            print("          under-see turns and the anchor would be weakest")
+            print("          exactly at junctions. Raising --lookahead damps")
+            print("          the controller and usually helps turns most.")
     if not n_pairs:
         print("          Nothing reproduced its logged path. In order of")
         print("          likelihood: agent ordering differs between")
@@ -510,7 +546,7 @@ def main():
         print("          to bias steering (try 3.5 and 5.5, see if ADE moves);")
         print("          this build's dynamics_model is not 'classic'.")
     print("  GRID    %s" % ("PASS" if grid_ok else
-                            ("FAIL" if track_ok else "N/A")))
+                            ("FAIL" if have_pairs else "N/A")))
     if track_ok and not grid_ok:
         print("          Too few effective bins. tau would be near-")
         print("          deterministic and the KL anchor would carry no style")
