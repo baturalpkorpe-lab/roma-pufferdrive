@@ -27,11 +27,14 @@ are trying to fix.
 WHAT THIS DOES INSTEAD
 Grid-constrained closed-loop inversion against the env's own dynamics. At each
 step, from the agent's ACTUAL state, pick the accel bin whose resulting speed
-best matches the human's next speed, then the steer bin whose resulting heading
-best matches the human's next heading, and emit the joint index
+best matches the distance to the human's next POSITION, then the steer bin whose
+resulting course points at that position, and emit the joint index
     a = accel_idx * 13 + steer_idx        (drive.h:1572, 1576, 3124)
-Closed-loop, so inference error is corrected every step instead of accumulating,
-and the label is by construction an action the policy can actually emit.
+Position, not heading, is the target on purpose. Matching heading exactly still
+lets position drift, because position is its integral and nothing pulls it back:
+per-step residuals of 0.02 deg integrate over 80 steps into metres. Aiming at the
+logged point closes the loop on the quantity ADE actually measures. The label is
+by construction an action the policy can emit.
 
 THREE CHECKS, EACH FAILING INDEPENDENTLY
   LAYOUT  the observation split this env emits vs the one policy.py assumes,
@@ -307,17 +310,28 @@ def main():
                 diag["model_h"].append(np.abs(wrap(h_t - hpred_prev))[gv[:, t]])
             px, py = x_t, y_t
 
+            # Target the human's next POSITION, not their next heading.
+            # Heading error is corrected every step, but position is the
+            # integral of heading and nothing pulled it back -- dead
+            # reckoning. Per-step residuals of 0.02 deg integrate over 80
+            # steps into metres of lateral drift, which is what the 2.1 m ADE
+            # was. Aiming at the logged point closes the loop on position, so
+            # drift cannot accumulate. Note the course is heading + slip: the
+            # car travels along h + beta, not h (drive.h:1598).
             nt = min(t + 1, T - 1)
-            v_tgt, h_tgt = gspd[:, t], gh[:, nt]
+            dx, dy = gx[:, nt] - x_t, gy[:, nt] - y_t
+            v_tgt = np.hypot(dx, dy) / dt
+            theta = np.arctan2(dy, dx)
 
-            # accel bin: whose resulting speed lands nearest the human's next
+            # accel bin: whose resulting speed covers that distance
             ai = np.argmin(np.abs(v_now[:, None] + ACC[None, :] * dt
                                   - v_tgt[:, None]), axis=1)
             v_new = v_now + ACC[ai] * dt
-            # steer bin: whose resulting heading lands nearest the human's next
-            h_pred = h_t[:, None] + (v_new[:, None] * YAWF[None, :]
-                                     / a.vehicle_length) * dt
-            err = np.abs(wrap(h_pred - h_tgt[:, None]))
+            # steer bin: whose resulting course points at the logged point
+            course = (h_t[:, None] + (v_new[:, None] * YAWF[None, :]
+                                      / a.vehicle_length) * dt
+                      + BETA[None, :])
+            err = np.abs(wrap(course - theta[:, None]))
             # At low speed yaw = v*YAWF/L collapses: every steer bin gives the
             # same heading and argmin breaks the tie on float noise, landing on
             # an extreme. That is not a steering decision, it is a parked car.
