@@ -2,7 +2,7 @@
 #SBATCH --job-name=roma_bc
 #SBATCH --partition=gpu-a100-small
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=2
 #SBATCH --mem-per-cpu=4G
 #SBATCH --gpus-per-task=1
 #SBATCH --time=00:30:00
@@ -24,12 +24,15 @@
 # the npz obs array is 289k x 1121 x 4 B ~ 1.3 GB, torch.from_numpy SHARES
 # that buffer rather than copying it, the train/val split is a view, and each
 # minibatch is an 18 MB gather. The model is ~100k params, so GPU memory is
-# nowhere near a MIG slice's limit either. 4 x 4G = 16 G is already 5x head
+# nowhere near a MIG slice's limit either. 2 x 4G = 8 G is still 2.7x head
 # room. Raise --episodes in verify_bc_data.py far enough and host RAM is what
-# breaks first, not the GPU.
+# breaks first, not the GPU; if this ever OOMs, raise --mem-per-cpu, not CPUs.
 #
-# PARTITION CAPS differ and are not guessable -- gpu-a100 rejects
-# --mem-per-cpu=8G because it caps at 8000 MB, compute-p1 caps at 3968 MB.
+# PARTITION CAPS differ, are not guessable, and each one only tells you about
+# itself. Measured on DelftBlue, the hard way:
+#   gpu-a100-small   max 2 CPUs-per-task, 4h, ONE node (gpu020)
+#   gpu-a100         mem-per-cpu caps at 8000 MB (so 8G is rejected), 2d, 9 nodes
+#   compute-p1       mem-per-cpu caps at 3968 MB
 # Check before changing:
 #   scontrol show partition gpu-a100-small | grep -iE "maxmem|maxtime|maxnodes"
 # sbatch CLI flags override the directives above, so you can retarget without
