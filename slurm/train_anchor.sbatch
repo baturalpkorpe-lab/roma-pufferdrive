@@ -53,6 +53,7 @@ set -u
 
 SCRATCH_ROOT=${SCRATCH_ROOT:-/scratch/$USER}
 SRC=${SRC:-}
+SEED_CKPT=${SEED_CKPT:-}     # name a checkpoint outright; overrides SRC
 TAU=${TAU:-$SCRATCH_ROOT/checkpoints/tau/tau.pt}
 ROLE_DIM=${ROLE_DIM:-1}
 REG_WEIGHT=${REG_WEIGHT:-0.05}
@@ -67,7 +68,8 @@ MI_WEIGHT=${MI_WEIGHT:-1.0}
 WANDB_PROJECT=${WANDB_PROJECT:-roma-pufferdrive}
 WANDB_ENTITY=${WANDB_ENTITY:-s-rahmani-tu-delft}
 
-[ -n "$SRC" ] || { echo "ERROR: set SRC=<checkpoint dir to fine-tune from>"; exit 1; }
+[ -n "$SRC$SEED_CKPT" ] || {
+    echo "ERROR: set SEED_CKPT=<checkpoint.pt> (preferred) or SRC=<dir>"; exit 1; }
 [ -f "$TAU" ] || { echo "ERROR: no tau at $TAU -- run slurm/train_bc.sbatch first"; exit 1; }
 
 module load miniconda3
@@ -89,15 +91,28 @@ TAG=anchor$(echo "$REG_WEIGHT" | tr -d '.')
 SAVE_DIR=${SAVE_DIR:-$SCRATCH_ROOT/checkpoints/roma_dim${ROLE_DIM}_${TAG}}
 WANDB_NAME=${WANDB_NAME:-roma_dim${ROLE_DIM}_${TAG}}
 
-# ---- Seed from the highest STEP checkpoint, never final.pt -----------------
-# Only step checkpoints carry aux_loss_state (the MI/div critics). Seeding from
-# final.pt would hand the run a randomly initialised MI decoder.
-SEED_CKPT=$(ls "$SRC"/roma_dim${ROLE_DIM}_step*.pt 2>/dev/null \
-            | sed 's/.*_step\([0-9]*\)\.pt/\1 &/' | sort -k1,1n | tail -1 | cut -d' ' -f2-)
-[ -n "$SEED_CKPT" ] || {
-    echo "ERROR: no roma_dim${ROLE_DIM}_step*.pt in $SRC"
-    echo "       final.pt has no aux_loss_state and must not be used as a seed."
-    exit 1; }
+# ---- Pick the seed ---------------------------------------------------------
+# SEED_CKPT names one outright and is PREFERRED. The SRC-directory fallback
+# picks the HIGHEST STEP, which is not the same as the BEST checkpoint and has
+# already bitten once: pointed at collstop it silently chose 5.0B, past that
+# arm's peak, when the dial and PET were measured at 4.0B.
+# Either way: never final.pt. Only step checkpoints carry aux_loss_state (the
+# MI/div critics); final.pt would hand the run a random MI decoder.
+if [ -n "$SEED_CKPT" ]; then
+    [ -f "$SEED_CKPT" ] || { echo "ERROR: no such checkpoint: $SEED_CKPT"; exit 1; }
+    case "$SEED_CKPT" in
+        *final.pt) echo "ERROR: final.pt has no aux_loss_state -- use a step checkpoint"; exit 1 ;;
+    esac
+else
+    SEED_CKPT=$(ls "$SRC"/roma_dim${ROLE_DIM}_step*.pt 2>/dev/null \
+                | sed 's/.*_step\([0-9]*\)\.pt/\1 &/' | sort -k1,1n | tail -1 | cut -d' ' -f2-)
+    [ -n "$SEED_CKPT" ] || {
+        echo "ERROR: no roma_dim${ROLE_DIM}_step*.pt in $SRC"
+        echo "       final.pt has no aux_loss_state and must not be used as a seed."
+        exit 1; }
+    echo "[anchor] WARNING: picked the HIGHEST step in $SRC, which is not"
+    echo "[anchor] necessarily the best. Pass SEED_CKPT=<file.pt> to be explicit."
+fi
 SEED_STEP=$(echo "$SEED_CKPT" | sed 's/.*_step\([0-9]*\)\.pt/\1/')
 TOTAL_STEPS=$((SEED_STEP + FT_STEPS))
 SAVE_INTERVAL=$((FT_STEPS / 2))   # a mid-point checkpoint, to judge early
