@@ -167,6 +167,22 @@ python "$CODE_DIR/roma_pufferdrive/train_roma.py" \
     --wandb_project "$WANDB_PROJECT" \
     --wandb_entity  "$WANDB_ENTITY" \
     --wandb_name    "$WANDB_NAME"
+RC=$?
+
+# Without this the script sails past a dead python into its trailer and the
+# job still reports RUNNING/COMPLETED. That is how an architecture mismatch
+# looked healthy for nine minutes: state_dict load raised, python exited, and
+# sacct showed RUNNING.
+if [ "$RC" -ne 0 ]; then
+    echo "[anchor] TRAINING FAILED (exit $RC) -- see the .err file."
+    echo "[anchor] If it is a state_dict mismatch, CODE_DIR's policy.py does"
+    echo "[anchor] not match the seed checkpoint's architecture. baseline has"
+    echo "[anchor] neither role_partner_proj nor role_road_proj;"
+    echo "[anchor] mi-future-agentcentric has both; ...-film adds film on top."
+    echo "[anchor] Submit from the clone whose policy.py matches, and retrain"
+    echo "[anchor] tau there too -- tau's key set is clone-specific."
+    exit "$RC"
+fi
 
 cat <<MSG
 
