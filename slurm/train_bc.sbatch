@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem-per-cpu=4G
 #SBATCH --gpus-per-task=1
-#SBATCH --time=00:30:00
+#SBATCH --time=02:00:00
 #SBATCH --account=research-ceg-tp
 #SBATCH --output=/scratch/e452103/logs/roma_bc_%j.out
 #SBATCH --error=/scratch/e452103/logs/roma_bc_%j.err
@@ -46,7 +46,7 @@ set -u
 
 DATA=${DATA:-/scratch/$USER/bc_probe_tight/bc_dataset.npz}
 OUT=${OUT:-/scratch/$USER/checkpoints/tau/tau.pt}
-EPOCHS=${EPOCHS:-20}
+EPOCHS=${EPOCHS:-200}
 BATCH=${BATCH:-4096}
 LR=${LR:-3e-4}
 

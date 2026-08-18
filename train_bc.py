@@ -55,7 +55,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--data", required=True, help="bc_dataset.npz")
     p.add_argument("--out", required=True, help="checkpoint path for tau")
-    p.add_argument("--epochs", type=int, default=20)
+    p.add_argument("--epochs", type=int, default=200)
     p.add_argument("--batch_size", type=int, default=4096)
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--val_frac", type=float, default=0.1)
@@ -65,7 +65,7 @@ def parse_args():
     p.add_argument("--allow_cpu", action="store_true",
                    help="run on CPU anyway. Off by default so a missing GPU "
                         "fails loudly instead of silently taking 40x longer")
-    p.add_argument("--patience", type=int, default=5,
+    p.add_argument("--patience", type=int, default=15,
                    help="stop after this many epochs with no val improvement")
     return p.parse_args()
 
@@ -124,10 +124,22 @@ def main():
     print("[bc] train %d  val %d (contiguous tail, not a random split)"
           % (len(tr_a), len(va_a)))
 
-    # class balance of the target, for context on the accuracy number
-    top = torch.bincount(act, minlength=n_actions).float()
-    print("[bc] majority-class baseline: %.3f (action %d)"
-          % ((top.max() / n).item(), int(top.argmax())))
+    # The marginal action distribution is the baseline that matters, because
+    # the anchor consumes tau's DISTRIBUTION, not its argmax: KL(tau||pi) pulls
+    # pi toward the probability mass tau assigns. A tau that rarely wins the
+    # argmax but puts the mass in the right place is a good anchor; a
+    # confidently wrong one with high accuracy is a bad one. So score against
+    # the entropy of the marginal -- that is what a tau which learned nothing
+    # state-conditional would achieve.
+    cnt = torch.bincount(act, minlength=n_actions).float()
+    pm = cnt / cnt.sum()
+    nzm = pm[pm > 0]
+    h0 = float(-(nzm * nzm.log()).sum())
+    print("[bc] majority class   : %.3f (action %d)"
+          % ((cnt.max() / n).item(), int(cnt.argmax())))
+    print("[bc] marginal entropy : %.4f nats = %.1f effective bins"
+          % (h0, float(np.exp(h0))))
+    print("[bc] a tau that learns nothing conditional scores val_loss %.4f" % h0)
 
     tau = RomaPolicy(obs_dim=obs_dim, action_dim=n_actions, role_dim=0,
                      policy_hidden=a.policy_hidden).to(device)
@@ -152,15 +164,17 @@ def main():
             opt.step()
             tot += loss.item() * len(mb)
         vl, acc, acc5, acc_a, acc_s = evaluate(tau, va_o, va_a, device)
-        print("[bc] epoch %2d  train_loss %.4f  val_loss %.4f  "
-              "acc %.4f  top5 %.4f  accel %.4f  steer %.4f"
-              % (ep, tot / len(tr_a), vl, acc, acc5, acc_a, acc_s))
+        print("[bc] epoch %3d  train %.4f  val %.4f | gain %+.4f nats  "
+              "eff.bins %5.1f | acc %.4f  top5 %.4f  accel %.4f  steer %.4f"
+              % (ep, tot / len(tr_a), vl, h0 - vl, float(np.exp(vl)),
+                 acc, acc5, acc_a, acc_s))
         if vl < best - 1e-4:
             best, bad = vl, 0
             torch.save({"state_dict": tau.state_dict(), "obs_dim": obs_dim,
                         "action_dim": n_actions, "role_dim": 0,
                         "policy_hidden": a.policy_hidden,
                         "val_loss": vl, "val_acc": acc, "epoch": ep,
+                        "marginal_entropy": h0, "gain_nats": h0 - vl,
                         "data": str(a.data)}, a.out)
         else:
             bad += 1
@@ -169,14 +183,32 @@ def main():
                 break
 
     ck = torch.load(a.out, map_location="cpu")
-    print("\n[bc] best epoch %d  val_loss %.4f  val_acc %.4f -> %s"
-          % (ck["epoch"], ck["val_loss"], ck["val_acc"], a.out))
-    if ck["val_acc"] < 0.90:
-        print("[bc] WARNING: HR-PPO's BC reference reached 0.97-0.99 open-loop.")
-        print("     Below ~0.90 tau is not a usable anchor -- the KL term would")
-        print("     pull the policy toward noise. Check the accel vs steer")
-        print("     split above: if accel is high and steer is low, the")
-        print("     steering labels are the problem, not the observation.")
+    gain = ck["gain_nats"]
+    print("")
+    print("[bc] best epoch %d  val_loss %.4f  gain %+.4f nats  acc %.4f -> %s"
+          % (ck["epoch"], ck["val_loss"], gain, ck["val_acc"], a.out))
+    print("[bc] tau narrowed the action distribution from %.1f effective bins "
+          "to %.1f"
+          % (float(np.exp(ck["marginal_entropy"])), float(np.exp(ck["val_loss"]))))
+    if gain < 0.3:
+        print("[bc] WARNING: under 0.3 nats of conditional information. tau is")
+        print("     barely better than the marginal, so KL(tau||pi) would mostly")
+        print("     pull pi toward a fixed action histogram rather than toward")
+        print("     state-appropriate behaviour. Not worth anchoring to.")
+    elif ck["epoch"] >= a.epochs:
+        print("[bc] NOTE: stopped at the epoch cap rather than by patience, so")
+        print("     val_loss was probably still falling. Raise --epochs.")
+    if ck["val_acc"] < 0.5:
+        print("[bc] Low argmax accuracy is EXPECTED here and is not the gate.")
+        print("     At dt=0.1 the per-step acceleration is mostly noise around a")
+        print("     slow intent, and the accel bins are 1.33 m/s^2 apart, so the")
+        print("     conditional mean genuinely is near zero -- predicting it is")
+        print("     the right answer, not a failure. The anchor consumes tau's")
+        print("     DISTRIBUTION, not its argmax, so read `gain` instead.")
+        print("     To move the argmax, tau has to stop being Markov: the policy")
+        print("     is recurrent for exactly this reason, and a recurrent tau")
+        print("     needs the sequence indices verify_bc_data.py does not yet")
+        print("     save (it flattens t-major, so order is lost).")
 
 
 if __name__ == "__main__":
