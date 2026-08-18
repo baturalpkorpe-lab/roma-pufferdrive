@@ -240,6 +240,14 @@ def parse_args():
     p.add_argument("--bc_init",       action="store_true",
                    help="also seed the encoders from tau (the prior). "
                         "Independent of reg_weight")
+    p.add_argument("--env_override", type=str, nargs="*", default=[],
+                   metavar="KEY=VALUE",
+                   help="override drive.ini [env] keys, e.g. "
+                        "--env_override collision_behavior=1. The reward lives "
+                        "in a drive.ini shared by every clone and gets edited "
+                        "per-experiment, so nothing in a run record says which "
+                        "version it used. Passing it here puts it in argv and "
+                        "in the wandb config instead.")
     p.add_argument("--save_dir",      type=str,   default="roma_pufferdrive/checkpoints/roma")
     p.add_argument("--save_interval", type=int,   default=500_000_000,
                    help="Save checkpoint every N steps. 500M for 2B run, 1M for CPU test.")
@@ -851,6 +859,28 @@ def train(args):
         "num_agents":      args.num_agents,
         "map_dir":         args.data_dir,
     })
+    for kv in args.env_override:
+        if "=" not in kv:
+            raise SystemExit(f"--env_override expects KEY=VALUE, got {kv!r}")
+        k, v = kv.split("=", 1)
+        if k not in env_cfg:
+            raise SystemExit(
+                f"--env_override {k!r} is not a drive.ini [env] key. "
+                f"Known keys include: {sorted(env_cfg)[:12]} ...")
+        try:
+            env_cfg[k] = ast.literal_eval(v)
+        except Exception:
+            env_cfg[k] = v
+        print(f"[ROMA] env override  : {k} = {env_cfg[k]!r}")
+
+    # Record the reward this run actually used. It comes from a drive.ini that
+    # is shared across clones and edited per-experiment, so without this the
+    # only trace of which reward a checkpoint saw is its directory name.
+    rk = [k for k in env_cfg
+          if any(t in k for t in ("collision", "offroad", "goal", "reward", "penalt"))]
+    print("[ROMA] reward config : "
+          + "  ".join(f"{k}={env_cfg[k]!r}" for k in sorted(rk)))
+
     env = Drive(**env_cfg)
 
     # Auto-detect obs_dim
