@@ -236,7 +236,7 @@ def main():
 
     keep_obs, keep_act, keep_ade = [], [], []
     diag = {"res_v": [], "res_h": [], "sat": [], "h_off": [],
-            "turn": [], "ade": [], "steer_ol": []}
+            "turn": [], "ade": [], "steer_ol": [], "v_err": [], "model_h": []}
     for ep in range(a.episodes):
         if ep > 0:
             env.resample_maps()
@@ -278,8 +278,16 @@ def main():
         ys = np.zeros((T, B))
         ep_obs = np.zeros((T, B, obs_np.shape[-1]), np.float32)
         ep_act = np.zeros((T, B), np.int64)
+        # v_now is INTEGRATED, not estimated from positions. drive.h:1595 does
+        # v <- v + a*dt on the instantaneous speed; hypot(dx,dy)/dt is the
+        # AVERAGE speed over the interval, and mixing the two puts a half-step
+        # bias into every accel choice that then compounds. Integrating the
+        # accel we actually applied reproduces the env's own update exactly, so
+        # v_now stays equal to the env's internal speed and targeting GT with
+        # it is still closed-loop. v_pos below is kept only as a cross-check.
         v_now = gspd[:, 0].copy()
-        px = py = None
+        px = py = hpred_prev = None
+        PREF = np.abs(np.arange(N_STEER) - N_STEER // 2)[None, :]
 
         for t in range(T):
             ag = env.get_global_agent_state()
@@ -287,8 +295,16 @@ def main():
             y_t = np.asarray(ag["y"], dtype=float)
             h_t = np.asarray(ag["heading"], dtype=float)
             xs[t], ys[t] = x_t, y_t
-            if px is not None:                    # achieved speed: closed loop
-                v_now = np.hypot(x_t - px, y_t - py) / dt
+            if px is not None:                     # cross-checks only
+                diag["v_err"].append(
+                    np.abs(np.hypot(x_t - px, y_t - py) / dt - v_prev)[gv[:, t]])
+                # THE decisive one: last step we predicted this heading from
+                # drive.h:1595-1601. Did the env actually do that? Open-loop is
+                # exact and the closed loop is exact on a simulator that obeys
+                # those lines, so if this is large the env does something else
+                # -- steering rate limit, speed clamp, sub-stepping -- and no
+                # inverter built on that model can track.
+                diag["model_h"].append(np.abs(wrap(h_t - hpred_prev))[gv[:, t]])
             px, py = x_t, y_t
 
             nt = min(t + 1, T - 1)
@@ -301,11 +317,25 @@ def main():
             # steer bin: whose resulting heading lands nearest the human's next
             h_pred = h_t[:, None] + (v_new[:, None] * YAWF[None, :]
                                      / a.vehicle_length) * dt
-            si = np.argmin(np.abs(wrap(h_pred - h_tgt[:, None])), axis=1)
+            err = np.abs(wrap(h_pred - h_tgt[:, None]))
+            # At low speed yaw = v*YAWF/L collapses: every steer bin gives the
+            # same heading and argmin breaks the tie on float noise, landing on
+            # an extreme. That is not a steering decision, it is a parked car.
+            # Among bins that are within EPS_H of the best, take the one
+            # closest to centre. EPS_H sits below the open-loop p90 residual,
+            # so it never overrides a genuine choice.
+            ok = err <= err.min(axis=1, keepdims=True) + 1e-4
+            si = np.where(ok, PREF, N_STEER + 1).argmin(axis=1)
 
             act = (ai * N_STEER + si).astype(np.int64)
             live = gv[:, t] & gv[:, nt]
             act[~live] = NOOP
+            # integrate the accel the env is ACTUALLY about to apply, which is
+            # the one in act -- NOOP overrides included
+            v_now = v_now + ACC[act // N_STEER] * dt
+            v_prev = v_now
+            hpred_prev = h_t + (v_now * YAWF[act % N_STEER]
+                                / a.vehicle_length) * dt
             if t == 0:
                 diag["h_off"].append(wrap(h_t - gh[:, 0])[gv[:, 0]])
             diag["sat"].append(np.isin(si[live], [0, N_STEER - 1]))
@@ -364,8 +394,24 @@ def main():
           % (100 * np.isin(sat_ol, [0, N_STEER - 1]).mean()))
     print("  CLOSED LOOP (what actually drove the env)")
     print("    steer saturated  %.1f%% of steps" % (100 * sat_cl.mean()))
-    print("    heading offset at reset  median %+.5f rad (%+.3f deg)"
-          % (np.median(h_off), np.degrees(np.median(h_off))))
+    print("    heading offset at reset  median %+.5f  p10 %+.5f  p90 %+.5f rad"
+          % (np.median(h_off), np.percentile(h_off, 10),
+             np.percentile(h_off, 90)))
+    print("      (a median near 0 with a WIDE spread would mean the agent")
+    print("       ordering differs between the state and the GT arrays)")
+    v_err = np.concatenate(diag["v_err"]) if diag["v_err"] else np.zeros(1)
+    print("    integrated vs position-derived speed  median %.4f m/s  p90 %.4f"
+          % (np.median(v_err), np.percentile(v_err, 90)))
+    print("      (large = the env clips or otherwise departs from v += a*dt,")
+    print("       so integrating its own update is no longer exact)")
+    mh = np.concatenate(diag["model_h"]) if diag["model_h"] else np.zeros(1)
+    print("    ONE-STEP MODEL residual, predicted vs actual heading")
+    print("      median %.5f rad (%.3f deg)   p90 %.5f rad (%.3f deg)"
+          % (np.median(mh), np.degrees(np.median(mh)),
+             np.percentile(mh, 90), np.degrees(np.percentile(mh, 90))))
+    print("      Compare against the OPEN LOOP heading residual above. If open")
+    print("      loop is small and this is large, the grid can express human")
+    print("      driving but drive.h:1595-1601 is not what the env executes.")
     print("  SELECTION -- does tracking depend on how much the human turned?")
     q = np.quantile(turn, [0.25, 0.5, 0.75]) if len(turn) else [0, 0, 0]
     lab = ["straightest 25%", "q2", "q3", "most turning 25%"]
