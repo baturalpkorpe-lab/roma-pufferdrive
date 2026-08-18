@@ -65,6 +65,7 @@ NUM_AGENTS=${NUM_AGENTS:-3072}
 DIV_WEIGHT=${DIV_WEIGHT:-0}
 MI_WEIGHT=${MI_WEIGHT:-1.0}
 WANDB_PROJECT=${WANDB_PROJECT:-roma-pufferdrive}
+WANDB_ENTITY=${WANDB_ENTITY:-s-rahmani-tu-delft}
 
 [ -n "$SRC" ] || { echo "ERROR: set SRC=<checkpoint dir to fine-tune from>"; exit 1; }
 [ -f "$TAU" ] || { echo "ERROR: no tau at $TAU -- run slurm/train_bc.sbatch first"; exit 1; }
@@ -149,6 +150,7 @@ python "$CODE_DIR/roma_pufferdrive/train_roma.py" \
     --role_episodes 0 \
     --wosac_periodic 0 \
     --wandb_project "$WANDB_PROJECT" \
+    --wandb_entity  "$WANDB_ENTITY" \
     --wandb_name    "$WANDB_NAME"
 
 cat <<MSG
