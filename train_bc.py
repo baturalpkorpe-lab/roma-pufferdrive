@@ -60,6 +60,17 @@ def parse_args():
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--val_frac", type=float, default=0.1)
     p.add_argument("--policy_hidden", type=int, default=128)
+    p.add_argument("--gt_regimes", default="",
+                   help="regimes_gt.csv. Given it, tau becomes ROLE-CONDITIONED: "
+                        "tau(a|o,z) with z the driver's own measured style. An "
+                        "unconditioned anchor pulls every alpha toward one "
+                        "reference and narrows the dial (measured: 0.576 s at "
+                        "lambda=0.02 down to 0.168 at 0.1). A conditioned one "
+                        "pulls OUTWARD at the extremes instead.")
+    p.add_argument("--style_col", default="headway_T",
+                   help="which measured style becomes z. headway_T is the one "
+                        "with real within-scene human spread (sd 0.858 vs the "
+                        "policy's 0.32-0.36)")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--allow_cpu", action="store_true",
@@ -70,7 +81,69 @@ def parse_args():
     return p.parse_args()
 
 
-def evaluate(tau, obs, act, device, bs=8192):
+def attach_style(d, obs, act, gt_regimes, style_col):
+    """Join each pair to its driver's measured style, and standardise it.
+
+    z is the driver's style WITHIN ITS OWN SCENE, not against the global mean.
+    That matters: most of the variation in raw headway is the scene (traffic
+    density, geometry), and only the within-scene part is the driver. Scene
+    ICC on this quantity is 0.26, so ~three quarters of it is genuinely the
+    person -- which is exactly the part a style-conditioned anchor should
+    carry, and the part the role dial is trying to reproduce.
+
+    Standardising also puts z on the same scale the policy's alpha uses, so
+    forcing alpha into tau and into pi means the same thing in both.
+    """
+    import pandas as pd
+    if "scenario_id" not in d:
+        raise SystemExit(
+            "This dataset has no scenario_id/vehicle_id, so it cannot be joined\n"
+            "to regimes_gt.csv. Regenerate it with the current verify_bc_data.py\n"
+            "(the ids were added for exactly this), then rerun.")
+    df = pd.DataFrame({"scenario_id": np.asarray(d["scenario_id"]).astype(str),
+                       "vehicle_id": np.asarray(d["vehicle_id"]).astype(np.int64),
+                       "row": np.arange(len(act))})
+    g = pd.read_csv(gt_regimes)
+    if style_col not in g.columns:
+        raise SystemExit("--style_col %r not in %s. Columns: %s"
+                         % (style_col, gt_regimes, sorted(g.columns)[:15]))
+    g = g[["scenario_id", "vehicle_id", style_col]].copy()
+    g["scenario_id"] = g["scenario_id"].astype(str)
+    g["vehicle_id"] = pd.to_numeric(g["vehicle_id"], errors="coerce")
+    g = g.dropna(subset=["vehicle_id"])
+    g["vehicle_id"] = g["vehicle_id"].astype(np.int64)
+
+    j = df.merge(g, on=["scenario_id", "vehicle_id"], how="inner")
+    if len(j) < 0.05 * len(df):
+        # role_on_human.py hit the same thing: the env returns an int
+        # scenario_id while regimes_gt.csv may carry a longer string form.
+        j = df.assign(scenario_id=df.scenario_id.str[:16]).merge(
+            g.assign(scenario_id=g.scenario_id.str[:16]),
+            on=["scenario_id", "vehicle_id"], how="inner")
+    if len(j) < 1000:
+        raise SystemExit(
+            "only %d pairs joined to %s -- the scenario_id forms do not match.\n"
+            "Compare a few: dataset %r vs csv %r"
+            % (len(j), gt_regimes, df.scenario_id.iloc[0], g.scenario_id.iloc[0]))
+
+    y = pd.to_numeric(j[style_col], errors="coerce")
+    j = j[np.isfinite(y)]
+    y = y[np.isfinite(y)]
+    # within-scene centring, then a global scale -> z in units of sigma
+    within = y - y.groupby(j["scenario_id"]).transform("mean")
+    zv = (within / (within.std() + 1e-8)).to_numpy(np.float32)
+
+    keep = j["row"].to_numpy()
+    print("[bc] style join   : %d / %d pairs carry a %s label (%.0f%%)"
+          % (len(keep), len(df), style_col, 100 * len(keep) / len(df)))
+    print("[bc] z (within-scene, standardised): p10 %+.2f  p50 %+.2f  p90 %+.2f"
+          % (np.percentile(zv, 10), np.median(zv), np.percentile(zv, 90)))
+    print("[bc] tau is ROLE-CONDITIONED: tau(a|o,z)")
+    return (obs[keep], act[keep],
+            torch.from_numpy(zv).float().unsqueeze(-1))
+
+
+def evaluate(tau, obs, act, device, z=None, bs=8192):
     """Held-out accuracy, plus the accel/steer split of it."""
     tau.eval()
     n = len(act)
@@ -79,7 +152,9 @@ def evaluate(tau, obs, act, device, bs=8192):
         for i in range(0, n, bs):
             o = obs[i:i + bs].to(device, non_blocking=True)
             y = act[i:i + bs].to(device, non_blocking=True)
-            logits, _, _, _ = tau(o, tau.initial_state(len(o), device))
+            fr = None if z is None else z[i:i + bs].to(device, non_blocking=True)
+            logits, _, _, _ = tau(o, tau.initial_state(len(o), device),
+                                  forced_role=fr)
             logits = logits.float()
             loss += F.cross_entropy(logits, y, reduction="sum").item()
             pred = logits.argmax(-1)
@@ -110,6 +185,11 @@ def main():
     obs = torch.from_numpy(d["obs"]).float()
     act = torch.from_numpy(d["act"]).long()
     n, obs_dim = obs.shape
+    z, role_dim = None, 0
+    if a.gt_regimes:
+        obs, act, z = attach_style(d, obs, act, a.gt_regimes, a.style_col)
+        n, obs_dim = obs.shape
+        role_dim = 1
     n_actions = int(d["accel_values"].shape[0] * d["steer_values"].shape[0])
     print("[bc] %s" % a.data)
     print("[bc] %d pairs  obs_dim=%d  n_actions=%d  device=%s"
@@ -121,6 +201,8 @@ def main():
     n_val = int(n * a.val_frac)
     tr_o, tr_a = obs[:n - n_val], act[:n - n_val]
     va_o, va_a = obs[n - n_val:], act[n - n_val:]
+    tr_z = None if z is None else z[:n - n_val]
+    va_z = None if z is None else z[n - n_val:]
     print("[bc] train %d  val %d (contiguous tail, not a random split)"
           % (len(tr_a), len(va_a)))
 
@@ -141,7 +223,7 @@ def main():
           % (h0, float(np.exp(h0))))
     print("[bc] a tau that learns nothing conditional scores val_loss %.4f" % h0)
 
-    tau = RomaPolicy(obs_dim=obs_dim, action_dim=n_actions, role_dim=0,
+    tau = RomaPolicy(obs_dim=obs_dim, action_dim=n_actions, role_dim=role_dim,
                      policy_hidden=a.policy_hidden).to(device)
     print("[bc] tau params: %d"
           % sum(p.numel() for p in tau.parameters() if p.requires_grad))
@@ -156,14 +238,16 @@ def main():
             mb = perm[i:i + a.batch_size]
             o = tr_o[mb].to(device, non_blocking=True)
             y = tr_a[mb].to(device, non_blocking=True)
-            logits, _, _, _ = tau(o, tau.initial_state(len(o), device))
+            fr = None if tr_z is None else tr_z[mb].to(device, non_blocking=True)
+            logits, _, _, _ = tau(o, tau.initial_state(len(o), device),
+                                  forced_role=fr)
             loss = F.cross_entropy(logits.float(), y)
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(tau.parameters(), 0.5)
             opt.step()
             tot += loss.item() * len(mb)
-        vl, acc, acc5, acc_a, acc_s = evaluate(tau, va_o, va_a, device)
+        vl, acc, acc5, acc_a, acc_s = evaluate(tau, va_o, va_a, device, va_z)
         print("[bc] epoch %3d  train %.4f  val %.4f | gain %+.4f nats  "
               "eff.bins %5.1f | acc %.4f  top5 %.4f  accel %.4f  steer %.4f"
               % (ep, tot / len(tr_a), vl, h0 - vl, float(np.exp(vl)),
@@ -171,7 +255,8 @@ def main():
         if vl < best - 1e-4:
             best, bad = vl, 0
             torch.save({"state_dict": tau.state_dict(), "obs_dim": obs_dim,
-                        "action_dim": n_actions, "role_dim": 0,
+                        "action_dim": n_actions, "role_dim": role_dim,
+                        "style_col": a.style_col if role_dim else None,
                         "policy_hidden": a.policy_hidden,
                         "val_loss": vl, "val_acc": acc, "epoch": ep,
                         "marginal_entropy": h0, "gain_nats": h0 - vl,

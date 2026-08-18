@@ -245,7 +245,7 @@ def main():
     print("  TRACK -- do the inferred actions reproduce the human path?")
     print("=" * 72)
 
-    keep_obs, keep_act, keep_ade = [], [], []
+    keep_obs, keep_act, keep_ade, keep_sid, keep_vid = [], [], [], [], []
     diag = {"res_v": [], "res_h": [], "sat": [], "h_off": [],
             "turn": [], "ade": [], "steer_ol": [], "v_err": [], "model_h": [], "yield": []}
     for ep in range(a.episodes):
@@ -258,6 +258,11 @@ def main():
         gh = as_agent_time(gt["heading"], B)
         gv = as_agent_time(gt["valid"], B).astype(bool)
         isv = _sq(np.asarray(gt.get("is_vehicle", np.ones(B)))).astype(bool)
+        # Identity per agent, carried through to every kept pair. Without it
+        # the pairs cannot be joined to regimes_gt.csv, and a role-CONDITIONED
+        # tau needs exactly that join to get each human driver's style label.
+        sid = _sq(np.asarray(gt["scenario_id"])).reshape(B)
+        vid = _sq(np.asarray(gt["id"])).reshape(B)
         T = min(EPISODE_LEN, gx.shape[1])
 
         # human speed over [t, t+1] -- what the accel bin has to produce
@@ -394,6 +399,9 @@ def main():
             keep_obs.append(ep_obs[ep_keep])
             keep_act.append(ep_act[ep_keep])
             keep_ade.append(ade[pool])
+            # broadcast the per-agent ids over time, then apply the same mask
+            keep_sid.append(np.broadcast_to(sid, (T, B))[ep_keep])
+            keep_vid.append(np.broadcast_to(vid, (T, B))[ep_keep])
             diag["yield"].append(ep_keep[:, pool].sum(0))   # steps per agent
 
     n_agents = int(sum(int((y > 0).sum()) for y in diag["yield"]))
@@ -512,6 +520,8 @@ def main():
             obs=np.concatenate(keep_obs).astype(np.float32),
             act=np.concatenate(keep_act).astype(np.int16),
             ade=np.concatenate(keep_ade).astype(np.float32),
+            scenario_id=np.concatenate(keep_sid),
+            vehicle_id=np.concatenate(keep_vid),
             accel_values=ACC, steer_values=STEER, n_steer=N_STEER)
         print("\n[save] %d pairs from %d agents, %.1f%% from the "
               "most-turning quartile -> %s"
