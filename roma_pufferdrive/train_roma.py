@@ -192,6 +192,23 @@ def parse_args():
     p.add_argument("--max_grad_norm", type=float, default=0.5)
 
     # Logging / saving
+    # ---- BC anchor (HR-PPO). Both default to OFF: reg_weight 0 and no
+    # bc_anchor path means this file behaves exactly as before. ----
+    p.add_argument("--bc_anchor",     type=str,   default=None,
+                   help="tau checkpoint from train_bc.py. Frozen; queried on "
+                        "the states the POLICY visits, which is what makes "
+                        "this an anchor and not a BC loss")
+    p.add_argument("--reg_weight",    type=float, default=0.0,
+                   help="lambda in (1-lambda)*L_ppo + lambda*KL(tau||pi). "
+                        "HR-PPO swept 0.001-0.2 and chose 0.06; the 2026 "
+                        "follow-up fixes 0.075. 0 disables the anchor")
+    p.add_argument("--reg_anneal",    action="store_true",
+                   help="decay lambda linearly to 0 over training, as "
+                        "nocturne_lab's reg_ppo.py does. Off by default: for "
+                        "smoothness we want the anchor to PERSIST")
+    p.add_argument("--bc_init",       action="store_true",
+                   help="initialise the encoders from tau as well (option 1, "
+                        "the prior). Independent of reg_weight")
     p.add_argument("--save_dir",      type=str,   default="roma_pufferdrive/checkpoints/roma")
     p.add_argument("--save_interval", type=int,   default=500_000_000,
                    help="Save checkpoint every N steps. 500M for 2B run, 1M for CPU test.")
@@ -814,6 +831,28 @@ def train(args):
         div_weight = args.div_weight,
     ).to(device)
 
+    # ---- BC anchor / prior ----
+    tau = None
+    if args.bc_anchor:
+        from roma_pufferdrive.roma.policy import RomaPolicy as _RP
+        ck  = torch.load(args.bc_anchor, map_location="cpu")
+        tau = _RP(obs_dim=ck["obs_dim"], action_dim=ck["action_dim"],
+                  role_dim=0, policy_hidden=ck["policy_hidden"]).to(device)
+        tau.load_state_dict(ck["state_dict"])
+        tau.eval()
+        for q in tau.parameters():
+            q.requires_grad_(False)
+        print(f"[ROMA] BC anchor    : {args.bc_anchor} "
+              f"(val_acc {ck.get('val_acc', float('nan')):.4f})")
+        print(f"[ROMA] reg_weight   : {args.reg_weight}"
+              f"{' (annealed to 0)' if args.reg_anneal else ' (fixed)'}")
+        if args.bc_init:
+            # Option 1, the prior: same encoders, so this is a straight copy.
+            # The GRU and heads differ once role_dim > 0, hence strict=False.
+            missing = policy.load_state_dict(ck["state_dict"], strict=False)
+            print(f"[ROMA] bc_init      : encoders seeded from tau "
+                  f"({len(missing.missing_keys)} keys left at init)")
+
     optimizer = Adam(
         list(policy.parameters()) + list(aux_loss_fn.parameters()),
         lr=args.lr,
@@ -884,6 +923,12 @@ def train(args):
     # to avoid restarting GRU from zeros on shuffled minibatches.
     b_role_h   = torch.zeros(N, args.role_hidden,   device=device)
     b_policy_h = torch.zeros(N, args.policy_hidden, device=device)
+    # tau is frozen, so its output at a visited state never changes: compute it
+    # once during the rollout and store it, rather than re-running tau inside
+    # every PPO minibatch. 91 floats next to a 1121-float obs is ~8% more
+    # buffer for one forward pass instead of ppo_epochs*num_minibatch of them.
+    b_tau_lp = (torch.zeros(N, action_dim, device=device)
+                if tau is not None else None)
 
     state = policy.initial_state(B, device)
     obs   = torch.as_tensor(obs_probe, dtype=torch.float32).to(device)
@@ -920,6 +965,12 @@ def train(args):
                 dist    = Categorical(logits=logits.float())
                 action  = dist.sample()
                 logprob = dist.log_prob(action)
+                if tau is not None:
+                    # ON-POLICY states. This is the entire difference from a
+                    # BC loss: we ask tau what a human would do from where the
+                    # POLICY got itself to, including states no human reached.
+                    t_logits, _, _, _ = tau(obs, tau.initial_state(B, device))
+                    b_tau_lp[ptr:ptr+B] = F.log_softmax(t_logits.float(), -1)
 
                 if use_pin:
                     # GPU -> pinned host memory (faster than pageable)
@@ -1045,6 +1096,29 @@ def train(args):
                             - args.ent_coef * entropy.mean()
                             + aux["aux_loss"])
 
+                    if tau is not None and args.reg_weight > 0:
+                        lam = args.reg_weight
+                        if args.reg_anneal:
+                            lam *= max(0.0, 1.0 - global_step / args.total_steps)
+                        # KL(tau || pi): F.kl_div(input=log q, target=log p)
+                        # computes sum p*(log p - log q), so passing tau as the
+                        # TARGET gives the mode-COVERING direction. That is the
+                        # one we want: it penalises pi for putting low mass
+                        # where humans put mass, keeping pi's support over
+                        # human behaviour. The reverse, KL(pi||tau), is
+                        # mode-seeking and would let pi collapse onto a single
+                        # human mode -- fatal for a project about spread.
+                        kl = F.kl_div(
+                            F.log_softmax(logits.float(), dim=-1),
+                            b_tau_lp[mb], log_target=True,
+                            reduction="batchmean")
+                        # convex combination, as HR-PPO: scale-robust in a way
+                        # an additive term is not, which matters here -- the
+                        # compliance term was once 0.4% of return and did
+                        # nothing at all.
+                        loss = (1.0 - lam) * loss + lam * kl
+                        aux["kl_loss"] = kl.detach()
+
                 optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(
@@ -1068,7 +1142,7 @@ def train(args):
                   f"value_loss={vl.item():.4f}  "
                   f"mi_loss={aux['mi_loss'].item():.4f}  "
                   f"div_loss={aux['div_loss'].item():.4f}  "
-                  f"kl_loss=0.0000 (disabled)  "
+                  f"kl_loss={float(aux.get('kl_loss', 0.0)):.4f}  "
                   f"score={score:.3f}  return={ret:.3f}  "
                   f"role_std={role_std_all:.4f}  role_norm={role_norm_all:.4f}  "
                   f"enc_delta ego={enc_deltas['ego']:.4f} "
