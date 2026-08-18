@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=roma_bc
-#SBATCH --partition=gpu-a100-mini
+#SBATCH --partition=gpu-a100-small
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=4G
@@ -19,7 +19,8 @@
 # epochs. On a login-node CPU that is tens of minutes and against DelftBlue
 # policy; on an A100 it is a few minutes.
 #
-# SIZED SMALL ON PURPOSE, hence gpu-a100-mini. Host RAM peaks near 3 GB:
+# SIZED SMALL ON PURPOSE, hence gpu-a100-small (one node, gpu020, 4h cap).
+# Host RAM peaks near 3 GB:
 # the npz obs array is 289k x 1121 x 4 B ~ 1.3 GB, torch.from_numpy SHARES
 # that buffer rather than copying it, the train/val split is a view, and each
 # minibatch is an 18 MB gather. The model is ~100k params, so GPU memory is
@@ -30,7 +31,7 @@
 # PARTITION CAPS differ and are not guessable -- gpu-a100 rejects
 # --mem-per-cpu=8G because it caps at 8000 MB, compute-p1 caps at 3968 MB.
 # Check before changing:
-#   scontrol show partition gpu-a100-mini | grep -iE "maxmem|maxtime|maxnodes"
+#   scontrol show partition gpu-a100-small | grep -iE "maxmem|maxtime|maxnodes"
 # sbatch CLI flags override the directives above, so you can retarget without
 # editing this file:
 #   sbatch --partition=gpu-a100 --time=01:00:00 --export=ALL,DATA=... slurm/train_bc.sbatch
