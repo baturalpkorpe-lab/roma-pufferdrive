@@ -78,6 +78,6 @@ python "$CODE_DIR/train_bc.py" \
     --lr         "$LR" \
     --device     cuda
 
-echo "[bc] done. Held-out accuracy is the number that matters -- HR-PPO's BC"
-echo "[bc] reference reached 0.97-0.99. Below ~0.90 tau is not a usable"
-echo "[bc] anchor and the KL term would pull the policy toward noise."
+echo "[bc] done. The number that matters is the gain in nats, not accuracy:"
+echo "[bc] the anchor consumes the DISTRIBUTION tau assigns, not its argmax."
+echo "[bc] Under 0.3 nats, tau is barely better than the action marginal."
