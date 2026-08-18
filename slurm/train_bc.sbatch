@@ -33,7 +33,7 @@
 #   scontrol show partition gpu-a100-mini | grep -iE "maxmem|maxtime|maxnodes"
 # sbatch CLI flags override the directives above, so you can retarget without
 # editing this file:
-#   sbatch --partition=gpu-a100 --time=01:00:00 --export=ALL,DATA=... #          slurm/train_bc.sbatch
+#   sbatch --partition=gpu-a100 --time=01:00:00 --export=ALL,DATA=... slurm/train_bc.sbatch
 #
 # Half an hour is generous: --patience 5 usually stops it well before 20
 # epochs, and on a MIG slice the epochs are still seconds, not minutes.
