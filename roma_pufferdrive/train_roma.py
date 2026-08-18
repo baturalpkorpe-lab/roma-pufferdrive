@@ -1156,7 +1156,7 @@ def train(args):
                     round(pl.item(), 6), round(vl.item(), 6),
                     round(aux["mi_loss"].item(), 6),
                     round(aux["div_loss"].item(), 6),
-                    0.0,  # kl disabled in baseline
+                    round(float(aux.get("kl_loss", 0.0)), 6),
                     round(score, 4), round(ret, 4),
                     round(enc_deltas["ego"],     6),
                     round(enc_deltas["partner"], 6),
@@ -1171,7 +1171,7 @@ def train(args):
                 "train/value_loss":       vl.item(),
                 "train/mi_loss":          aux["mi_loss"].item(),
                 "train/div_loss":         aux["div_loss"].item(),
-                "train/kl_loss":          0.0,  # kl disabled in baseline
+                "train/kl_loss":          float(aux.get("kl_loss", 0.0)),
                 "train/score":            score,
                 "train/mean_return":      ret,
                 "train/sps":              sps,
