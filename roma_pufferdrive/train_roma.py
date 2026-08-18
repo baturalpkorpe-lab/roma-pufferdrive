@@ -921,8 +921,15 @@ def train(args):
     tau = None
     if args.bc_anchor:
         ck  = torch.load(args.bc_anchor, map_location="cpu")
+        tau_role_dim = int(ck.get("role_dim", 0))
+        if tau_role_dim and tau_role_dim != args.role_dim:
+            raise SystemExit(
+                f"tau has role_dim={tau_role_dim} but the policy has "
+                f"{args.role_dim}. A conditioned anchor is forced with the "
+                f"policy's own z, so the two must match.")
         tau = RomaPolicy(obs_dim=ck["obs_dim"], action_dim=ck["action_dim"],
-                         role_dim=0, policy_hidden=ck["policy_hidden"]).to(device)
+                         role_dim=tau_role_dim,
+                         policy_hidden=ck["policy_hidden"]).to(device)
         tau.load_state_dict(ck["state_dict"])
         tau.eval()
         for q in tau.parameters():
@@ -931,6 +938,10 @@ def train(args):
               f"(val_acc {ck.get('val_acc', float('nan')):.4f})")
         print(f"[ROMA] reg_weight   : {args.reg_weight}"
               f"{' (annealed to 0)' if args.reg_anneal else ' (fixed)'}")
+        print("[ROMA] anchor type  : "
+              + (f"ROLE-CONDITIONED tau(a|o,z) on {ck.get('style_col')} "
+                 f"(role_dim={tau_role_dim})"
+                 if tau_role_dim else "unconditioned tau(a|o)"))
         if args.bc_init:
             missing = policy.load_state_dict(ck["state_dict"], strict=False)
             print(f"[ROMA] bc_init      : encoders seeded from tau "
@@ -1048,7 +1059,21 @@ def train(args):
                 logprob = dist.log_prob(action)
                 if tau is not None:
                     # ON-POLICY states -- the whole difference from a BC loss.
-                    t_logits, _, _, _ = tau(obs, tau.initial_state(B, device))
+                    fr = None
+                    if tau_role_dim:
+                        # Force tau with the SAME role the policy is using, so
+                        # the anchor says "be cautious the way a cautious human
+                        # is" rather than "be the average human", and pulls
+                        # OUTWARD at the extremes instead of inward.
+                        # tau was trained on a within-scene STANDARDISED style,
+                        # so standardise pi's z to match: the encoder's raw
+                        # scale drifts (role_std ran 4.38 -> 9.12 on one arm)
+                        # and would otherwise silently rescale the conditioning
+                        # as training progressed.
+                        rz = role_info["role_z"].detach().float()
+                        fr = (rz - rz.mean(0)) / (rz.std(0) + 1e-6)
+                    t_logits, _, _, _ = tau(obs, tau.initial_state(B, device),
+                                            forced_role=fr)
                     b_tau_lp[ptr:ptr+B] = F.log_softmax(t_logits.float(), -1)
 
                 if use_pin:
