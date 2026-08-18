@@ -2,8 +2,8 @@
 #SBATCH --job-name=roma_bc
 #SBATCH --partition=gpu-a100
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem-per-cpu=8G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem-per-cpu=4G
 #SBATCH --gpus-per-task=1
 #SBATCH --time=01:00:00
 #SBATCH --account=research-ceg-tp
@@ -21,9 +21,11 @@
 #
 # MEMORY, not compute, is the thing to watch: train_bc.py loads the whole npz
 # into host RAM as float32. 289k x 1121 x 4 B ~ 1.3 GB, plus the decompressed
-# copy numpy makes while reading, so 8 CPUs x 8 G = 64 G leaves plenty of head
-# room. Raise --episodes in verify_bc_data.py far enough and this is the limit
-# you hit first, not the GPU.
+# copy numpy makes while reading. 16 x 4G = 64 G leaves plenty of head room.
+# Note gpu-a100 caps mem-per-cpu at 8000 MB, so --mem-per-cpu=8G is rejected
+# outright; 16 x 4G is the combination train_cluster.sbatch already uses.
+# Raise --episodes in verify_bc_data.py far enough and host RAM is what breaks
+# first, not the GPU.
 #
 # One hour is generous: --patience 5 usually stops it well before 20 epochs.
 
