@@ -49,6 +49,14 @@ OUT=${OUT:-/scratch/$USER/checkpoints/tau/tau.pt}
 EPOCHS=${EPOCHS:-200}
 BATCH=${BATCH:-4096}
 LR=${LR:-3e-4}
+# Given GT_REGIMES, tau becomes ROLE-CONDITIONED: tau(a|o,z) with z the
+# driver's own within-scene style. The unconditioned anchor's measured cost is
+# the dial -- headway range 0.576 s at lambda=0.02 down to 0.168 at 0.1 -- and
+# conditioning removes that cause instead of trading against it.
+GT_REGIMES=${GT_REGIMES:-}
+STYLE_COL=${STYLE_COL:-headway_T}
+STYLE_ARGS=""
+[ -n "$GT_REGIMES" ] && STYLE_ARGS="--gt_regimes $GT_REGIMES --style_col $STYLE_COL"
 
 [ -f "$DATA" ] || { echo "ERROR: no dataset at $DATA -- run verify_bc_data.py first"; exit 1; }
 
@@ -76,7 +84,7 @@ python "$CODE_DIR/train_bc.py" \
     --epochs     "$EPOCHS" \
     --batch_size "$BATCH" \
     --lr         "$LR" \
-    --device     cuda
+    --device     cuda     $STYLE_ARGS
 
 echo "[bc] done. The number that matters is the gain in nats, not accuracy:"
 echo "[bc] the anchor consumes the DISTRIBUTION tau assigns, not its argmax."
