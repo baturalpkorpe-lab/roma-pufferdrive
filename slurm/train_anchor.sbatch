@@ -143,23 +143,36 @@ fi
 # name.
 GEOM=$(python - "$SEED_CKPT" <<'PYGEOM'
 import sys, torch
-sd = torch.load(sys.argv[1], map_location="cpu", weights_only=False)["policy_state"]
+ck = torch.load(sys.argv[1], map_location="cpu", weights_only=False)
+sd = ck["policy_state"]
 pp, rp = sd.get("role_partner_proj.weight"), sd.get("role_road_proj.weight")
 fc = sd.get("role_encoder.fc_obs.0.weight")
 p = pp.shape[0] if pp is not None else 32          # None => identity, i.e. p_out
 r = rp.shape[0] if rp is not None else (fc.shape[1] - 32 - p if fc is not None else 64)
-print(p, r)
+# mi_target is encoded in the aux critic too: BehaviourExtractor is
+# nn.Linear(mi_emb_dim * window, 64), window is 8, and mi_emb_dim is
+# env_embed_dim (128) for 'full' or ego_out+partner_out (64) for
+# 'ego_partner'. Passing the wrong one gives 1024 vs 512 and the aux state
+# refuses to load -- which is how 10667286 died.
+be = ck.get("aux_loss_state", {}).get("behaviour_extractor.net.0.weight")
+t = "full"
+if be is not None:
+    t = "full" if (be.shape[1] // 8) >= 128 else "ego_partner"
+print(p, r, t)
 PYGEOM
 ) || { echo "ERROR: could not read role geometry from $SEED_CKPT"; exit 1; }
 ROLE_PARTNER_DIM=${ROLE_PARTNER_DIM:-$(echo "$GEOM" | cut -d' ' -f1)}
 ROLE_ROAD_DIM=${ROLE_ROAD_DIM:-$(echo "$GEOM" | cut -d' ' -f2)}
+MI_TARGET=${MI_TARGET:-$(echo "$GEOM" | cut -d' ' -f3)}
 
 # Pass them only if this clone's train_roma.py understands them: baseline has
 # no such flags, the agent-centric branches do.
 GEOM_ARGS=""
 if python "$CODE_DIR/roma_pufferdrive/train_roma.py" --help 2>/dev/null | grep -q -- --role_partner_dim; then
     GEOM_ARGS="--role_partner_dim $ROLE_PARTNER_DIM --role_road_dim $ROLE_ROAD_DIM"
-    echo "[anchor] role geometry: partner=$ROLE_PARTNER_DIM road=$ROLE_ROAD_DIM (read from checkpoint)"
+    python "$CODE_DIR/roma_pufferdrive/train_roma.py" --help 2>/dev/null | grep -q -- --mi_target \
+        && GEOM_ARGS="$GEOM_ARGS --mi_target $MI_TARGET"
+    echo "[anchor] role geometry: partner=$ROLE_PARTNER_DIM road=$ROLE_ROAD_DIM mi_target=$MI_TARGET (read from checkpoint)"
 else
     echo "[anchor] this train_roma.py has no --role_partner_dim, so baseline geometry is assumed."
     echo "[anchor] The checkpoint wants partner=$ROLE_PARTNER_DIM road=$ROLE_ROAD_DIM; if that is"
