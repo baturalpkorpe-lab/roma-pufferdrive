@@ -65,6 +65,15 @@ NUM_MAPS=${NUM_MAPS:-10000}
 NUM_AGENTS=${NUM_AGENTS:-3072}
 DIV_WEIGHT=${DIV_WEIGHT:-0}
 MI_WEIGHT=${MI_WEIGHT:-1.0}
+# The reward is NOT a CLI arg on these branches -- it comes from a drive.ini
+# shared by every clone and edited per experiment. lr_half was trained with
+# collision_behavior=1 (a collision forfeits the episode, which cut collisions
+# 54% where doubling the penalty cut them 12%), and drive.ini has since gone
+# back to 0. Fine-tuning without restating it would add the anchor AND remove
+# episode-termination at once, on exactly the metrics the anchor targets.
+# State it here so it lands in argv and the wandb config, not in a mutable file.
+COLLISION_BEHAVIOR=${COLLISION_BEHAVIOR:-1}
+ENV_OVERRIDE=${ENV_OVERRIDE:-collision_behavior=$COLLISION_BEHAVIOR}
 WANDB_PROJECT=${WANDB_PROJECT:-roma-pufferdrive}
 WANDB_ENTITY=${WANDB_ENTITY:-s-rahmani-tu-delft}
 
@@ -167,6 +176,16 @@ MI_TARGET=${MI_TARGET:-$(echo "$GEOM" | cut -d' ' -f3)}
 
 # Pass them only if this clone's train_roma.py understands them: baseline has
 # no such flags, the agent-centric branches do.
+ENV_ARGS=""
+if [ -n "$ENV_OVERRIDE" ] && python "$CODE_DIR/roma_pufferdrive/train_roma.py" --help 2>/dev/null | grep -q -- --env_override; then
+    ENV_ARGS="--env_override $ENV_OVERRIDE"
+    echo "[anchor] env override : $ENV_OVERRIDE"
+elif [ -n "$ENV_OVERRIDE" ]; then
+    echo "[anchor] WARNING: this train_roma.py has no --env_override, so the"
+    echo "[anchor] reward comes from drive.ini as-is. Confirm collision_behavior"
+    echo "[anchor] matches the seed before trusting the result."
+fi
+
 GEOM_ARGS=""
 if python "$CODE_DIR/roma_pufferdrive/train_roma.py" --help 2>/dev/null | grep -q -- --role_partner_dim; then
     GEOM_ARGS="--role_partner_dim $ROLE_PARTNER_DIM --role_road_dim $ROLE_ROAD_DIM"
@@ -196,7 +215,7 @@ python "$CODE_DIR/roma_pufferdrive/train_roma.py" \
     --resume        "$RESUME" \
     --bc_anchor     "$TAU" \
     --reg_weight    "$REG_WEIGHT" \
-    $ANNEAL_ARG $BCINIT_ARG $GEOM_ARGS \
+    $ANNEAL_ARG $BCINIT_ARG $GEOM_ARGS $ENV_ARGS \
     --role_dim      "$ROLE_DIM" \
     --div_weight    "$DIV_WEIGHT" \
     --mi_weight     "$MI_WEIGHT" \
