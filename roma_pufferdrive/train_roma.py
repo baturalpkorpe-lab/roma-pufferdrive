@@ -227,6 +227,19 @@ def parse_args():
     p.add_argument("--max_grad_norm", type=float, default=0.5)
 
     # Logging / saving
+    p.add_argument("--bc_anchor",     type=str,   default=None,
+                   help="tau checkpoint from train_bc.py. Frozen; queried on "
+                        "the states the POLICY visits, which is what makes "
+                        "this an anchor and not a BC loss")
+    p.add_argument("--reg_weight",    type=float, default=0.0,
+                   help="lambda in (1-lambda)*L_ppo + lambda*KL(tau||pi). "
+                        "HR-PPO swept 0.001-0.2 and chose 0.06. 0 disables it")
+    p.add_argument("--reg_anneal",    action="store_true",
+                   help="decay lambda to 0 over training, as nocturne_lab "
+                        "does. Off by default: smoothness needs it to persist")
+    p.add_argument("--bc_init",       action="store_true",
+                   help="also seed the encoders from tau (the prior). "
+                        "Independent of reg_weight")
     p.add_argument("--save_dir",      type=str,   default="roma_pufferdrive/checkpoints/roma")
     p.add_argument("--save_interval", type=int,   default=500_000_000,
                    help="Save checkpoint every N steps. 500M for 2B run, 1M for CPU test.")
@@ -875,6 +888,24 @@ def train(args):
         mi_emb_dim = mi_emb_dim,
     ).to(device)
 
+    tau = None
+    if args.bc_anchor:
+        ck  = torch.load(args.bc_anchor, map_location="cpu")
+        tau = RomaPolicy(obs_dim=ck["obs_dim"], action_dim=ck["action_dim"],
+                         role_dim=0, policy_hidden=ck["policy_hidden"]).to(device)
+        tau.load_state_dict(ck["state_dict"])
+        tau.eval()
+        for q in tau.parameters():
+            q.requires_grad_(False)
+        print(f"[ROMA] BC anchor    : {args.bc_anchor} "
+              f"(val_acc {ck.get('val_acc', float('nan')):.4f})")
+        print(f"[ROMA] reg_weight   : {args.reg_weight}"
+              f"{' (annealed to 0)' if args.reg_anneal else ' (fixed)'}")
+        if args.bc_init:
+            missing = policy.load_state_dict(ck["state_dict"], strict=False)
+            print(f"[ROMA] bc_init      : encoders seeded from tau "
+                  f"({len(missing.missing_keys)} keys left at init)")
+
     optimizer = Adam(
         list(policy.parameters()) + list(aux_loss_fn.parameters()),
         lr=args.lr,
@@ -945,6 +976,10 @@ def train(args):
     # to avoid restarting GRU from zeros on shuffled minibatches.
     b_role_h   = torch.zeros(N, args.role_hidden,   device=device)
     b_policy_h = torch.zeros(N, args.policy_hidden, device=device)
+    # tau is frozen, so its output at a visited state never changes: compute it
+    # once in the rollout instead of re-running it inside every PPO minibatch.
+    b_tau_lp = (torch.zeros(N, action_dim, device=device)
+                if tau is not None else None)
 
     state = policy.initial_state(B, device)
     obs   = torch.as_tensor(obs_probe, dtype=torch.float32).to(device)
@@ -981,6 +1016,10 @@ def train(args):
                 dist    = Categorical(logits=logits.float())
                 action  = dist.sample()
                 logprob = dist.log_prob(action)
+                if tau is not None:
+                    # ON-POLICY states -- the whole difference from a BC loss.
+                    t_logits, _, _, _ = tau(obs, tau.initial_state(B, device))
+                    b_tau_lp[ptr:ptr+B] = F.log_softmax(t_logits.float(), -1)
 
                 if use_pin:
                     # GPU -> pinned host memory (faster than pageable)
@@ -1132,6 +1171,24 @@ def train(args):
                             - args.ent_coef * entropy.mean()
                             + aux["aux_loss"])
 
+                    if tau is not None and args.reg_weight > 0:
+                        lam = args.reg_weight
+                        if args.reg_anneal:
+                            lam *= max(0.0, 1.0 - global_step / args.total_steps)
+                        # KL(tau||pi): F.kl_div(input=log q, target=log p) is
+                        # sum p*(log p - log q), so tau as TARGET gives the
+                        # mode-COVERING direction -- it penalises pi for putting
+                        # low mass where humans put mass, keeping pi's support
+                        # over human behaviour. KL(pi||tau) is mode-seeking and
+                        # would let pi collapse onto one human mode, fatal for a
+                        # project about spread.
+                        kl = F.kl_div(
+                            F.log_softmax(logits.float(), dim=-1),
+                            b_tau_lp[mb], log_target=True,
+                            reduction="batchmean")
+                        loss = (1.0 - lam) * loss + lam * kl
+                        aux["kl_loss"] = kl.detach()
+
                 optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(
@@ -1156,7 +1213,7 @@ def train(args):
                   f"mi_loss={aux['mi_loss'].item():.4f}  "
                   f"mi_valid={mi_valid_frac:.2f}  "
                   f"div_loss={aux['div_loss'].item():.4f}  "
-                  f"kl_loss=0.0000 (disabled)  "
+                  f"kl_loss={float(aux.get('kl_loss', 0.0)):.4f}  "
                   f"score={score:.3f}  return={ret:.3f}  "
                   f"role_std={role_std_all:.4f}  role_norm={role_norm_all:.4f}  "
                   f"enc_delta ego={enc_deltas['ego']:.4f} "
@@ -1170,7 +1227,7 @@ def train(args):
                     round(pl.item(), 6), round(vl.item(), 6),
                     round(aux["mi_loss"].item(), 6),
                     round(aux["div_loss"].item(), 6),
-                    0.0,  # kl disabled in baseline
+                    round(float(aux.get("kl_loss", 0.0)), 6),
                     round(score, 4), round(ret, 4),
                     round(enc_deltas["ego"],     6),
                     round(enc_deltas["partner"], 6),
@@ -1186,7 +1243,7 @@ def train(args):
                 "train/mi_loss":          aux["mi_loss"].item(),
                 "train/mi_valid_frac":    mi_valid_frac,
                 "train/div_loss":         aux["div_loss"].item(),
-                "train/kl_loss":          0.0,  # kl disabled in baseline
+                "train/kl_loss":          float(aux.get("kl_loss", 0.0)),
                 "train/score":            score,
                 "train/mean_return":      ret,
                 "train/sps":              sps,
