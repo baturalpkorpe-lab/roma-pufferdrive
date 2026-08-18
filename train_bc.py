@@ -62,6 +62,9 @@ def parse_args():
     p.add_argument("--policy_hidden", type=int, default=128)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--allow_cpu", action="store_true",
+                   help="run on CPU anyway. Off by default so a missing GPU "
+                        "fails loudly instead of silently taking 40x longer")
     p.add_argument("--patience", type=int, default=5,
                    help="stop after this many epochs with no val improvement")
     return p.parse_args()
@@ -93,6 +96,15 @@ def main():
     torch.manual_seed(a.seed)
     np.random.seed(a.seed)
     device = torch.device(a.device)
+    if device.type == "cpu" and not a.allow_cpu:
+        raise SystemExit("\n".join([
+            "No CUDA device. This is GPU work -- 289k x 1121 through the",
+            "encoders for 20 epochs -- and login nodes have no GPU, so this",
+            "would grind for tens of minutes on a node that is not meant for",
+            "compute. Submit it instead:",
+            "  sbatch --export=ALL,DATA=%s slurm/train_bc.sbatch" % a.data,
+            "Pass --allow_cpu if you really mean to run it here.",
+        ]))
 
     d = np.load(a.data)
     obs = torch.from_numpy(d["obs"]).float()
