@@ -67,6 +67,16 @@ def parse_args():
                         "reference and narrows the dial (measured: 0.576 s at "
                         "lambda=0.02 down to 0.168 at 0.1). A conditioned one "
                         "pulls OUTWARD at the extremes instead.")
+    p.add_argument("--style_scope", default="within_scene",
+                   choices=["within_scene", "global"],
+                   help="within_scene isolates the DRIVER from the scene, but "
+                        "needs >1 driver per scenario. A dataset built with "
+                        "control_sdc_only has exactly one, so centring makes z "
+                        "identically zero -- rebuild the data with "
+                        "--control_mode control_vehicles instead. 'global' is "
+                        "the escape hatch: usable, but it conflates driver with "
+                        "traffic density (corr to the true driver effect 0.52 "
+                        "vs 0.94 for within-scene).")
     p.add_argument("--style_col", default="headway_T",
                    help="which measured style becomes z. headway_T is the one "
                         "with real within-scene human spread (sd 0.858 vs the "
@@ -81,7 +91,7 @@ def parse_args():
     return p.parse_args()
 
 
-def attach_style(d, obs, act, gt_regimes, style_col):
+def attach_style(d, obs, act, gt_regimes, style_col, scope="within_scene"):
     """Join each pair to its driver's measured style, and standardise it.
 
     z is the driver's style WITHIN ITS OWN SCENE, not against the global mean.
@@ -129,16 +139,44 @@ def attach_style(d, obs, act, gt_regimes, style_col):
     y = pd.to_numeric(j[style_col], errors="coerce")
     j = j[np.isfinite(y)]
     y = y[np.isfinite(y)]
-    # within-scene centring, then a global scale -> z in units of sigma
-    within = y - y.groupby(j["scenario_id"]).transform("mean")
-    zv = (within / (within.std() + 1e-8)).to_numpy(np.float32)
+    # How many distinct drivers per scenario does this dataset actually have?
+    # With one, within-scene centring is identically zero and tau would be
+    # conditioned on a constant -- which is exactly what happened the first
+    # time (p10=p50=p90=+0.00, gain 0.24 against 1.43 unconditioned).
+    per_scene = j.groupby("scenario_id")["vehicle_id"].nunique()
+    n_drivers = float(per_scene.median())
+    print("[bc] drivers per scenario: median %.1f  max %d  (%d scenarios)"
+          % (n_drivers, int(per_scene.max()), len(per_scene)))
+
+    if scope == "within_scene":
+        if n_drivers < 1.5:
+            raise SystemExit("\n".join([
+                    "within-scene centring needs more than one driver per",
+                    "scenario, and this dataset has a median of %.1f." % n_drivers,
+                    "Subtracting the group mean would make z identically zero,",
+                    "so tau would be conditioned on a constant.",
+                    "",
+                    "The cause is control_sdc_only: one SDC per map. Rebuild",
+                    "the pairs with several drivers per scene:",
+                    "  python verify_bc_data.py --out_dir <dir> --keep_tol 0.2 \\",
+                    "      --control_mode control_vehicles --total_agents 1024",
+                    "",
+                    "Or pass --style_scope global to use each driver's style",
+                    "against the population instead. That works, but it",
+                    "conflates the driver with the scene (corr to the true",
+                    "driver effect 0.52, against 0.94 for within-scene).",
+                ]))
+        centred = y - y.groupby(j["scenario_id"]).transform("mean")
+    else:
+        centred = y - y.mean()
+    zv = (centred / (centred.std() + 1e-8)).to_numpy(np.float32)
 
     keep = j["row"].to_numpy()
     print("[bc] style join   : %d / %d pairs carry a %s label (%.0f%%)"
           % (len(keep), len(df), style_col, 100 * len(keep) / len(df)))
     print("[bc] z (within-scene, standardised): p10 %+.2f  p50 %+.2f  p90 %+.2f"
           % (np.percentile(zv, 10), np.median(zv), np.percentile(zv, 90)))
-    print("[bc] tau is ROLE-CONDITIONED: tau(a|o,z)")
+    print("[bc] tau is ROLE-CONDITIONED: tau(a|o,z)  scope=%s" % scope)
     return (obs[keep], act[keep],
             torch.from_numpy(zv).float().unsqueeze(-1))
 
@@ -187,7 +225,8 @@ def main():
     n, obs_dim = obs.shape
     z, role_dim = None, 0
     if a.gt_regimes:
-        obs, act, z = attach_style(d, obs, act, a.gt_regimes, a.style_col)
+        obs, act, z = attach_style(d, obs, act, a.gt_regimes, a.style_col,
+                                   a.style_scope)
         n, obs_dim = obs.shape
         role_dim = 1
     n_actions = int(d["accel_values"].shape[0] * d["steer_values"].shape[0])
