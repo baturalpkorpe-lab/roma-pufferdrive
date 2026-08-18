@@ -235,6 +235,8 @@ def main():
     print("=" * 72)
 
     keep_obs, keep_act, keep_ade = [], [], []
+    diag = {"res_v": [], "res_h": [], "sat": [], "h_off": [],
+            "turn": [], "ade": [], "steer_ol": []}
     for ep in range(a.episodes):
         if ep > 0:
             env.resample_maps()
@@ -251,6 +253,26 @@ def main():
         gspd = np.zeros_like(gx)
         gspd[:, :-1] = np.hypot(np.diff(gx, axis=1), np.diff(gy, axis=1)) / dt
         gspd[:, -1] = gspd[:, -2]
+
+        # ---- open-loop residual: can the grid express the human's step AT
+        # ALL, given a perfect starting state? This is computed from GT only,
+        # with no env stepping, so it cannot be contaminated by drift. If it
+        # is small, TRACK failures are runaway after divergence. If it is
+        # large, the grid or the dynamics model cannot represent human
+        # driving and no amount of closed-loop correction will help.
+        v_in = np.concatenate([gspd[:, :1], gspd[:, :T - 1]], axis=1)   # (B,T)
+        ai_o = np.argmin(np.abs(v_in[:, :, None] + ACC[None, None, :] * dt
+                                - gspd[:, :T, None]), axis=2)
+        vn_o = v_in + ACC[ai_o] * dt
+        h_nx = np.concatenate([gh[:, 1:T], gh[:, T - 1:T]], axis=1)
+        hp_o = gh[:, :T, None] + (vn_o[:, :, None] * YAWF[None, None, :]
+                                  / a.vehicle_length) * dt
+        eh_o = np.abs(wrap(hp_o - h_nx[:, :, None]))
+        si_o = np.argmin(eh_o, axis=2)
+        mv = gv[:, :T]
+        diag["res_v"].append(np.abs(vn_o - gspd[:, :T])[mv])
+        diag["res_h"].append(np.take_along_axis(eh_o, si_o[:, :, None], 2)[:, :, 0][mv])
+        diag["steer_ol"].append(si_o[mv])
 
         xs = np.zeros((T, B))
         ys = np.zeros((T, B))
@@ -282,7 +304,11 @@ def main():
             si = np.argmin(np.abs(wrap(h_pred - h_tgt[:, None])), axis=1)
 
             act = (ai * N_STEER + si).astype(np.int64)
-            act[~(gv[:, t] & gv[:, nt])] = NOOP
+            live = gv[:, t] & gv[:, nt]
+            act[~live] = NOOP
+            if t == 0:
+                diag["h_off"].append(wrap(h_t - gh[:, 0])[gv[:, 0]])
+            diag["sat"].append(np.isin(si[live], [0, N_STEER - 1]))
 
             ep_obs[t] = obs_np
             ep_act[t] = act
@@ -294,6 +320,12 @@ def main():
         ade = np.where(cnt > 0, (dev * m).sum(1) / np.maximum(cnt, 1), np.inf)
         pool = isv & (cnt >= 15)
         keep = pool & (ade < a.ade_tol)
+        # total |heading change| over the episode -- separates the straight
+        # drivers from the turning ones, which is how the selection effect
+        # shows itself
+        turn = np.abs(wrap(np.diff(gh[:, :T], axis=1)) * m[:, 1:]).sum(1)
+        diag["turn"].append(turn[pool])
+        diag["ade"].append(ade[pool])
         print("  ep %d: %4d/%4d tracked (ADE < %.1f m)   median ADE  "
               "all=%.2f  tracked=%.2f"
               % (ep + 1, int(keep.sum()), int(pool.sum()), a.ade_tol,
@@ -308,6 +340,53 @@ def main():
     n_agents = int(sum(len(x) for x in keep_ade))
     n_pairs = int(sum(len(x) for x in keep_act))
     track_ok = n_pairs > 0
+
+    # ---- DIAGNOSE ---------------------------------------------------------
+    print("\n" + "=" * 72)
+    print("  DIAGNOSE -- why did the untracked agents fail?")
+    print("=" * 72)
+    res_v = np.concatenate(diag["res_v"])
+    res_h = np.concatenate(diag["res_h"])
+    sat_cl = np.concatenate(diag["sat"])
+    sat_ol = np.concatenate(diag["steer_ol"])
+    h_off = np.concatenate(diag["h_off"])
+    turn = np.concatenate(diag["turn"])
+    ade_all = np.concatenate(diag["ade"])
+    track_frac = float((ade_all < a.ade_tol).mean())
+
+    print("  OPEN LOOP (from GT states -- no drift possible)")
+    print("    speed residual   median %.4f m/s   p90 %.4f"
+          % (np.median(res_v), np.percentile(res_v, 90)))
+    print("    heading residual median %.5f rad (%.3f deg)   p90 %.5f rad"
+          % (np.median(res_h), np.degrees(np.median(res_h)),
+             np.percentile(res_h, 90)))
+    print("    steer saturated  %.1f%% of steps land on bin 0 or 12"
+          % (100 * np.isin(sat_ol, [0, N_STEER - 1]).mean()))
+    print("  CLOSED LOOP (what actually drove the env)")
+    print("    steer saturated  %.1f%% of steps" % (100 * sat_cl.mean()))
+    print("    heading offset at reset  median %+.5f rad (%+.3f deg)"
+          % (np.median(h_off), np.degrees(np.median(h_off))))
+    print("  SELECTION -- does tracking depend on how much the human turned?")
+    q = np.quantile(turn, [0.25, 0.5, 0.75]) if len(turn) else [0, 0, 0]
+    lab = ["straightest 25%", "q2", "q3", "most turning 25%"]
+    b = np.digitize(turn, q)
+    for i in range(4):
+        s = b == i
+        if s.sum() < 5:
+            continue
+        print("    %-18s n=%4d  tracked %5.1f%%  median ADE %6.2f m  "
+              "total |dheading| %.2f rad"
+              % (lab[i], int(s.sum()), 100 * (ade_all[s] < a.ade_tol).mean(),
+                 float(np.median(ade_all[s])), float(np.median(turn[s]))))
+    print("\n  Read it this way. Small open-loop residuals with a low")
+    print("  open-loop saturation rate mean the grid CAN express human")
+    print("  driving and the closed-loop failures are runaway after an early")
+    print("  divergence. Large open-loop residuals mean the dynamics model or")
+    print("  the grid cannot represent it and closed-loop correction is")
+    print("  hopeless. A nonzero reset heading offset makes every step fight a")
+    print("  constant bias, which is what one-sided steer saturation looks")
+    print("  like. And if tracking falls off with turning, the kept pairs are")
+    print("  a straight-line subset -- the worst possible BC set for junctions.")
 
     print("\n" + "=" * 72)
     print("  GRID -- is the 91-way action space actually used?")
@@ -338,21 +417,32 @@ def main():
 
     if track_ok:
         np.savez_compressed(
-            out / "bc_dataset.npz",
+            out / ("bc_dataset.npz" if track_frac >= 0.6
+                   else "bc_dataset_BIASED.npz"),
             obs=np.concatenate(keep_obs).astype(np.float32),
             act=np.concatenate(keep_act).astype(np.int16),
             ade=np.concatenate(keep_ade).astype(np.float32),
             accel_values=ACC, steer_values=STEER, n_steer=N_STEER)
-        print("\n[save] %d pairs from %d agents -> %s/bc_dataset.npz"
-              % (n_pairs, n_agents, out))
+        print("\n[save] %d pairs from %d agents (%.0f%% of vehicles) -> %s"
+              % (n_pairs, n_agents, 100 * track_frac,
+                 out / ("bc_dataset.npz" if track_frac >= 0.6
+                        else "bc_dataset_BIASED.npz")))
 
     print("\n" + "=" * 72)
     print("  VERDICT")
     print("=" * 72)
+    track_ok = track_ok and track_frac >= 0.6
     print("  LAYOUT  see the block above -- it decides how tau reads obs")
-    print("  TRACK   %s -- %d agents, %d pairs"
-          % ("PASS" if track_ok else "FAIL", n_agents, n_pairs))
-    if not track_ok:
+    print("  TRACK   %s -- %.0f%% of vehicles tracked, %d agents, %d pairs"
+          % ("PASS" if track_ok else "FAIL", 100 * track_frac,
+             n_agents, n_pairs))
+    if n_pairs and not track_ok:
+        print("          Pairs were written, but from a MINORITY of vehicles.")
+        print("          Do not train tau on them until DIAGNOSE says the")
+        print("          survivors are not a straight-line subset: an anchor")
+        print("          that never saw a turn pulls the policy AWAY from")
+        print("          correct junction behaviour, which is worse than none.")
+    if not n_pairs:
         print("          Nothing reproduced its logged path. In order of")
         print("          likelihood: agent ordering differs between")
         print("          get_global_agent_state() and the GT arrays; the")
