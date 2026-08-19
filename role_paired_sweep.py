@@ -380,11 +380,15 @@ def main():
                          f"r={r:+.2f}  n={int(ok.sum())}", fontsize=8)
             ax.tick_params(labelsize=6)
             print(f"[paired]   PC{d+1} vs {met:<11}: r={r:+.3f}")
-    # Name only the axes actually swept: a role_dim=1 checkpoint has ONE PC, so
-    # evr[1] does not exist and hardcoding PC2 here crashed the whole sweep.
-    var_txt = ", ".join(f"PC{d+1}={100*evr[d]:.1f}% var" for d in range(n_axes))
+    # role_dim=1 yields a single component, so evr[1] does not exist. This
+    # crashed every dim-1 run at the LAST print before role_paired_tests.csv is
+    # written: axes and warmup landed, the paired result -- the point of the
+    # job -- did not, and sacct still reported COMPLETED 0:0 because the sbatch
+    # does not propagate python's exit code. Build the string from however many
+    # components there actually are.
+    evr_txt = ", ".join(f"PC{i+1}={100*e:.1f}% var" for i, e in enumerate(evr))
     fig.suptitle(
-        f"Observational: role PCs vs behaviour  |  {var_txt}"
+        f"Observational: role PCs vs behaviour  |  {evr_txt}"
         f"  (n={len(Bdf)} natural agents)\n"
         "CORRELATION ACROSS AGENTS, scene-confounded -- the role is largely "
         "scene-determined (ICC ~0.4 vs ~0.1 for behaviour), so a sign here may "
